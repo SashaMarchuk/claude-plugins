@@ -36,9 +36,17 @@ Universal skill for scheduling, updating, and cancelling Google Calendar events.
    - **In `--auto` mode**: HALT with "config missing — run `/create-call --onboard calendar` first".
    - In interactive mode: redirect to `--onboard calendar`; carry the seed.
 
-4. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard.
+4. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard. (Enforced in code by the helper — see `references/config-schema.md` → `SchemaVersionTooNew`.)
 
-5. **Verify Google Workspace CLI auth.** Run `npx @googleworkspace/cli calendar calendars get --params '{"calendarId":"primary"}' 2>/dev/null | head -1`. On 401 / 403 / timeout, HALT with: "Run `! npx @googleworkspace/cli auth login --services calendar,people` and retry."
+5. **Verify Google Workspace CLI auth.** Capture BOTH stdout and stderr so real errors can be classified:
+   ```
+   out=$(npx @googleworkspace/cli calendar calendars get --params '{"calendarId":"primary"}' 2>/tmp/gws_stderr.$$); rc=$?; err=$(cat /tmp/gws_stderr.$$); rm -f /tmp/gws_stderr.$$
+   ```
+   Classify `rc` / `err`:
+   - `rc == 0` and `out` contains a calendar JSON → auth OK.
+   - `err` matches `/401|403|invalid.*credential|token.*expired|login required/i` → HALT: "Run `! npx @googleworkspace/cli auth login --services calendar,people` and retry."
+   - `err` matches `/503|rate limit|timeout|ENETUNREACH|ECONNREFUSED/i` → HALT: "Google API transient error — retry in 30s. Raw: `${err}`."
+   - Anything else → HALT with `${err}` verbatim so the user can see the real failure (never silently swallow stderr).
 
 6. **Pending-seed resumption.** If a seed was carried from step 2 or step 3 (identity or calendar wizard just completed), resume default flow with that seed now.
 
@@ -89,13 +97,15 @@ All values read from `~/.claude/create-call/config.json` → `defaults` + `alway
 
 The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/clickup` reads the same file — changes here are seen there.
 
-1. NFC-normalize the typed name, strip leading/trailing whitespace + emoji.
-2. **First pass** — case-insensitive match against `teammates[].latin_alias`.
-3. **Second pass** — case-insensitive + NFC match against `teammates[].first_name`.
-4. **Third pass** — case-insensitive match on `teammates[].email` (when user typed an email directly).
+**Homoglyph-collision gate (runs before every silent single-match)**: compute the UTS #39 skeleton of the typed input (`unicodedata.normalize("NFKC", s).casefold()` + confusables-map transform). If the skeleton matches an EXISTING teammate AND raw byte-strings differ (i.e. visually identical but distinct records), FORCE disambiguation — never silent-match. Legitimate pure-script names (all-Cyrillic, all-Latin) never trigger this (no skeleton collision with anyone else). Only lookalike collisions trigger it. This precedence is load-bearing and overrides any "silent-allow" rule elsewhere — an external-domain email that happens to pass the review-gate silent-allow still hits this gate on resolution.
+
+1. NFC-normalize the typed name; strip leading/trailing whitespace (`re.sub(r"[\s​‌‍⁠﻿]+", "", ...)` — ASCII + zero-width + BOM); strip emoji. Use `str.casefold()` (NOT `.lower()`) for all case-insensitive comparisons (handles Turkish İ/i; German ß/ss correctly).
+2. **First pass** — casefold match against `teammates[].latin_alias`.
+3. **Second pass** — casefold + NFC match against `teammates[].first_name`.
+4. **Third pass** — casefold match on `teammates[].email` (when user typed an email directly).
 5. **Single match** → use that email.
 6. **Multiple matches** → `AskUserQuestion` disambiguation (show full names + emails).
-7. **Zero matches** → prompt for full email; on confirm, upsert into `teammates[]` with `sources: ["create-call"]` + `last_validated_at: null` via the atomic write helper in `references/config-schema.md`.
+7. **Zero matches** → prompt for full email. Validate email against `^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$` AND reject any domain with non-ASCII characters (IDNA mixed-script attack defense) — on failure, re-prompt with the reason. On valid email, upsert into `teammates[]` with `sources: ["manual"]` + `last_validated_at: null` via the atomic write helper in `references/config-schema.md`.
 8. **Inactive teammate** (`active: false`) → surface banner, allow but confirm: "`X` is marked inactive (not in current ClickUp workspace). Still invite?"
 9. In `--auto`: if ambiguous or attendee unresolvable AND no obvious default → refuse with one-line reason.
 

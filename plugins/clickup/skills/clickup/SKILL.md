@@ -24,8 +24,12 @@ Universal skill for creating and managing ClickUp tickets. Enforces consistent t
 
 ## Step 2: Pre-flight (every invocation, in order)
 
-1. **Read shared identity** from `~/.claude/shared/identity.json`. If missing or `onboarding_complete != true`, redirect to `--onboard identity` with one-line explanation; carry the original request as ticket seed.
-2. **Read clickup config** from `~/.claude/clickup/config.json`. If missing or `onboarding_complete != true`, redirect to `--onboard workspace`; carry the ticket seed.
+1. **Read shared identity** from `~/.claude/shared/identity.json`. If missing or `onboarding_complete != true`:
+   - **In `--auto` mode**: HALT with "identity missing — run `/clickup --onboard` first" (don't drag user into interactive onboarding mid-auto).
+   - In interactive mode: redirect to `--onboard identity` with one-line explanation; carry the original request as ticket seed.
+2. **Read clickup config** from `~/.claude/clickup/config.json`. If missing or `onboarding_complete != true`:
+   - **In `--auto` mode**: HALT with "config missing — run `/clickup --onboard workspace` first".
+   - In interactive mode: redirect to `--onboard workspace`; carry the ticket seed.
 3. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard.
 4. **Read memory** from `~/.claude/clickup/memory.md`. Apply rules. If any rule is unused >60 days or applied >20 times, prepend a one-line review banner: "`💡 N memory rules may be stale — run /clickup --memory list`".
 5. **Check config freshness.** If `config.updated_at` > 30 days ago, prepend: "`💡 Config is 30+ days old — run /clickup --onboard to refresh`". Non-blocking.
@@ -80,13 +84,15 @@ Omit the line entirely if the beneficiary role is not extractable from source. R
 
 The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/create-call` reads the same file — changes here are seen there.
 
-1. NFC-normalize the typed name, strip leading/trailing whitespace + emoji.
-2. **First pass** — case-insensitive match against `teammates[].latin_alias`. (ASCII common case — most hits land here.)
-3. **Second pass** — case-insensitive + NFC match against `teammates[].first_name`. (Cyrillic users typing their own name.)
-4. **Third pass** — case-insensitive match on `teammates[].email` (when user typed an email).
+**Homoglyph-collision gate (runs before every silent single-match)**: compute the UTS #39 skeleton of the typed input (`unicodedata.normalize("NFKC", s).casefold()` + confusables-map transform). If the skeleton matches an EXISTING teammate AND raw byte-strings differ (i.e. visually identical but distinct records), FORCE disambiguation — never silent-match. Legitimate pure-script names (all-Cyrillic, all-Latin) never trigger this (no skeleton collision with anyone else). Only lookalike collisions trigger it. This precedence is load-bearing and overrides any "silent-allow" rule elsewhere.
+
+1. NFC-normalize the typed name; strip leading/trailing whitespace (`re.sub(r"[\s​‌‍⁠﻿]+", "", ...)` — ASCII + zero-width + BOM); strip emoji. Use `str.casefold()` (NOT `.lower()`) for all case-insensitive comparisons (handles Turkish İ/i; German ß/ss correctly).
+2. **First pass** — casefold match against `teammates[].latin_alias`. (ASCII common case — most hits land here.)
+3. **Second pass** — casefold + NFC match against `teammates[].first_name`. (Cyrillic users typing their own name.)
+4. **Third pass** — casefold match on `teammates[].email` (when user typed an email).
 5. **Single match** → fill silently.
 6. **Multiple matches** → prompt disambiguation (show full names + emails).
-7. **Zero matches** → freeform prompt; on success, upsert into `teammates[]` with `sources: ["manual"]` + `last_validated_at: null` via the atomic write helper. A later MCP refresh will enrich with `external_ids.clickup` + `full_name`.
+7. **Zero matches** → freeform prompt for full email. Validate against `^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$` AND reject any domain with non-ASCII characters (IDNA mixed-script attack defense). On failure, re-prompt with the reason. On valid email, upsert into `teammates[]` with `sources: ["manual"]` + `last_validated_at: null` via the atomic write helper. A later MCP refresh will enrich with `external_ids.clickup` + `full_name`.
 8. **Re-validation guard**: before assigning, check `teammate.active == true`. On deactivated user, block; force re-prompt.
 9. In `--auto`: if ambiguous or deactivated AND no memory rule resolves unambiguously → refuse with one-line reason.
 

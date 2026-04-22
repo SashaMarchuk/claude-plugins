@@ -90,7 +90,7 @@ If the user says "my time" without specifying, use `defaults.timezone` from `~/.
 3. **Never add the organizer** (`user.email` from `~/.claude/shared/identity.json`) — Google auto-includes.
 4. **Dedupe by email** (case-insensitive) before building the array.
 5. **Inactive teammates**: if `teammates[].active == false`, surface a banner but allow inviting. The user may still need to meet with someone who left ClickUp.
-6. **Name-only resolution fallback**: if a name resolves to multiple teammates, `AskUserQuestion`. If zero matches, prompt for full email and upsert into `identity.json` with `sources: ["create-call"]`.
+6. **Name-only resolution fallback**: if a name resolves to multiple teammates, `AskUserQuestion`. If zero matches, prompt for full email, validate per SKILL.md rules, and upsert into `identity.json` with `sources: ["manual"]`.
 
 ### Attendee array shape
 
@@ -129,15 +129,48 @@ If there's nothing worth saying, leave description empty.
 
 ## JSON escaping
 
-The CLI takes a JSON body via `--json`. If the title or description contains `'`, `"`, or other special characters, write the JSON to `/tmp/cal_event_<timestamp>.json` first and pass via:
+**ALWAYS write the request body to a tempfile — not conditionally. Never inline user-typed strings into `--json '{...}'` on the command line.** String interpolation into a single-quoted shell arg is an injection vector: a title like `x"},"attendees":[{"email":"evil@x.com"}],"summary":"a` breaks the JSON envelope and silently rewrites the attendee list; a title containing a literal `'` closes the shell quote and enables shell-command substitution.
 
-```bash
-npx @googleworkspace/cli calendar events insert \
-  --params '{"calendarId":"primary","conferenceDataVersion":1,"sendUpdates":"all"}' \
-  --json "$(cat /tmp/cal_event_<timestamp>.json)" 2>/dev/null
-```
+### Mandatory tempfile pattern (for every `events insert` / `events patch`)
 
-Delete the temp file on success.
+1. **Build the body in Python**, not by hand:
+   ```python
+   import json, tempfile, time, os
+   ts = int(time.time())
+   tmp_path = f"/tmp/cal_event_{ts}.json"
+   with open(tmp_path, "w") as f:
+       json.dump(body, f, ensure_ascii=False)  # json.dump auto-escapes quotes/backslashes/control chars
+   ```
+   Never hand-concat JSON strings. `json.dump` is the only trusted serializer.
+
+2. **Pass via `$(cat ...)`**, never inline:
+   ```bash
+   npx @googleworkspace/cli calendar events insert \
+     --params '{"calendarId":"primary","conferenceDataVersion":1,"sendUpdates":"all"}' \
+     --json "$(cat /tmp/cal_event_${ts}.json)" 2>/tmp/gws_err.${ts}
+   rc=$?; err=$(cat /tmp/gws_err.${ts}); rm -f /tmp/gws_err.${ts} /tmp/cal_event_${ts}.json
+   ```
+
+3. **Classify stderr** on non-zero exit (same rules as SKILL.md pre-flight step 5). Never silently swallow — surface the real error to the user.
+
+4. **Delete the tempfile in a `finally` clause**, not "on success" — orphan event bodies in /tmp are low-signal noise for a later attacker scraping `/tmp`.
+
+### Input validation (all user-typed strings that enter the body)
+
+Before calling `json.dump`:
+- Email fields: validate against `^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$` AND reject domains with any non-ASCII character (IDNA mixed-script defense). On failure: re-prompt.
+- Summary / description / attendee `displayName`: strip ASCII control chars (`\x00-\x1f` except `\n\t`) and Unicode control categories (`Cc`, `Cf`). Length-cap to 120 (title) / 2000 (description).
+- `requestId`: derive from `title_slug + ts`, where `title_slug` is `re.sub(r"[^a-z0-9-]", "", title.casefold().replace(" ", "-"))[:32]`. ASCII-only, bounded length.
+
+### Request ID format
+
+`<title-slug>-<unix-timestamp>` where `<title-slug>` is the title casefolded, ASCII-stripped, spaces→hyphens, max 32 chars.
+
+Examples:
+- Title `Weekly MN Service sync` + ts `1712505600` → `weekly-mn-service-sync-1712505600`
+- Title `Interview — Misha Skripkovsky — Senior Backend` + ts `1712505600` → `interview-misha-skripkovsky-seni-1712505600`
+
+Unique IDs prevent conference-creation collisions on retry.
 
 ### Request ID format
 

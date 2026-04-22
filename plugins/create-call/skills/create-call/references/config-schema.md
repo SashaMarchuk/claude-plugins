@@ -17,15 +17,21 @@ These apply to BOTH JSON files, whenever the skill writes them:
 
 ### Reference write helper (Python, stdlib only)
 
-**Platform support**: tested on macOS and Linux. Windows is not supported — `fcntl` is POSIX-only.
+**Platform support**: tested on macOS and Linux. Windows is not supported — `fcntl` is POSIX-only. A Windows user would need a `msvcrt.locking` fallback.
 
 ```python
 import fcntl, json, os, tempfile, time
+
+CURRENT_SCHEMA_VERSION = 1
+
+class SchemaVersionTooNew(Exception):
+    """Raised when on-disk file declares schemaVersion > what this helper understands."""
 
 def atomic_update(path, mutate):
     path = os.path.expanduser(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     lock_path = path + ".lock"
+    dir_ = os.path.dirname(path)
     with open(lock_path, "w") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         try:
@@ -36,17 +42,35 @@ def atomic_update(path, mutate):
         except json.JSONDecodeError:
             os.replace(path, path + f".corrupt-{int(time.time())}")
             data = {}
+        # Refuse to write if on-disk schema is newer than this code understands.
+        # Prevents a newer writer from being silently downgraded by older reader.
+        on_disk_version = data.get("schemaVersion", CURRENT_SCHEMA_VERSION)
+        if isinstance(on_disk_version, int) and on_disk_version > CURRENT_SCHEMA_VERSION:
+            raise SchemaVersionTooNew(
+                f"{path} has schemaVersion={on_disk_version}, this helper supports {CURRENT_SCHEMA_VERSION}. "
+                "Update the plugin and retry."
+            )
         mutate(data)  # caller supplies closure
-        dir_ = os.path.dirname(path)
         with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False) as tmp:
             json.dump(data, tmp, indent=2, ensure_ascii=False, sort_keys=False)
             tmp.flush()
             os.fsync(tmp.fileno())
             tmp_path = tmp.name
         os.replace(tmp_path, path)
+        # Parent-dir fsync so the rename is durable across crashes (POSIX rename
+        # metadata lives in the directory entry — without this, power loss between
+        # replace and dir journal flush can lose the file).
+        try:
+            dfd = os.open(dir_, os.O_RDONLY)
+            os.fsync(dfd)
+            os.close(dfd)
+        except OSError:
+            pass  # non-POSIX filesystems may not support dir fsync
 ```
 
 Every write path in this skill must go through `atomic_update` (or a Bash equivalent with `flock(1)` + `mv`).
+
+**Contract for caller-supplied `mutate` closures**: perform all mutation logic BEFORE any file operation, so if the closure raises, we abort before writing the tempfile. The helper catches nothing — exceptions propagate up with the lock held through the `with` block, then released on context exit.
 
 ---
 
@@ -107,7 +131,7 @@ A single teammate can carry multiple tags (union across discovery passes during 
 
 ### What `/create-call` writes to identity.json
 
-- **Upserts a new teammate** when the resolver sees zero matches and the user provides a full email. Record shape: `{first_name: <typed>, latin_alias: <typed or ASCII>, full_name: <typed if provided>, email: <confirmed>, external_ids: {}, active: true, sources: ["create-call"], last_validated_at: null}`.
+- **Upserts a new teammate** when the resolver sees zero matches and the user provides a valid full email (see SKILL.md → Resolution rules for validation regex + IDNA mixed-script rejection). Record shape: `{first_name: <typed>, latin_alias: <typed or ASCII>, full_name: <typed if provided>, email: <confirmed>, external_ids: {}, active: true, sources: ["manual"], last_validated_at: null}`.
 - **Never touches `user.*`** — identity wizard owns that slice.
 - **Never modifies `teammates[].active`** — that's `/clickup`'s responsibility via its workspace-member sync.
 - **Preserves unknown keys** — if a teammate has fields this plugin doesn't recognize, they survive the rewrite.

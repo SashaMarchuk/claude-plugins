@@ -162,11 +162,25 @@ If API returns ≥100 tasks, warn: "Found 100+ tasks; teammate roster may be inc
 
 Rationale: small-meeting attendees are almost always real teammates, not conference rooms or mailing lists.
 
+Compute `timeMin` / `timeMax` in Python (portable across macOS/Linux; no reliance on BSD vs GNU `date(1)` flags):
+
+```python
+import datetime
+now = datetime.datetime.now(datetime.timezone.utc)
+time_max = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+time_min = (now - datetime.timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
 ```
+
+Then query:
+
+```bash
 npx @googleworkspace/cli calendar events list \
-  --params '{"calendarId":"primary","timeMin":"<14d ago ISO>","timeMax":"<now ISO>","singleEvents":true,"orderBy":"startTime","maxResults":2500}' \
-  2>/dev/null
+  --params "$(python3 -c "import json,sys; print(json.dumps({'calendarId':'primary','timeMin':'$time_min','timeMax':'$time_max','singleEvents':True,'orderBy':'startTime','maxResults':2500}))")" \
+  2>/tmp/gws_err.$$
+rc=$?; err=$(cat /tmp/gws_err.$$); rm -f /tmp/gws_err.$$
 ```
+
+On non-zero `rc`, classify `err` the same way as pre-flight step 5 (auth / rate-limit / other); never silently swallow.
 
 For each returned event:
 
@@ -199,19 +213,42 @@ Tag sources: `"custom:<label>"` where `<label>` is user-supplied or derived from
 
 Parse lines of format `Name <email>` or `Name, email` or `Name; email`. Each entry gets `sources: ["manual"]` and `last_validated_at: null`.
 
-#### Step 5 — Merge + deduplicate
+#### Step 5 — Merge + deduplicate + flag review
 
-Primary key: `email` (case-insensitive, NFC-normalized).
+Primary key: `email` (casefolded, NFC-normalized).
 
 For each unique email across all sources, build one teammate record:
 
 - `first_name` — priority: workspace > tasks > calendar > custom > manual (first non-null wins).
 - `full_name` — same priority.
-- `email` — canonical (lowercased).
+- `email` — canonical (casefolded).
 - `external_ids.clickup` — from any ClickUp source (workspace or tasks).
 - `active: true` if found in workspace; `true` still if only in tasks/calendar/custom (the user interacts with them); `false` only if explicitly deactivated later by `/clickup` workspace sync.
 - `sources: [...]` — UNION of all source tags that discovered this email.
 - `last_validated_at: <now>` if from any live source; `null` if manual-only.
+
+**Flag review (only flagged entries — do NOT surface the full roster).** For each new teammate, compute these flags:
+
+- `homoglyph`: UTS #39 skeleton of `first_name` OR email-local-part collides with an already-confirmed teammate (raw bytes differ). Typical attack: Cyrillic `а` vs Latin `a`.
+- `external_domain`: email domain is NOT in user's own-email domain AND NOT in a known-safe domain list the user has already confirmed (track this in `identity.json` under `user.trusted_domains[]`, initialized at step 3 with the user's own `@domain`).
+- `calendar_only`: teammate's `sources: ["google-calendar"]` only — no ClickUp corroboration. Low-trust tier.
+- `new_custom`: teammate came from `"custom:<label>"` only.
+
+Surface ONLY teammates with at least one flag in a single `AskUserQuestion` card:
+
+```
+Review flagged teammates (others accepted silently):
+  ⚠ homoglyph  — Rachel (rаchel@corp.com) collides with existing Rachel (rachel@corp.com)
+  ⚠ external   — Vendor Smith (vendor@external.io) — outside @speedandfunction.com
+  ℹ calendar-only — Alex Kim (alex@somecorp.com) — from one meeting, not ClickUp
+
+Actions (per teammate):
+  [A] Accept — add to roster
+  [R] Reject — don't add
+  [T] Trust domain (for external) — add to trusted_domains[]; accept this + all current/future from same domain
+```
+
+If zero flags, skip the card entirely. Homoglyph-flagged teammates can NEVER be accepted without explicit user action — the resolver's homoglyph gate (see both SKILL.md files → "Homoglyph-collision gate") will still force disambiguation later even if the user accepts here. Flags + gate are defense-in-depth.
 
 #### Step 6 — Source summary report
 
@@ -228,13 +265,47 @@ Discovered N unique teammates across M sources:
 
 If any source surfaced a teammate the others missed, highlight that as "possible external contractor / contact" — useful for user review.
 
-#### Step 7 — Batch Cyrillic alias confirmation
+#### Step 7 — Batch Cyrillic alias confirmation (single textarea card)
 
-Collect ALL teammates with non-Latin `first_name` (regex: contains any codepoint outside ASCII). Render ONE consolidated `AskUserQuestion` with sub-questions — one per teammate — asking for `latin_alias`.
+Collect ALL teammates with non-Latin `first_name` (regex: `[^\x00-\x7F]`). Render ONE `AskUserQuestion` card (NOT N separate rounds, NOT "sub-questions" — that's not a native primitive).
 
-Default fallback per entry if user types "skip": lowercased ASCII transliteration of `first_name` using standard Cyrillic→Latin mapping (Михайло → Mykhailo, Сергій → Serhii, etc.), OR email local-part before `@` if transliteration fails.
+The card shows a textarea with pre-filled defaults (one teammate per line, `first_name → latin_alias`), user edits inline:
 
-**Never render N separate question rounds** — always a single batched card.
+```
+Confirm Latin aliases for non-Latin teammates (edit the right side; leave as-is to accept):
+  Михайло → Mykhailo
+  Сергій → Serhii
+  Олена → Olena
+  Дарія → Daria
+  …
+```
+
+Default transliteration uses Python's `unicodedata.normalize("NFKD", name)` then strip combining marks, then pass through a Cyrillic→Latin table:
+
+```python
+CYRILLIC_TO_LATIN = {
+    "а":"a","б":"b","в":"v","г":"h","ґ":"g","д":"d","е":"e","є":"ie","ё":"io",
+    "ж":"zh","з":"z","и":"y","і":"i","ї":"i","й":"i","к":"k","л":"l","м":"m",
+    "н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"kh",
+    "ц":"ts","ч":"ch","ш":"sh","щ":"shch","ъ":"","ы":"y","ь":"","э":"e","ю":"iu","я":"ia",
+}
+def translit(name):
+    out = []
+    for ch in name:
+        lo = ch.casefold()
+        if lo in CYRILLIC_TO_LATIN:
+            t = CYRILLIC_TO_LATIN[lo]
+            out.append(t.capitalize() if ch.isupper() and t else t)
+        elif ch.isascii():
+            out.append(ch)
+        else:
+            out.append("")  # unknown non-ASCII → drop
+    return "".join(out).strip()
+```
+
+If the transliteration yields an empty string (e.g. all-emoji or all-symbol name), fall back to the email local-part before `@`.
+
+**Single card. Single round. Textarea, not per-teammate questions.**
 
 #### Step 8 — Write identity.json atomically
 

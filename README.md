@@ -2,24 +2,26 @@
 
 Opinionated Claude Code plugins by [Sasha Marchuk](https://github.com/SashaMarchuk) — tooling for ticket management, automation, and everyday engineering workflows.
 
-## Quick install — get all three plugins
+## Quick install — get all four plugins
 
 In Claude Code:
 
 ```
 /plugin marketplace add SashaMarchuk/claude-plugins
 /plugin install clickup@SashaMarchuk/claude-plugins
+/plugin install create-call@SashaMarchuk/claude-plugins
 /plugin install ultra@SashaMarchuk/claude-plugins
 /plugin install ultra-analyzer@SashaMarchuk/claude-plugins
 ```
 
-That's it — three paste-and-enters. `ultra-analyzer` declares `ultra` as a dependency, so it will pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the third line fetches it explicitly.
+`ultra-analyzer` declares `ultra` as a dependency, so it will pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the fourth line fetches it explicitly. `clickup` and `create-call` are independent but share `~/.claude/shared/identity.json` for user + teammate data — onboard either one first and the other inherits the roster.
 
 ## Plugins
 
 | Plugin | What it does |
 |---|---|
-| [clickup](plugins/clickup) | `/clickup` skill — create and manage ClickUp tickets with enforced Connextra user stories, fuzzy list aliases, teammate auto-resolution, duplicate detection, and a two-step onboarding wizard. |
+| [clickup](plugins/clickup) | `/clickup` skill — create and manage ClickUp tickets with enforced Connextra user stories, fuzzy list aliases, teammate auto-resolution, duplicate detection, and a two-step onboarding wizard (identity + workspace). |
+| [create-call](plugins/create-call) | `/create-call` skill — create/update/cancel Google Calendar events with Google Meet. Always attaches a configurable notes bot, conflict + past-time guards, two-step onboarding (identity + calendar defaults). Shares the teammate roster with `clickup`. |
 | [ultra](plugins/ultra) | `/ultra` skill — multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Tiers `--small` / `--medium` / `--large` / `--xl`; wraps other skills for maximum-rigor runs. |
 | [ultra-analyzer](plugins/ultra-analyzer) *(beta)* | `/ultra-analyzer` skill set — rigorous data/corpus pipeline (discover → analyze → validate → synthesize) with resume-able state and `/ultra` gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF, web scrapes, JSON/CSV, SQLite. **Requires the `ultra` plugin.** |
 
@@ -27,6 +29,7 @@ That's it — three paste-and-enters. `ultra-analyzer` declares `ultra` as a dep
 
 ```
 /plugin install clickup@SashaMarchuk/claude-plugins
+/plugin install create-call@SashaMarchuk/claude-plugins
 /plugin install ultra@SashaMarchuk/claude-plugins
 /plugin install ultra-analyzer@SashaMarchuk/claude-plugins   # requires ultra
 ```
@@ -35,13 +38,21 @@ That's it — three paste-and-enters. `ultra-analyzer` declares `ultra` as a dep
 
 All user state lives **outside** the plugin directory by design, so `/plugin update` never wipes what you've collected:
 
-| Plugin | User-data location |
-|---|---|
-| `clickup` | `~/.claude/clickup/{config.json, memory.md, drafts/}` — onboarding + learned patterns |
-| `ultra` | `~/.claude/skills/ultra/global-lessons.md` — per-run lessons log |
-| `ultra-analyzer` | `<your-project>/.planning/ultra-analyzer/<run-name>/` — config, seeds, findings, state per run |
+| Location | Contents | Used by |
+|---|---|---|
+| `~/.claude/shared/identity.json` | User profile + teammate roster (name, email, `external_ids`, `active`, `last_validated_at`) — single source of truth for "who is on the team" | `clickup`, `create-call` |
+| `~/.claude/clickup/{config.json, memory.md, drafts/}` | Workspace + lists + aliases + learned memory rules + idempotency drafts | `clickup` |
+| `~/.claude/create-call/config.json` | Calendar defaults + always-include attendees (notes bot) + behavior flags | `create-call` |
+| `~/.claude/skills/ultra/global-lessons.md` | Per-run lessons log | `ultra` |
+| `<your-project>/.planning/ultra-analyzer/<run-name>/` | Config, seeds, findings, state per analyzer run | `ultra-analyzer` |
 
-This was verified empirically — a sandboxed `rm -rf + recopy` of the plugin dir (simulating a worst-case update) left every pre-seeded user file intact.
+All JSON writes are atomic (`tmp + fsync + os.replace`) under `fcntl.flock` on a sentinel file, and readers preserve unknown keys — so `clickup` and `create-call` can evolve independently without stepping on each other's fields in `identity.json`.
+
+This preservation guarantee was verified empirically — a sandboxed `rm -rf + recopy` of the plugin dir (simulating a worst-case update) left every pre-seeded user file intact.
+
+### Migrating from the legacy user-level `create-call` skill
+
+If you previously installed `create-call` as a user-level skill at `~/.claude/skills/create-call/` (with a flat `contacts.json`), the new plugin will shadow-warn but not delete it. On your first `/create-call --onboard`, the identity wizard offers to import your `contacts.json` entries as a thin seed into `~/.claude/shared/identity.json`. After importing, you can remove the legacy dir: `rm -rf ~/.claude/skills/create-call`.
 
 ## Contributing / feedback
 

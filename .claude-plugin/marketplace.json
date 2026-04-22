@@ -16,6 +16,16 @@
       "source": "./plugins/clickup",
       "category": "productivity",
       "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/clickup"
+    },
+    {
+      "name": "ultra",
+      "description": "Multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Use when maximum rigor is needed: research, implementation, validation, creation, or any complex task requiring independent verification. Supports tiers (--small/--medium/--large/--xl), multi-terminal coordination, and wrapping other skills.",
+      "author": {
+        "name": "Sasha Marchuk"
+      },
+      "source": "./plugins/ultra",
+      "category": "development",
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/ultra"
     }
   ]
 }

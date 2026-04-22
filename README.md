@@ -17,11 +17,13 @@ Then install any plugin from the list below.
 | Plugin | What it does |
 |---|---|
 | [clickup](plugins/clickup) | `/clickup` skill — create and manage ClickUp tickets with enforced Connextra user stories, fuzzy list aliases, teammate auto-resolution, duplicate detection, and a two-step onboarding wizard. |
+| [ultra](plugins/ultra) | `/ultra` skill — multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Tiers `--small` / `--medium` / `--large` / `--xl`; wraps other skills for maximum-rigor runs. |
 
 ### Install a single plugin
 
 ```
 /plugin install clickup@SashaMarchuk/claude-plugins
+/plugin install ultra@SashaMarchuk/claude-plugins
 ```
 
 ## How these plugins treat your data

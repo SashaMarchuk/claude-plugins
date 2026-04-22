@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | awk '/\\/findings\\/T[0-9]+\\.md$/ {print}' | while read -r f; do [ -n \"$f\" ] && echo \"[hook] findings written: $f (validator will be invoked by the worker)\"; done"
+          }
+        ]
+      }
+    ]
+  }
+}

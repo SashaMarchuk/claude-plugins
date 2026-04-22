@@ -18,12 +18,14 @@ Then install any plugin from the list below.
 |---|---|
 | [clickup](plugins/clickup) | `/clickup` skill — create and manage ClickUp tickets with enforced Connextra user stories, fuzzy list aliases, teammate auto-resolution, duplicate detection, and a two-step onboarding wizard. |
 | [ultra](plugins/ultra) | `/ultra` skill — multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Tiers `--small` / `--medium` / `--large` / `--xl`; wraps other skills for maximum-rigor runs. |
+| [ultra-analyzer](plugins/ultra-analyzer) *(beta)* | `/ultra-analyzer` skill set — rigorous data/corpus pipeline (discover → analyze → validate → synthesize) with resume-able state and `/ultra` gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF, web scrapes, JSON/CSV, SQLite. **Requires the `ultra` plugin.** |
 
 ### Install a single plugin
 
 ```
 /plugin install clickup@SashaMarchuk/claude-plugins
 /plugin install ultra@SashaMarchuk/claude-plugins
+/plugin install ultra-analyzer@SashaMarchuk/claude-plugins   # requires ultra
 ```
 
 ## How these plugins treat your data

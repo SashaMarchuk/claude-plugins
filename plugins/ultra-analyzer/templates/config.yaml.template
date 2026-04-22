@@ -1,0 +1,55 @@
+# Analyzer run config — edit before running /ultra-analyzer:run
+# Run: {{RUN_NAME}}
+#
+# NOTE: the actual source of data is defined in connector.md (next to this file),
+# not here. config.yaml is for run-level settings that apply regardless of source.
+
+run:
+  name: {{RUN_NAME}}
+  # Decision-maker / stakeholder who will receive the final report:
+  stakeholder: "<name or role>"
+  # Primary question this analysis is answering:
+  primary_question: "<1-2 sentence question — forces clarity>"
+  # Free-form tags for categorizing runs (optional):
+  tags: []
+
+coverage:
+  # Fraction of topics by priority tier. Must sum to ~1.0.
+  p1: 0.60    # primary questions — most important
+  p2: 0.30
+  p3: 0.10
+
+  # Redundancy pair rates — fraction of topics paired with a cross-check topic.
+  # These get overridden by the active profile unless you want to pin per-run values.
+  redundancy_pair_rate:
+    p1: 0.60
+    p2: 0.20
+    p3: 0.00
+
+budgets:
+  # Per-complexity-tier limits for workers. Adapter may enforce its own stricter caps.
+  S:
+    max_queries: 3
+    max_docs: 500
+    max_runtime_s: 300
+  M:
+    max_queries: 6
+    max_docs: 2000
+    max_runtime_s: 600
+  L:
+    max_queries: 10
+    max_docs: 5000
+    max_runtime_s: 600
+
+synthesis:
+  top_n_findings: 5
+  chunk_threshold_kb: 400
+  # If true, report uses correlation framing only. Never "causes" / "leads to".
+  correlation_only: true
+
+# Profile tier — scaling of model choice, gate rigor, and parallelism.
+# Change with: /ultra-analyzer:set-profile <tier>
+# Tiers: small | medium | large (default) | xl
+# Each tier's effects are documented in skills/set-profile/SKILL.md.
+# This value is AUTHORITATIVE in state.json — the setting here is a record only.
+profile_tier: large

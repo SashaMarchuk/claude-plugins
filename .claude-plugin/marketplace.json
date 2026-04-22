@@ -26,6 +26,16 @@
       "source": "./plugins/ultra",
       "category": "development",
       "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/ultra"
+    },
+    {
+      "name": "ultra-analyzer",
+      "description": "(beta) Rigorous pipeline analyzer. Discover → Analyze → Validate → Synthesize, with resume-able state and /ultra validation gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF corpora, web scrapes, logs, JSON/CSV. Requires the `ultra` plugin from this same marketplace.",
+      "author": {
+        "name": "Sasha Marchuk"
+      },
+      "source": "./plugins/ultra-analyzer",
+      "category": "development",
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/ultra-analyzer"
     }
   ]
 }

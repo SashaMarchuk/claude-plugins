@@ -1,0 +1,71 @@
+# Seeds — {{RUN_NAME}}
+
+Hand-authored investigation questions. The pipeline will REJECT a run that does not replace the template placeholders below with real domain-specific seeds.
+
+Each seed must be:
+1. **Testable** — it can be answered by querying the corpus with concrete operators.
+2. **Scoped** — it names specific units/collections/fields the adapter will touch.
+3. **Grounded** — it states what evidence would support, refute, or leave it ambiguous.
+
+Minimum: 3 P1 seeds, 2 P2 seeds, 1 P3 seed. Realistic: 20+ P1, 6+ P2, 4+ P3. More domain knowledge upfront = sharper findings.
+
+---
+
+## §0 Evidence base seed (REQUIRED FIRST if your corpus has user-level analytics)
+
+**T000: Denominator accounting.** Compute the total count of units (users / documents / sessions / files) and the subsets that downstream findings will reference. Example subsets: "users with >=1 substantive record", "documents with non-empty field X", "sessions lasting >N seconds". Every P1/P2/P3 percentage must reference one of these denominators explicitly — no bare "X% of users" claims.
+
+---
+
+## P1 seeds (primary questions — highest effort, most detail in report)
+
+### Seed 1.1
+- Hypothesis: <specific testable claim>
+- Units touched: <collection or file-glob>
+- Fields used: <list>
+- Query sketch: <1-2 sentence description of the query>
+- Complexity: S | M | L
+- Why this matters: <link to primary_question in config.yaml>
+
+### Seed 1.2
+(...copy template...)
+
+### Seed 1.3
+(...copy template...)
+
+<!-- Add more P1 seeds below. Aim for 20+ for a serious analysis. -->
+
+---
+
+## P2 seeds (secondary — useful context, less report detail)
+
+### Seed 2.1
+- Hypothesis: ...
+- Units touched: ...
+- Fields used: ...
+- Query sketch: ...
+- Complexity: ...
+
+### Seed 2.2
+(...)
+
+---
+
+## P3 seeds (tertiary — appendix-style, lowest priority)
+
+### Seed 3.1
+- Hypothesis: ...
+- Units touched: ...
+- Fields used: ...
+- Query sketch: ...
+- Complexity: ...
+
+---
+
+## Anti-patterns — DO NOT generate seeds for
+
+- Causation claims — the pipeline reports correlations only, labeled as such.
+- Sentiment analysis via model inference — keyword rules only.
+- Queries joining >3 units/collections — use denormalized view operations instead.
+- Fields listed in `config.yaml :: source.forbidden_fields` in filter/group/sort positions.
+- Questions requiring >10K units loaded into Claude context — aggregate on the adapter side.

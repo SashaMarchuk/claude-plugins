@@ -1,0 +1,11 @@
+{
+  "name": "clickup",
+  "version": "1.0.0",
+  "description": "Universal /clickup skill for creating and managing ClickUp tickets with enforced quality standards — Connextra user stories, evidence-only descriptions, fuzzy list aliases, first-name teammate resolution, duplicate detection, idempotent create, and a two-step onboarding wizard.",
+  "author": {
+    "name": "Sasha Marchuk",
+    "url": "https://github.com/SashaMarchuk"
+  },
+  "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/clickup",
+  "license": "MIT"
+}

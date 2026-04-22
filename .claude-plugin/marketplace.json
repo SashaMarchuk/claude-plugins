@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-plugins",
+  "description": "Sasha Marchuk's Claude Code plugins — opinionated tooling for ticket management, automation, and everyday engineering workflows.",
+  "owner": {
+    "name": "Sasha Marchuk",
+    "email": "sasha.marchuk@speedandfunction.com"
+  },
+  "plugins": [
+    {
+      "name": "clickup",
+      "description": "Universal /clickup skill for creating and managing ClickUp tickets with enforced quality standards — Connextra user stories, evidence-only descriptions, fuzzy list aliases, first-name teammate resolution, duplicate detection, idempotent create, and a two-step onboarding wizard.",
+      "author": {
+        "name": "Sasha Marchuk"
+      },
+      "source": "./plugins/clickup",
+      "category": "productivity",
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/clickup"
+    }
+  ]
+}

@@ -196,7 +196,7 @@ Switch the active default calendar. Only mutates `~/.claude/create-call/config.j
 
 ### Flow
 
-1. `npx @googleworkspace/cli calendar calendarList list --params '{}'` to fetch all calendars the current auth has access to.
+1. `npx @googleworkspace/cli calendar calendarList list --params '{}' 2>/dev/null` to fetch all calendars the current auth has access to.
 2. `AskUserQuestion` (single-select) with the list.
 3. On pick, atomic-write `defaults.calendar` in `~/.claude/create-call/config.json`.
 4. Confirm: "Active calendar is now `<name>`. Future events default here unless overridden."

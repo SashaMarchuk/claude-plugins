@@ -19,8 +19,10 @@ These apply to BOTH JSON files, whenever the skill writes them:
 
 ### Reference write helper (Python, stdlib only)
 
+**Platform support**: tested on macOS and Linux. Windows is not supported — `fcntl` is POSIX-only. A Windows user would need a `msvcrt.locking` fallback.
+
 ```python
-import fcntl, json, os, tempfile
+import fcntl, json, os, tempfile, time
 
 def atomic_update(path, mutate):
     path = os.path.expanduser(path)
@@ -34,7 +36,7 @@ def atomic_update(path, mutate):
         except FileNotFoundError:
             data = {}
         except json.JSONDecodeError:
-            os.replace(path, path + f".corrupt-{int(__import__('time').time())}")
+            os.replace(path, path + f".corrupt-{int(time.time())}")
             data = {}
         mutate(data)  # caller supplies closure
         dir_ = os.path.dirname(path)
@@ -47,6 +49,8 @@ def atomic_update(path, mutate):
 ```
 
 Every write path in this skill must go through `atomic_update` (or a Bash equivalent with `flock(1)` + `mv`).
+
+**Contract for caller-supplied `mutate` closures**: perform all mutation logic BEFORE any file operation, so if the closure raises, we abort before writing the tempfile. The helper catches nothing — exceptions propagate up with the lock held through the `with` block, then released on context exit.
 
 ---
 

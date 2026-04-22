@@ -17,6 +17,8 @@ These apply to BOTH JSON files, whenever the skill writes them:
 
 ### Reference write helper (Python, stdlib only)
 
+**Platform support**: tested on macOS and Linux. Windows is not supported — `fcntl` is POSIX-only.
+
 ```python
 import fcntl, json, os, tempfile, time
 

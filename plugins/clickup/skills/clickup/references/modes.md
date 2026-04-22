@@ -109,18 +109,18 @@ Writes `~/.claude/shared/identity.json` — **shared with `/create-call`**. Read
 
 ### Flow
 
-1. **Verify MCP auth.** If broken, prompt to authenticate first. (We need MCP to fetch teammates with rich fields. Without MCP, fall back to "manual entry or skip" — identity can be name+email only, teammates deferred.)
+1. **Verify MCP auth (best-effort).** If ClickUp MCP is connected, teammate enrichment is fast and rich. If disconnected or auth broken, **do NOT HALT** — proceed with identity-only (name + email). Print a one-line banner: "`ClickUp MCP offline — identity captured; run /clickup --onboard identity again online to enrich teammates.`" Teammates get added lazily as the user invokes `/clickup <name>` and the resolver misses.
 
 2. **Ask identity** (single `AskUserQuestion` round, 2 questions):
    - Your full name
    - Your work email
 
-3. **Resolve user_id** via `mcp__clickup__clickup_resolve_assignees` using the provided email. Store under `user.external_ids.clickup`. If MCP is offline, leave `external_ids` empty — fills on next online run.
+3. **Resolve user_id** via `mcp__clickup__clickup_resolve_assignees` using the provided email (MCP-connected only). Store under `user.external_ids.clickup`. If MCP is offline, leave `external_ids` empty — fills on next online run.
 
-4. **Fetch teammates** via `mcp__clickup__clickup_get_workspace_members` (default workspace — full workspace selection happens in `onboard-workspace`). For each member:
+4. **Fetch teammates** via `mcp__clickup__clickup_get_workspace_members` (MCP-connected only; default workspace — full workspace selection happens in `onboard-workspace`). For each member:
    - Derive `first_name` (split on first whitespace).
    - Build record: `{first_name, latin_alias, full_name, email, external_ids: {clickup: <user_id>}, active: true, sources: ["clickup"], last_validated_at: <now>}`.
-   - For Cyrillic / non-Latin first names, ask user to confirm `latin_alias` (e.g., "Михайло" → "Misha"). Single shortcut: if user types "skip" for any teammate, alias = first_name lowercased and ASCII-stripped.
+   - **Batch Cyrillic alias prompts**: collect ALL Cyrillic/non-Latin `first_name`s into one consolidated `AskUserQuestion` round — ask user to confirm `latin_alias` for each in a single batch (one question per teammate is rendered as ONE question card with sub-items, NOT N separate rounds). Single shortcut: if user types "skip" for any teammate, alias = first_name lowercased and ASCII-stripped.
    - **Preserve unknown keys**: if a teammate record already exists in identity.json (seeded earlier by `/create-call` manual add), upsert by email — merge fields, preserve any keys this skill doesn't know about, bump `last_validated_at`, append `"clickup"` to `sources`.
 
 5. **Write via atomic helper** (see `config-schema.md` → "Reference write helper"). Use `fcntl.flock` on `~/.claude/shared/.identity.json.lock` for the entire read-modify-write. Set `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`.
@@ -141,8 +141,10 @@ Writes `~/.claude/clickup/config.json` (clickup-local). Assumes `~/.claude/share
 
 1. **List workspaces** via `mcp__clickup__clickup_get_workspace_hierarchy`. If >1, `AskUserQuestion` to pick. Store `workspace.id` + `workspace.name`.
 
-2. **Fetch recent lists** for the chosen workspace. Offer the top 10 most-used lists (inferred from user's recent task activity if available; otherwise all lists in spaces user has touched). For each picked list, ask for aliases (free-text, comma-separated):
-   - Example: `[Meetings Bot] Project` → `MNB, MN Service, MN, meetings bot`
+2. **Fetch recent lists** for the chosen workspace. Offer the top 10 most-used lists (inferred from user's recent task activity if available; otherwise all lists in spaces user has touched).
+   - First consolidated `AskUserQuestion` round: user picks which of the top 10 they want aliased (multi-select).
+   - Second consolidated `AskUserQuestion` round: one card per picked list, asking for aliases (free-text, comma-separated). If 5 lists were picked, this is ONE round with 5 questions, NOT 5 sequential rounds.
+   - Example: `[Meetings Bot] Project` → `MNB, MN Service, MN, meetings bot`.
    - Default alias if user types "skip": lowercased name stripped of brackets.
 
 3. **Confirm defaults** (show, allow override):

@@ -23,12 +23,24 @@ Universal skill for scheduling, updating, and cancelling Google Calendar events.
 
 ## Step 2: Pre-flight (every invocation, in order)
 
-1. **Read shared identity** from `~/.claude/shared/identity.json`. If missing or `onboarding_complete != true`, redirect to `--onboard identity` with one-line explanation; carry the original request as a call seed to resume after onboarding.
-2. **Read create-call config** from `~/.claude/create-call/config.json`. If missing or `onboarding_complete != true`, redirect to `--onboard calendar`; carry the seed.
-3. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard.
-4. **Verify Google Workspace CLI auth.** Run `npx @googleworkspace/cli calendar calendars get --params '{"calendarId":"primary"}' 2>/dev/null | head -1`. On 401 / 403 / timeout, HALT with: "Run `! npx @googleworkspace/cli auth login --services calendar,people` and retry."
-5. **Shadow check.** If `~/.claude/skills/create-call/` exists (legacy user-level skill), prepend a one-line banner: "`💡 Legacy user-level create-call detected at ~/.claude/skills/create-call/ — it shadows this plugin. Remove it when you're done migrating.`"
-6. **Pending-ticket-seed resumption.** If identity onboarding just completed and a seed was carried through, resume default flow now.
+1. **Shadow check FIRST.** If `~/.claude/skills/create-call/` exists (legacy user-level skill), the user-level skill wins over the plugin by Claude Code precedence — meaning if you're reading THIS, the legacy is NOT installed (good) or the user has already disabled it. Still, if the directory exists, prepend a loud banner on every invocation until it's gone:
+   > `⚠ Legacy ~/.claude/skills/create-call/ still exists — this plugin won't take full effect until you remove it: rm -rf ~/.claude/skills/create-call`
+   
+   Do not HALT — the plugin can still function (the user may have intentionally disabled model-invocation on the legacy skill). But the warning is non-dismissible until the directory is gone.
+
+2. **Read shared identity** from `~/.claude/shared/identity.json`. If missing or `onboarding_complete != true`:
+   - **In `--auto` mode**: HALT with "identity missing — run `/create-call --onboard` first" (don't drag the user into interactive onboarding mid-auto).
+   - In interactive mode: redirect to `--onboard identity` with one-line explanation; carry the original request as a call seed to resume after onboarding.
+
+3. **Read create-call config** from `~/.claude/create-call/config.json`. If missing or `onboarding_complete != true`:
+   - **In `--auto` mode**: HALT with "config missing — run `/create-call --onboard calendar` first".
+   - In interactive mode: redirect to `--onboard calendar`; carry the seed.
+
+4. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard.
+
+5. **Verify Google Workspace CLI auth.** Run `npx @googleworkspace/cli calendar calendars get --params '{"calendarId":"primary"}' 2>/dev/null | head -1`. On 401 / 403 / timeout, HALT with: "Run `! npx @googleworkspace/cli auth login --services calendar,people` and retry."
+
+6. **Pending-seed resumption.** If a seed was carried from step 2 or step 3 (identity or calendar wizard just completed), resume default flow with that seed now.
 
 ## Step 3: Route by flag
 
@@ -93,7 +105,7 @@ Default is `primary` (the user's own Google account). Override via `--calendar` 
 
 ### Conflict detection (before create)
 
-1. Query `npx @googleworkspace/cli calendar events list --params '{"calendarId":"<cal>","timeMin":"<start>","timeMax":"<end>","singleEvents":true,"orderBy":"startTime"}'` for the proposed window.
+1. Query `npx @googleworkspace/cli calendar events list --params '{"calendarId":"<cal>","timeMin":"<start>","timeMax":"<end>","singleEvents":true,"orderBy":"startTime"}' 2>/dev/null` for the proposed window.
 2. If any event overlaps, surface in the preview: "You have `<title>` at `<time>`. Create anyway?"
 3. In `--auto`: block if overlap ≥ 50% of proposed duration; surface "possible conflict" but proceed if overlap < 50%.
 
@@ -113,13 +125,16 @@ Derive `requestId` = `<title-slug>-<unix-timestamp>`. On create failure mid-flig
 
 Refuse creation with a one-line reason when any of these hold:
 
+- `~/.claude/shared/identity.json` missing or incomplete (pre-flight step 2 HALT)
+- `~/.claude/create-call/config.json` missing or incomplete (pre-flight step 3 HALT)
+- Google Workspace CLI not authenticated
 - Title missing or empty after extraction
 - Date or start time missing
 - At least one attendee (beyond always-include) requested but unresolvable
 - Resolved start time in the past
 - Conflict ≥ 50% overlap with an existing event
 
-The spirit of `--auto` is "save with whatever exists." If what exists is too little to produce a non-garbage event, refuse.
+The spirit of `--auto` is "save with whatever exists." If what exists is too little to produce a non-garbage event, refuse. `--auto` NEVER opens interactive onboarding or any `AskUserQuestion` prompt — if setup is incomplete, it HALTs with a clear one-liner pointing to the fix command.
 
 ---
 

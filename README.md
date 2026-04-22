@@ -52,7 +52,21 @@ This preservation guarantee was verified empirically — a sandboxed `rm -rf + r
 
 ### Migrating from the legacy user-level `create-call` skill
 
-If you previously installed `create-call` as a user-level skill at `~/.claude/skills/create-call/` (with a flat `contacts.json`), the new plugin will shadow-warn but not delete it. On your first `/create-call --onboard`, the identity wizard offers to import your `contacts.json` entries as a thin seed into `~/.claude/shared/identity.json`. After importing, you can remove the legacy dir: `rm -rf ~/.claude/skills/create-call`.
+**Important**: if you previously installed `create-call` as a user-level skill at `~/.claude/skills/create-call/`, that legacy skill **wins over the plugin** by Claude Code precedence. Install + legacy coexistence does NOT do what you want — Claude will keep loading the legacy skill until you remove it.
+
+Migration steps:
+
+1. Back up your legacy contacts (optional): `cp ~/.claude/skills/create-call/contacts.json /tmp/create-call-contacts.bak.json`
+2. Remove the legacy skill: `rm -rf ~/.claude/skills/create-call`
+3. Install the plugin: `/plugin install create-call@SashaMarchuk/claude-plugins`
+4. Run onboarding: `/create-call --onboard`
+5. The identity wizard offers (as a one-time prompt on first run if it detects a leftover legacy contacts file anywhere in common backup locations) to import your `contacts.json` entries as a thin seed into `~/.claude/shared/identity.json`.
+
+The plugin will emit a loud banner on every invocation as long as `~/.claude/skills/create-call/` still exists, so it's hard to miss.
+
+### Platform support
+
+All plugins are tested on **macOS** and **Linux**. Windows is not currently supported — the shared-identity helper uses `fcntl.flock` for cross-process locking, which is POSIX-only. A Windows fallback (`msvcrt.locking`) would be a welcome PR.
 
 ## Contributing / feedback
 

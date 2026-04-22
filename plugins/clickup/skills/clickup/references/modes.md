@@ -6,9 +6,11 @@ Detailed flow for each mode. Load only the section for the current invocation.
 
 - [default](#default) — interactive ticket create
 - [auto](#auto) — silent create with defaults
-- [onboard](#onboard) — two-step setup wizard
+- [onboard](#onboard) — full wizard (identity → workspace)
+- [onboard-identity](#onboard-identity) — shared identity wizard only
+- [onboard-workspace](#onboard-workspace) — clickup-local wizard only
 - [memory](#memory) — manage learned patterns
-- [status](#status) — config health check
+- [status](#status) — health check of both files
 - [workspace](#workspace) — switch active ClickUp workspace
 
 ---
@@ -93,46 +95,67 @@ No memory-save prompt in `--auto` (by design — the user is optimizing for spee
 
 ## onboard
 
-Two-step wizard. Must run once per user. Writes `~/.claude/clickup/config.json`.
+Full wizard. Runs `onboard-identity` → `onboard-workspace` back-to-back. Skips whichever slice is already complete.
 
-### Step 1 — Identity (minimal)
+1. If `~/.claude/shared/identity.json` missing or `onboarding_complete != true` → run [onboard-identity](#onboard-identity).
+2. If `~/.claude/clickup/config.json` missing or `onboarding_complete != true` → run [onboard-workspace](#onboard-workspace).
+3. If a ticket seed was carried in, resume [default](#default) with that seed.
 
-Ask (one `AskUserQuestion` round, 2 questions):
-- Your full name
-- Your work email
+---
 
-Write partial config with `onboarding_complete: false` and `step_1_done_at: <ts>`.
+## onboard-identity
 
-### Step 2 — Workspace research + confirmation
+Writes `~/.claude/shared/identity.json` — **shared with `/create-call`**. Read-only for every subsequent skill that needs user + teammates.
 
-1. **Verify MCP auth.** If broken, prompt to authenticate first.
+### Flow
 
-2. **Resolve user_id** via `mcp__clickup__clickup_resolve_assignees` using the provided email.
+1. **Verify MCP auth.** If broken, prompt to authenticate first. (We need MCP to fetch teammates with rich fields. Without MCP, fall back to "manual entry or skip" — identity can be name+email only, teammates deferred.)
 
-3. **List workspaces** (the current MCP auth scope). If >1, ask user to pick. Store `workspace_id` + `workspace_name`.
+2. **Ask identity** (single `AskUserQuestion` round, 2 questions):
+   - Your full name
+   - Your work email
 
-4. **Fetch teammates** via `mcp__clickup__clickup_get_workspace_members`. For each:
-   - Derive first name (split on first whitespace)
-   - Store: `{first_name, latin_alias, full_name, email, user_id, active: true, last_validated_at: <ts>}`
-   - For Cyrillic / non-Latin names, ask user to confirm a `latin_alias` (e.g., "Михайло" → alias "Misha"). Support single shortcut: if user types "skip" for any teammate, alias = first_name lowercased.
+3. **Resolve user_id** via `mcp__clickup__clickup_resolve_assignees` using the provided email. Store under `user.external_ids.clickup`. If MCP is offline, leave `external_ids` empty — fills on next online run.
 
-5. **Fetch recent lists** via `mcp__clickup__clickup_get_workspace_hierarchy`. Offer the top 10 most-used lists (inferred from user's recent task activity if available; otherwise all lists in spaces user has touched). For each picked list, ask for aliases (free-text, comma-separated):
-   - Example: `[Meetings Bot] Project` → `MNB, MN Service, MN, meetings bot`
-   - Default alias if user types "skip": lowercased name stripped of brackets.
+4. **Fetch teammates** via `mcp__clickup__clickup_get_workspace_members` (default workspace — full workspace selection happens in `onboard-workspace`). For each member:
+   - Derive `first_name` (split on first whitespace).
+   - Build record: `{first_name, latin_alias, full_name, email, external_ids: {clickup: <user_id>}, active: true, sources: ["clickup"], last_validated_at: <now>}`.
+   - For Cyrillic / non-Latin first names, ask user to confirm `latin_alias` (e.g., "Михайло" → "Misha"). Single shortcut: if user types "skip" for any teammate, alias = first_name lowercased and ASCII-stripped.
+   - **Preserve unknown keys**: if a teammate record already exists in identity.json (seeded earlier by `/create-call` manual add), upsert by email — merge fields, preserve any keys this skill doesn't know about, bump `last_validated_at`, append `"clickup"` to `sources`.
 
-6. **Confirm preferences** (show defaults, allow override):
-   - Default priority: `normal`
-   - Default status: `backlog`
-   - Default task type: `task`
-   - Language: English (forced, no override)
+5. **Write via atomic helper** (see `config-schema.md` → "Reference write helper"). Use `fcntl.flock` on `~/.claude/shared/.identity.json.lock` for the entire read-modify-write. Set `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`.
 
-7. **Write config** to `~/.claude/clickup/config.json` with `onboarding_complete: true`, `updated_at: <now>`. See `config-schema.md` for exact shape.
-
-8. **If there was a pending ticket-seed** (user started with `/clickup <request>` but had no config), resume default mode now with the stored seed text.
+6. **Identity wizard never touches create-call-only fields** — if a teammate has fields added by `/create-call` (e.g., future `external_ids.google`), keep them intact.
 
 ### Resumption
 
-If user interrupts mid-step-2 and returns later, `onboarding_complete` stays `false`. Any non-`--onboard` invocation detects this, prints "Onboarding incomplete — resuming step 2", and continues from where it left off.
+If the user interrupts mid-flow, `onboarding_complete` stays `false` in identity.json. Any subsequent invocation of either skill detects this, prints "Identity onboarding incomplete — resuming", and continues.
+
+---
+
+## onboard-workspace
+
+Writes `~/.claude/clickup/config.json` (clickup-local). Assumes `~/.claude/shared/identity.json` is complete; if not, redirects to [onboard-identity](#onboard-identity) first.
+
+### Flow
+
+1. **List workspaces** via `mcp__clickup__clickup_get_workspace_hierarchy`. If >1, `AskUserQuestion` to pick. Store `workspace.id` + `workspace.name`.
+
+2. **Fetch recent lists** for the chosen workspace. Offer the top 10 most-used lists (inferred from user's recent task activity if available; otherwise all lists in spaces user has touched). For each picked list, ask for aliases (free-text, comma-separated):
+   - Example: `[Meetings Bot] Project` → `MNB, MN Service, MN, meetings bot`
+   - Default alias if user types "skip": lowercased name stripped of brackets.
+
+3. **Confirm defaults** (show, allow override):
+   - `priority`: `normal`
+   - `status`: `backlog`
+   - `task_type`: `task`
+   - `language`: `en` (forced, no override)
+
+4. **Write config** to `~/.claude/clickup/config.json` via atomic helper + flock on `~/.claude/clickup/.config.json.lock`. Fields: `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`, `workspace`, `lists`, `defaults`, `behavior: {}`.
+
+5. **If switching workspaces** (the user had a different `workspace` before): any teammates in `identity.json` whose `external_ids.clickup` is NOT in the new workspace's member list get `active: false`. Surface this as a banner. Do not delete — other skills (like `/create-call`) still use the email + name.
+
+6. **If a ticket seed was carried in**, resume [default](#default) now.
 
 ---
 
@@ -174,21 +197,28 @@ On `--status` or when pre-flight banner triggers, flag:
 
 ## status
 
-Health check. Read-only.
+Health check across BOTH files. Read-only.
 
 ### Output
 
 ```
 /clickup status
 ─────────────────────────────────────
-User:         Sashko Marchuk <sasha@…>
-Workspace:    Speed&Functions (id: 90151491867)
-Config age:   12 days  (OK — refresh at 30)
-Teammates:    18  (3 validated >7 days ago — auto-refresh pending)
-Lists:        7 aliased
-Memory rules: 5 active, 1 stale (unused >60 days)
-MCP auth:     OK (last verified: 12s ago)
-Drafts:       2 pending (cleanup with /clickup --memory clear-drafts)
+identity.json    (~/.claude/shared/)
+  User:          Sashko Marchuk <sasha@…>
+  Teammates:     18  (3 validated >7 days ago — auto-refresh pending)
+  Schema:        v1  ✓
+  Shared with:   /clickup, /create-call
+
+clickup/config.json
+  Workspace:     Speed&Functions (id: 90151491867)
+  Lists:         7 aliased
+  Config age:    12 days  (OK — refresh at 30)
+  Schema:        v1  ✓
+
+Memory rules:    5 active, 1 stale (unused >60 days)
+MCP auth:        OK (last verified: 12s ago)
+Drafts:          2 pending (cleanup with /clickup --memory clear-drafts)
 ```
 
 Never mutates state. Safe to run any time.
@@ -197,11 +227,14 @@ Never mutates state. Safe to run any time.
 
 ## workspace
 
-Switch the active ClickUp workspace.
+Switch the active ClickUp workspace. Only mutates `~/.claude/clickup/config.json` (workspace + lists). Teammates in shared `identity.json` keep their email + name; only their `active` flag flips.
 
 ### Flow
 
 1. Call `mcp__clickup__clickup_get_workspace_hierarchy` to list all workspaces the current auth has access to.
 2. Present as an `AskUserQuestion` (single-select).
-3. On pick, update `config.workspace_id` + `config.workspace_name`; re-validate teammates and lists against the new workspace (may invalidate some entries — surface them).
-4. If teammates/lists differ significantly from cached values, prompt: "Run `/clickup --onboard` to refresh teammates and lists for this workspace."
+3. On pick, atomically update `~/.claude/clickup/config.json` with new `workspace.id` + `workspace.name`. Re-fetch lists for the new workspace; replace `lists[]`.
+4. **Fetch new workspace members**. For each teammate in `~/.claude/shared/identity.json`:
+   - If their `external_ids.clickup` IS in the new workspace → bump `last_validated_at`, ensure `active: true`.
+   - If their `external_ids.clickup` is NOT in the new workspace → set `active: false`, keep all other fields (email, name, `/create-call` still uses them).
+5. Prompt: "Run `/clickup --onboard workspace` if you want to refresh lists + add aliases for this workspace."

@@ -1,46 +1,142 @@
 # Config + memory schemas
 
-## config.json
+The clickup skill reads **two** JSON files on every invocation:
 
-Path: `~/.claude/clickup/config.json`
+1. `~/.claude/shared/identity.json` — user profile + teammate roster, shared with `/create-call`.
+2. `~/.claude/clickup/config.json` — clickup-specific state (workspace, lists, preferences).
 
-Written by `--onboard`. Read on every invocation (pre-flight step 1).
+Plus a human-editable `~/.claude/clickup/memory.md` (learned rules) and a `drafts/` subdir for idempotency snapshots.
+
+## Non-negotiable file rules
+
+These apply to BOTH JSON files, whenever the skill writes them:
+
+1. **Atomic write** — write to `<file>.tmp` in the same dir, `fsync`, then `os.replace(tmp, file)`. Never edit in place.
+2. **`fcntl.flock`** — take an exclusive lock on a sibling sentinel file (`<file>.lock`) for the entire read-modify-write. The kernel releases the lock when the process dies, so stale locks are impossible.
+3. **Preserve unknown keys** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/create-call` may have added fields to a teammate record that this version of `/clickup` does not know about; they must survive a rewrite.
+4. **`schemaVersion: 1`** — integer at the top of every file. If a reader sees a higher version it does not understand, refuse to write (read-only fallback) rather than downgrade.
+5. **On corrupt JSON** — move the file to `<file>.corrupt-<epoch>` and start fresh from skeleton, with a banner to the user.
+
+### Reference write helper (Python, stdlib only)
+
+```python
+import fcntl, json, os, tempfile
+
+def atomic_update(path, mutate):
+    path = os.path.expanduser(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lock_path = path + ".lock"
+    with open(lock_path, "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            data = {}
+        except json.JSONDecodeError:
+            os.replace(path, path + f".corrupt-{int(__import__('time').time())}")
+            data = {}
+        mutate(data)  # caller supplies closure
+        dir_ = os.path.dirname(path)
+        with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False) as tmp:
+            json.dump(data, tmp, indent=2, ensure_ascii=False, sort_keys=False)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_path = tmp.name
+        os.replace(tmp_path, path)
+```
+
+Every write path in this skill must go through `atomic_update` (or a Bash equivalent with `flock(1)` + `mv`).
+
+---
+
+## `~/.claude/shared/identity.json` (SHARED — /clickup + /create-call)
+
+Written the first time either skill's onboarding runs. Read on every invocation of either skill.
 
 ```json
 {
-  "version": "1.0",
+  "schemaVersion": 1,
   "onboarding_complete": true,
-  "step_1_done_at": "2026-04-22T12:00:00Z",
   "updated_at": "2026-04-22T12:15:00Z",
   "user": {
     "name": "Sashko Marchuk",
     "email": "sasha.marchuk@speedandfunction.com",
-    "user_id": "100682233"
-  },
-  "workspace": {
-    "id": "90151491867",
-    "name": "Speed&Functions"
+    "external_ids": {
+      "clickup": "100682233"
+    }
   },
   "teammates": [
     {
       "first_name": "Misha",
       "latin_alias": "Misha",
       "full_name": "Misha Skripkovsky",
-      "email": "misha@speedandfunction.com",
-      "user_id": "106686024",
+      "email": "misha.skripkovsky@speedandfunction.com",
+      "external_ids": {
+        "clickup": "106686024"
+      },
       "active": true,
+      "sources": ["clickup"],
       "last_validated_at": "2026-04-22T12:15:00Z"
     },
     {
       "first_name": "Михайло",
       "latin_alias": "Mykhailo",
       "full_name": "Михайло Іваненко",
-      "email": "m.ivanenko@…",
-      "user_id": "…",
+      "email": "m.ivanenko@speedandfunction.com",
+      "external_ids": {"clickup": "..."},
       "active": true,
+      "sources": ["clickup"],
       "last_validated_at": "2026-04-22T12:15:00Z"
     }
-  ],
+  ]
+}
+```
+
+### Field rules
+
+- `schemaVersion` — integer. Current: `1`.
+- `user.external_ids` — open map. Reserved keys: `clickup`, `google`, `slack`, `jira`. Add more as new plugins need them. Plugin-agnostic key.
+- `teammates[].first_name` — the teammate's first name as they use it (Cyrillic ok). Used by the NFC-fallback branch of the resolver.
+- `teammates[].latin_alias` — ASCII-only short form. Required for every teammate (even if Latin-scripted name = alias). Primary key for the resolver.
+- `teammates[].email` — canonical identity. Upserts are keyed on email.
+- `teammates[].external_ids` — same open map as user. Optional per teammate. `/clickup` populates `clickup`; `/create-call` populates `google` when it has it.
+- `teammates[].active` — boolean. `/clickup` flips to `false` when a teammate disappears from workspace members. `/create-call` still allows scheduling with inactive teammates but surfaces a banner.
+- `teammates[].sources` — array of origins: `"clickup"` (pulled from workspace members), `"create-call"` (added via lookup-miss), `"seed-from-contacts"` (imported from legacy user-level `contacts.json`), `"manual"` (user typed it in onboarding).
+- `teammates[].last_validated_at` — ISO8601. `/clickup` refreshes this on 7-day TTL. `null` for entries never validated against a source of truth.
+
+### Dual-key teammate resolver (pure function)
+
+When matching a user-typed name to a teammate:
+
+1. NFC-normalize the typed name, strip leading/trailing whitespace.
+2. **First pass** — case-insensitive match against `teammates[].latin_alias`. Most names go here; Latin-only users hit this path every time.
+3. **Second pass** — case-insensitive + NFC match against `teammates[].first_name`. Cyrillic users typing their own name in Cyrillic hit this path.
+4. **Third pass** — exact case-insensitive match on `teammates[].email` (for when user types an email directly).
+5. Multiple hits → prompt disambiguation with full name + email.
+6. Zero hits → prompt for full email, then upsert new record with `sources: ["manual"]`.
+
+### Validation on load
+
+- Missing `schemaVersion` OR `schemaVersion > 1` → refuse to write; run read-only fallback.
+- Missing `user` or `teammates` → treat as incomplete onboarding.
+- Corrupt JSON → rename to `identity.json.corrupt-<epoch>`, surface banner, re-onboard.
+
+---
+
+## `~/.claude/clickup/config.json` (clickup-only)
+
+Written by `--onboard workspace`. Read on every invocation.
+
+```json
+{
+  "schemaVersion": 1,
+  "onboarding_complete": true,
+  "updated_at": "2026-04-22T12:15:00Z",
+  "workspace": {
+    "id": "90151491867",
+    "name": "Speed&Functions"
+  },
   "lists": [
     {
       "id": "901522761229",
@@ -52,34 +148,34 @@ Written by `--onboard`. Read on every invocation (pre-flight step 1).
       "last_validated_at": "2026-04-22T12:15:00Z"
     }
   ],
-  "preferences": {
+  "defaults": {
     "language": "en",
-    "default_priority": "normal",
-    "default_status": "backlog",
-    "default_task_type": "task"
-  }
+    "priority": "normal",
+    "status": "backlog",
+    "task_type": "task"
+  },
+  "behavior": {}
 }
 ```
 
 ### Field rules
 
-- `onboarding_complete`: becomes `true` only after step 2 finishes cleanly.
-- `teammates[].latin_alias`: always Latin-script. For Cyrillic/other scripts, onboarding asks user to confirm. Single transliteration per teammate.
-- `teammates[].active`: re-validated lazily when `last_validated_at` > 7 days.
-- `lists[].aliases`: lowercase matching; stored as-typed.
-- `preferences.language`: forced `en`. Included for future flexibility but not overridable from UI.
+- `workspace` — the active ClickUp workspace. Switched via `--workspace`.
+- `lists[].aliases` — lowercase matching; stored as-typed.
+- `defaults` — values (what to use when user doesn't specify). Replaces the older `preferences` bag.
+- `behavior` — boolean flags that gate UX. Empty in v1; reserved for future toggles.
 
-### Validation on load
+**Removed from older schemas:** `user`, `teammates[]`, `preferences` (split into `defaults` + `behavior`).
 
-If schema-invalid (missing `version`, corrupted JSON, `onboarding_complete` missing), prompt re-onboard. Don't attempt repair.
+### Validation
+
+Same invariants as identity.json: integer schemaVersion, preserve unknown keys, atomic writes, flock. On corrupt JSON → rename + re-onboard.
 
 ---
 
 ## memory.md
 
-Path: `~/.claude/clickup/memory.md`
-
-Human-editable. Markdown. Read on every invocation.
+Path: `~/.claude/clickup/memory.md`. Human-editable. Markdown. Read on every invocation.
 
 ```markdown
 # /clickup memory
@@ -93,60 +189,39 @@ Last updated: 2026-04-22
 **Added:** 2026-03-15
 **Last applied:** 2026-04-18
 **Applied count:** 7
-
-## rule-002
-**Rule:** For MN Service bugs, default priority = high.
-**Pattern:** list resolves to "[Meetings Bot] Project" AND task_type = bug
-**Action:** set priority = high
-**Added:** 2026-03-20
-**Last applied:** 2026-04-22
-**Applied count:** 12
-
-## rule-003
-**Rule:** Prefer verb "Resolve" over "Fix" for bug titles.
-**Pattern:** task_type = bug
-**Action:** replace leading "Fix" with "Resolve" in generated title
-**Added:** 2026-04-10
-**Last applied:** 2026-04-21
-**Applied count:** 4
 ```
 
 ### Rule file rules
 
-- One rule per `## rule-<id>` section.
-- `<id>` is monotonically increasing (rule-001, rule-002, …). Removed rules leave a gap — don't renumber.
-- **Rule**: one-line human description of the guideline.
-- **Pattern**: machine-evaluable condition. Keep it simple — keyword match or field-equals.
-- **Action**: imperative, targets one ticket field.
-- **Added**, **Last applied**, **Applied count**: maintained by the skill. Hand-edit only if reviewing.
+- One rule per `## rule-<id>` section. Monotonically increasing IDs; removed rules leave gaps.
+- **Rule**: one-line human description.
+- **Pattern**: keyword match or field-equals. Simple.
+- **Action**: imperative, one ticket field.
+- **Added / Last applied / Applied count**: maintained by the skill.
 
 ### Application order
 
-1. Extract from source → candidate ticket fields.
-2. For each rule in order, if `Pattern` matches AND the field the action targets is NOT user-overridden this invocation → apply `Action`, update `Last applied` + `Applied count`.
-3. Proceed to resolution + preview.
-
-Rules don't override explicit user input in the current turn. If a user types "assign to Misha" and rule-001 says "auth → Andy", Misha wins.
+1. Extract from source → candidate fields.
+2. For each rule in order: if pattern matches AND target field is not user-overridden → apply action, update `Last applied` + `Applied count`.
+3. Explicit user input in the current turn ALWAYS wins over rules.
 
 ### Staleness
 
-- Rules with `Last applied` > 60 days ago → flag as stale in `--status`.
-- Rules with `Applied count` > 20 → flag as confirmed-useful.
+- Last applied > 60 days ago → flag as stale.
+- Applied count > 20 → flag as confirmed-useful.
 
 ---
 
 ## drafts/
 
-Path: `~/.claude/clickup/drafts/`
-
-Per-invocation JSON snapshots, keyed by UUID. Created BEFORE calling `clickup_create_task`.
+Path: `~/.claude/clickup/drafts/`. Per-invocation JSON snapshots keyed by UUID. Created BEFORE calling `clickup_create_task`.
 
 ```json
 {
   "uuid": "e7f3a1…",
   "created_at": "2026-04-22T12:30:00Z",
   "invocation": "/clickup --auto",
-  "source_text": "<first 500 chars of source context>",
+  "source_text": "<first 500 chars>",
   "resolved": {
     "list_id": "901522761229",
     "assignee_user_ids": ["106686024"],
@@ -154,16 +229,17 @@ Per-invocation JSON snapshots, keyed by UUID. Created BEFORE calling `clickup_cr
     "status": "backlog",
     "task_type": "task",
     "tags": ["mn service"],
-    "title": "Detect when bot isn't allowed — alert Slack after 5 min",
-    "description": "<full markdown>"
+    "title": "…",
+    "description": "…"
   },
   "api_response": null,
   "task_url": null
 }
 ```
 
-After successful create, `api_response` and `task_url` are populated. On retry search, look for `uuid` in open tickets to detect prior partial success.
+After successful create, `api_response` and `task_url` populate. On retry, search the list for the UUID marker (hidden in description as `<!-- ck:<uuid> -->`) before re-creating.
 
 ### Cleanup
 
-Drafts older than 7 days with `task_url` populated → auto-delete on next `--status` or `--memory` invocation. Drafts with `task_url: null` and >1 hour old → surface in `--status` as "orphan drafts" for manual review.
+- Drafts with `task_url` populated + older than 7 days → auto-delete on next `--status` or `--memory` run.
+- Drafts with `task_url: null` + older than 1 hour → surface as "orphan drafts" in `--status` for manual review.

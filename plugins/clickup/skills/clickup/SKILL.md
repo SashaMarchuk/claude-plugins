@@ -13,20 +13,24 @@ Universal skill for creating and managing ClickUp tickets. Enforces consistent t
 |---|---|---|
 | (none) | Interactive ticket create | `references/modes.md#default` |
 | `--auto` | Silent create with defaults | `references/modes.md#auto` |
-| `--onboard` | Two-step setup wizard | `references/modes.md#onboard` |
+| `--onboard` | Full wizard (identity + workspace) | `references/modes.md#onboard` |
+| `--onboard identity` | Re-run shared identity wizard only | `references/modes.md#onboard-identity` |
+| `--onboard workspace` | Re-run clickup-local wizard only | `references/modes.md#onboard-workspace` |
 | `--memory [add\|list\|remove\|clear]` | Manage learned patterns | `references/modes.md#memory` |
-| `--status` | Config health check | `references/modes.md#status` |
+| `--status` | Config health check (both files) | `references/modes.md#status` |
 | `--workspace` | Switch active ClickUp workspace | `references/modes.md#workspace` |
 
-**Precedence on conflict:** `--onboard` > `--status` > `--memory` > `--workspace` > `--auto` > default. Positional args after flags are the ticket-seed text.
+**Precedence on conflict:** `--onboard` > `--status` > `--memory` > `--workspace` > `--auto` > default. Flag arguments are space-separated (`--onboard identity`, not `--onboard=identity`). Positional args after flags are the ticket-seed text.
 
 ## Step 2: Pre-flight (every invocation, in order)
 
-1. **Read config** from `~/.claude/clickup/config.json`. If missing or `onboarding_complete != true`, redirect to `--onboard` with one-line explanation; carry the original request as ticket seed to resume after onboarding.
-2. **Read memory** from `~/.claude/clickup/memory.md`. Apply rules. If any rule is unused >60 days or applied >20 times, prepend a one-line review banner: "`💡 N memory rules may be stale — run /clickup --memory list`".
-3. **Check config freshness.** If `config.updated_at` > 30 days ago, prepend: "`💡 Config is 30+ days old — run /clickup --onboard to refresh`". Non-blocking.
-4. **Verify ClickUp MCP auth.** On 401 / timeout / disconnected MCP, HALT with re-auth instructions. **Never fabricate a success URL.**
-5. **Re-validate teammates lazily.** If any teammate has `last_validated_at` > 7 days, silently fetch workspace members; diff against config; surface significant changes (removed users, renames) as a banner.
+1. **Read shared identity** from `~/.claude/shared/identity.json`. If missing or `onboarding_complete != true`, redirect to `--onboard identity` with one-line explanation; carry the original request as ticket seed.
+2. **Read clickup config** from `~/.claude/clickup/config.json`. If missing or `onboarding_complete != true`, redirect to `--onboard workspace`; carry the ticket seed.
+3. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard.
+4. **Read memory** from `~/.claude/clickup/memory.md`. Apply rules. If any rule is unused >60 days or applied >20 times, prepend a one-line review banner: "`💡 N memory rules may be stale — run /clickup --memory list`".
+5. **Check config freshness.** If `config.updated_at` > 30 days ago, prepend: "`💡 Config is 30+ days old — run /clickup --onboard to refresh`". Non-blocking.
+6. **Verify ClickUp MCP auth.** On 401 / timeout / disconnected MCP, HALT with re-auth instructions. **Never fabricate a success URL.**
+7. **Re-validate teammates lazily.** If any `teammates[].last_validated_at` > 7 days (or `null`), silently fetch workspace members; diff against identity; surface significant changes (removed users, renames) as a banner. Updates go to `~/.claude/shared/identity.json` via the atomic helper in `references/config-schema.md`.
 
 ## Step 3: Route by flag
 
@@ -72,15 +76,19 @@ Omit the line entirely if the beneficiary role is not extractable from source. R
 
 ## Resolution rules
 
-### Assignee (first-name match, Unicode-normalized)
+### Assignee (dual-key resolver, teammates live in shared identity.json)
 
-1. Normalize first name with NFC + strip emoji.
-2. Match against `config.teammates[].first_name` and `config.teammates[].latin_alias`.
-3. **Single match** → fill silently.
-4. **Multiple matches** → prompt disambiguation (show full names + emails).
-5. **Zero matches** → freeform prompt; on success, offer to append to `config.teammates`.
-6. **Re-validation guard**: before assigning, check `teammate.active == true`. On deactivated user, block; force re-prompt.
-7. In `--auto`: if ambiguous or deactivated AND no memory rule resolves unambiguously → refuse with one-line reason.
+The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/create-call` reads the same file — changes here are seen there.
+
+1. NFC-normalize the typed name, strip leading/trailing whitespace + emoji.
+2. **First pass** — case-insensitive match against `teammates[].latin_alias`. (ASCII common case — most hits land here.)
+3. **Second pass** — case-insensitive + NFC match against `teammates[].first_name`. (Cyrillic users typing their own name.)
+4. **Third pass** — case-insensitive match on `teammates[].email` (when user typed an email).
+5. **Single match** → fill silently.
+6. **Multiple matches** → prompt disambiguation (show full names + emails).
+7. **Zero matches** → freeform prompt; on success, upsert into `teammates[]` with `sources: ["manual"]` + `last_validated_at: null` via the atomic write helper. A later MCP refresh will enrich with `external_ids.clickup` + `full_name`.
+8. **Re-validation guard**: before assigning, check `teammate.active == true`. On deactivated user, block; force re-prompt.
+9. In `--auto`: if ambiguous or deactivated AND no memory rule resolves unambiguously → refuse with one-line reason.
 
 ### List (alias → fuzzy hierarchy)
 
@@ -141,11 +149,14 @@ After any edit, redraw the preview and repeat. Cancel deletes the draft snapshot
 
 ---
 
-## Files (user state, OUTSIDE the skill dir)
+## Files (user state, OUTSIDE the plugin dir — survives `/plugin update`)
 
-- `~/.claude/clickup/config.json` — user identity, teammates, lists, aliases, preferences
-- `~/.claude/clickup/memory.md` — learned patterns + corrections (markdown, human-editable)
-- `~/.claude/clickup/drafts/` — per-invocation idempotency snapshots
+- `~/.claude/shared/identity.json` — **SHARED with `/create-call`**. User profile + teammate roster (first_name, latin_alias, full_name, email, external_ids, active, sources, last_validated_at). Both skills read and append.
+- `~/.claude/clickup/config.json` — clickup-local. Workspace, lists + aliases, defaults, behavior flags. No `user` or `teammates` here.
+- `~/.claude/clickup/memory.md` — learned patterns + corrections (markdown, human-editable).
+- `~/.claude/clickup/drafts/` — per-invocation idempotency snapshots.
+
+All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file — see the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/create-call` fields this plugin doesn't know about).
 
 Schemas + examples in `references/config-schema.md`.
 

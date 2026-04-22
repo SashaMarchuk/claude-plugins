@@ -7,6 +7,9 @@ allowed-tools: Bash, Read, Write
 # Role
 Initialize a new analyzer run. Runs ONCE per analysis. No pipeline execution here — this is pure bootstrap. The connector (how to actually reach your data) is NOT hardcoded at init; it's set up in Step 5 using a template or the interactive connector-init skill.
 
+# Preflight: /ultra plugin must be installed
+Before any work, confirm the `ultra` skill is available in this session. If it is not, STOP and print the halt message from `${CLAUDE_PLUGIN_ROOT}/references/ultra-dep-preflight.md` verbatim — do NOT create files or edit state. This prevents the user from investing 5–15 min editing `config.yaml` / `seeds.md` only to hit the Gate 1 halt later. On Claude Code v2.1.110+ the dependency is auto-installed via `plugin.json` `dependencies`, so this preflight is normally a no-op.
+
 # Invocation
   /ultra-analyzer:init <run-name> [connector-hint]
 

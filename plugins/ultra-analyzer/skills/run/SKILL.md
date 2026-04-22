@@ -40,15 +40,11 @@ The tier drives gate rigor. User can change mid-run with `/ultra-analyzer:set-pr
 ### current_step == "pre-discover-gate"
 **This is GATE 1.** Invoke /ultra to validate config + seeds + connector.
 
-**Preflight: verify /ultra is installed.** Before invoking, confirm the `ultra` skill is available. If it is not (Skill tool returns skill-not-found or the skill is not listed in the current session's available skills), HALT with this message and do NOT advance state:
+**Preflight: verify /ultra is installed.** Before invoking, confirm the `ultra` skill is available. Follow the detection + halt-message rules in `${CLAUDE_PLUGIN_ROOT}/references/ultra-dep-preflight.md` — that file is the single source of truth for the halt text; read it and print it verbatim to the user if the `ultra` skill is not available.
 
-> `ultra-analyzer` requires the `ultra` plugin from the same marketplace. Install it first:
-> ```
-> /plugin install ultra@SashaMarchuk/claude-plugins
-> ```
-> Then re-run `/ultra-analyzer:run`.
+Gate 1 cannot be bypassed. Failing the preflight sets `status = blocked` and does NOT advance state.
 
-Gate 1 cannot be bypassed. Failing the preflight sets `status = blocked`.
+Note: on Claude Code v2.1.110+ the dependency auto-installs via the plugin's `dependencies` field, so most users never see this halt. It exists as a belt-and-suspenders safety net for older Claude Code versions, `--plugin-dir` local dev loads, and users who manually uninstalled `ultra`.
 
 Use the Skill tool to invoke `ultra` with the tier read from `state.profile.ultra_gate_tier`:
 ```

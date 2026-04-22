@@ -7,6 +7,9 @@ allowed-tools: Bash, Read
 # Role
 Present a clear, task-oriented help screen. If `$ARGUMENTS` contains a specific step or status, focus on that. Otherwise show the full onboarding + command map.
 
+# Preflight: /ultra plugin must be installed
+Before printing the help guide, check whether the `ultra` skill is available in this session. If it is NOT, prepend the halt message from `${CLAUDE_PLUGIN_ROOT}/references/ultra-dep-preflight.md` to the normal help output (or replace it, depending on user context). This catches users who installed `ultra-analyzer` without `ultra` and are reading `help` to figure out what to do. On Claude Code v2.1.110+ the dependency is auto-installed via `plugin.json` `dependencies`, so this preflight is normally a no-op.
+
 # Invocation
   /ultra-analyzer:help [step|command]
 

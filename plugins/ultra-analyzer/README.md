@@ -4,8 +4,15 @@ Framework for rigorous data/corpus analysis with grounded findings, independent 
 
 ## Requires
 
-- The [`ultra`](https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/ultra) plugin from the same marketplace. `/ultra-analyzer` invokes `/ultra` at two validation gates (before discover, before synthesize); without it, runs halt at Gate 1.
-- Optional per-connector: a MongoDB MCP server + `$MONGO_URI` for Mongo runs; `mcp__browsermcp__*` or `mcp__playwright-persistent__*` for browser-driven scrapes. Filesystem / JSONL / SQLite runs need no MCP.
+**Hard dependency:** the [`ultra`](https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/ultra) plugin from the same marketplace. `/ultra-analyzer` invokes `/ultra` at two validation gates (Gate 1 pre-discover, Gate 2 pre-synthesize); without it, runs halt at Gate 1.
+
+On **Claude Code v2.1.110+**, installing `ultra-analyzer` from the marketplace auto-installs `ultra` via the plugin [`dependencies`](https://code.claude.com/docs/en/plugin-dependencies) field — no separate step. On **older Claude Code versions**, `dependencies` is ignored and you must install `ultra` manually (`/plugin install ultra@SashaMarchuk/claude-plugins`). Early skills (`init`, `help`) and Gate 1 (`run`) halt with a clear install command if `ultra` is not available, so the worst case is a one-shot redirect — not silent failure later in the pipeline.
+
+Optional, per-connector:
+
+- MongoDB runs: a MongoDB MCP server + `$MONGO_URI`.
+- Browser-driven scrapes: `mcp__browsermcp__*` or `mcp__playwright-persistent__*`.
+- Filesystem / JSONL / SQLite / PDF runs: no MCP needed.
 
 ## What it does
 

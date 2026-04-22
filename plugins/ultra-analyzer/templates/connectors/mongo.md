@@ -1,3 +1,8 @@
+> **This is a shipped template.** **Copy it to your run directory before editing** — direct edits to this file will be wiped on `/plugin update`. To copy:
+> ```bash
+> cp ${CLAUDE_PLUGIN_ROOT}/templates/connectors/<type>.md .planning/ultra-analyzer/<run-name>/connector.md
+> ```
+
 # Connector: mongo
 Source type: MongoDB database (or DocumentDB / Cosmos DB compatible).
 Authentication: `$MONGO_URI` env var contains a full connection string including credentials. Never hardcode the URI in this file.

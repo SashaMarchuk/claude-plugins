@@ -2,6 +2,8 @@
 
 The pipeline is source-agnostic. Adding support for a new data source (a proprietary API, a custom on-disk format, a browser-driven extraction, etc.) does NOT require modifying plugin code. Instead, you write a `connector.md` file that tells the universal `skills/connector/SKILL.md` how to talk to your source.
 
+> ⚠️ **Never edit shipped templates in place.** Files under `${CLAUDE_PLUGIN_ROOT}/templates/connectors/` are overwritten on `/plugin update`. **Always copy a template into your run directory first**, then edit the copy. The paths below follow this rule — if you deviate, your tweaks will vanish the next time you update the plugin.
+
 Two paths: **copy-and-edit a shipped template**, or **generate one interactively**.
 
 ## Path A: Copy a shipped template

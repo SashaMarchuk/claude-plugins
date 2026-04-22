@@ -1,3 +1,8 @@
+> **This is a shipped template.** **Copy it to your run directory before editing** — direct edits to this file will be wiped on `/plugin update`. To copy:
+> ```bash
+> cp ${CLAUDE_PLUGIN_ROOT}/templates/connectors/<type>.md .planning/ultra-analyzer/<run-name>/connector.md
+> ```
+
 # Connector: browser
 Source type: Live web pages accessed via a headless browser (playwright-persistent or browsermcp MCP).
 Authentication: session-based. Expect the user to have a live browser session already authenticated to the target site. Never automate login flows in this connector.

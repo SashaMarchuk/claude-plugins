@@ -1,3 +1,8 @@
+> **This is a shipped template.** **Copy it to your run directory before editing** — direct edits to this file will be wiped on `/plugin update`. To copy:
+> ```bash
+> cp ${CLAUDE_PLUGIN_ROOT}/templates/connectors/<type>.md .planning/ultra-analyzer/<run-name>/connector.md
+> ```
+
 # Connector: http-api
 Source type: HTTP REST API (any JSON-over-HTTP service — GitHub, Jira, custom internal APIs, etc.).
 Authentication: bearer token or API key via env var (`$API_TOKEN` by convention — rename per service). NEVER hardcode credentials in this file.

@@ -1,3 +1,8 @@
+> **This is a shipped template.** **Copy it to your run directory before editing** — direct edits to this file will be wiped on `/plugin update`. To copy:
+> ```bash
+> cp ${CLAUDE_PLUGIN_ROOT}/templates/connectors/<type>.md .planning/ultra-analyzer/<run-name>/connector.md
+> ```
+
 # Connector: jsonl
 Source type: JSON Lines file(s) — one JSON object per line (`.jsonl`, `.ndjson`, or `.log` with JSON events).
 Authentication: None — direct file access.

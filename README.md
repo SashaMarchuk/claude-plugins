@@ -2,15 +2,18 @@
 
 Opinionated Claude Code plugins by [Sasha Marchuk](https://github.com/SashaMarchuk) — tooling for ticket management, automation, and everyday engineering workflows.
 
-## Install this marketplace
+## Quick install — get all three plugins
 
 In Claude Code:
 
 ```
 /plugin marketplace add SashaMarchuk/claude-plugins
+/plugin install clickup@SashaMarchuk/claude-plugins
+/plugin install ultra@SashaMarchuk/claude-plugins
+/plugin install ultra-analyzer@SashaMarchuk/claude-plugins
 ```
 
-Then install any plugin from the list below.
+That's it — three paste-and-enters. `ultra-analyzer` declares `ultra` as a dependency, so it will pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the third line fetches it explicitly.
 
 ## Plugins
 
@@ -28,9 +31,17 @@ Then install any plugin from the list below.
 /plugin install ultra-analyzer@SashaMarchuk/claude-plugins   # requires ultra
 ```
 
-## How these plugins treat your data
+## Your data is preserved across updates
 
-All user state (config, memory, drafts) lives **outside** the plugin directory, under `~/.claude/<plugin-name>/`. Plugin updates never touch your personal data.
+All user state lives **outside** the plugin directory by design, so `/plugin update` never wipes what you've collected:
+
+| Plugin | User-data location |
+|---|---|
+| `clickup` | `~/.claude/clickup/{config.json, memory.md, drafts/}` — onboarding + learned patterns |
+| `ultra` | `~/.claude/skills/ultra/global-lessons.md` — per-run lessons log |
+| `ultra-analyzer` | `<your-project>/.planning/ultra-analyzer/<run-name>/` — config, seeds, findings, state per run |
+
+This was verified empirically — a sandboxed `rm -rf + recopy` of the plugin dir (simulating a worst-case update) left every pre-seeded user file intact.
 
 ## Contributing / feedback
 

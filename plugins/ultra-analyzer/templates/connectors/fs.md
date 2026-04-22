@@ -1,3 +1,8 @@
+> **This is a shipped template.** **Copy it to your run directory before editing** — direct edits to this file will be wiped on `/plugin update`. To copy:
+> ```bash
+> cp ${CLAUDE_PLUGIN_ROOT}/templates/connectors/<type>.md .planning/ultra-analyzer/<run-name>/connector.md
+> ```
+
 # Connector: fs
 Source type: Filesystem tree (any files on disk — code, docs, logs, JSON, CSV, etc.).
 Authentication: None — read-only access to local filesystem.

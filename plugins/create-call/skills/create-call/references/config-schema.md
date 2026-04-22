@@ -76,7 +76,7 @@ Written the first time either skill's onboarding runs. Read on every invocation 
         "clickup": "106686024"
       },
       "active": true,
-      "sources": ["clickup"],
+      "sources": ["clickup-workspace", "clickup-tasks", "google-calendar"],
       "last_validated_at": "2026-04-22T12:15:00Z"
     }
   ]
@@ -84,6 +84,19 @@ Written the first time either skill's onboarding runs. Read on every invocation 
 ```
 
 See `plugins/clickup/skills/clickup/references/config-schema.md` for the full identity schema documentation — this plugin reads the same file and follows the same field rules.
+
+### `teammates[].sources` vocabulary
+
+A single teammate can carry multiple tags (union across discovery passes during onboarding). Reserved values:
+
+- `"clickup-workspace"` — pulled from ClickUp workspace members via `mcp__clickup__clickup_get_workspace_members`
+- `"clickup-tasks"` — pulled from ClickUp task collaborators via `mcp__clickup__clickup_filter_tasks` (assignees on user's tasks — catches contractors not in the workspace roster)
+- `"google-calendar"` — pulled from Google Calendar event attendees in the last 14 days where the user participated AND total attendees ≤ 15 (filters out all-hands noise)
+- `"custom:<label>"` — user-supplied during onboarding (paste JSON, name an MCP tool, etc.). `<label>` is free-form.
+- `"manual"` — user typed name + email directly (during onboarding or lookup-miss upsert).
+- `"seed-from-contacts"` — legacy import from `~/.claude/skills/create-call/contacts.json` (one-shot).
+- `"clickup"` — **deprecated** alias for `"clickup-workspace"`. Still recognized on read.
+- `"create-call"` — **deprecated** alias for `"manual"`. Still recognized on read.
 
 ### What `/create-call` uses from identity.json
 

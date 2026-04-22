@@ -80,7 +80,7 @@ Written the first time either skill's onboarding runs. Read on every invocation 
         "clickup": "106686024"
       },
       "active": true,
-      "sources": ["clickup"],
+      "sources": ["clickup-workspace", "clickup-tasks", "google-calendar"],
       "last_validated_at": "2026-04-22T12:15:00Z"
     },
     {
@@ -90,7 +90,7 @@ Written the first time either skill's onboarding runs. Read on every invocation 
       "email": "m.ivanenko@speedandfunction.com",
       "external_ids": {"clickup": "..."},
       "active": true,
-      "sources": ["clickup"],
+      "sources": ["clickup-workspace", "clickup-tasks", "google-calendar"],
       "last_validated_at": "2026-04-22T12:15:00Z"
     }
   ]
@@ -106,7 +106,15 @@ Written the first time either skill's onboarding runs. Read on every invocation 
 - `teammates[].email` — canonical identity. Upserts are keyed on email.
 - `teammates[].external_ids` — same open map as user. Optional per teammate. `/clickup` populates `clickup`; `/create-call` populates `google` when it has it.
 - `teammates[].active` — boolean. `/clickup` flips to `false` when a teammate disappears from workspace members. `/create-call` still allows scheduling with inactive teammates but surfaces a banner.
-- `teammates[].sources` — array of origins: `"clickup"` (pulled from workspace members), `"create-call"` (added via lookup-miss), `"seed-from-contacts"` (imported from legacy user-level `contacts.json`), `"manual"` (user typed it in onboarding).
+- `teammates[].sources` — array of origins. A single teammate can carry multiple tags (union across discovery passes). Reserved values:
+  - `"clickup-workspace"` — pulled from `mcp__clickup__clickup_get_workspace_members` (current workspace members)
+  - `"clickup-tasks"` — pulled from `mcp__clickup__clickup_filter_tasks` assignees on the user's open tasks (catches contractors/external collaborators not in the workspace roster)
+  - `"google-calendar"` — pulled from Google Calendar event attendees in the last 14 days where the user participated AND attendees ≤ 15 (filters out all-hands noise)
+  - `"custom:<label>"` — user-supplied during onboarding (paste JSON, name an MCP tool, etc.). `<label>` is free-form.
+  - `"manual"` — user typed name + email directly (during onboarding or lookup-miss upsert).
+  - `"seed-from-contacts"` — legacy import from `~/.claude/skills/create-call/contacts.json` (one-shot, supported for backward-compat with the pre-plugin skill).
+  - `"clickup"` — **deprecated** alias for `"clickup-workspace"`. Still recognized on read; new writes should use `"clickup-workspace"`.
+  - `"create-call"` — **deprecated** alias for `"manual"` via create-call's zero-match path. Still recognized.
 - `teammates[].last_validated_at` — ISO8601. `/clickup` refreshes this on 7-day TTL. `null` for entries never validated against a source of truth.
 
 ### Dual-key teammate resolver (pure function)

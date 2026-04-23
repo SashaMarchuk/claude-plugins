@@ -8,11 +8,14 @@ In Claude Code:
 
 ```
 /plugin marketplace add SashaMarchuk/claude-plugins
-/plugin install clickup@SashaMarchuk/claude-plugins
-/plugin install create-call@SashaMarchuk/claude-plugins
-/plugin install ultra@SashaMarchuk/claude-plugins
-/plugin install ultra-analyzer@SashaMarchuk/claude-plugins
+/plugin install clickup@sashamarchuk-plugins
+/plugin install create-call@sashamarchuk-plugins
+/plugin install ultra@sashamarchuk-plugins
+/plugin install ultra-analyzer@sashamarchuk-plugins
+/reload-plugins
 ```
+
+> **Marketplace name vs. GitHub source**: `SashaMarchuk/claude-plugins` (GitHub `owner/repo`) is what you pass to `marketplace add` to fetch the manifest. `sashamarchuk-plugins` is the marketplace's declared name inside `marketplace.json` — that's the suffix you use on `plugin install`. Anthropic's plugin-manifest validator rejects marketplace names that start with `claude-` or `anthropic-` (reserved for official), hence the rename.
 
 `ultra-analyzer` declares `ultra` as a dependency, so it will pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the fourth line fetches it explicitly. `clickup` and `create-call` are independent but share `~/.claude/shared/identity.json` for user + teammate data — onboard either one first and the other inherits the roster.
 
@@ -27,11 +30,14 @@ In Claude Code:
 
 ### Install a single plugin
 
+Assuming `/plugin marketplace add SashaMarchuk/claude-plugins` was already run:
+
 ```
-/plugin install clickup@SashaMarchuk/claude-plugins
-/plugin install create-call@SashaMarchuk/claude-plugins
-/plugin install ultra@SashaMarchuk/claude-plugins
-/plugin install ultra-analyzer@SashaMarchuk/claude-plugins   # requires ultra
+/plugin install clickup@sashamarchuk-plugins
+/plugin install create-call@sashamarchuk-plugins
+/plugin install ultra@sashamarchuk-plugins
+/plugin install ultra-analyzer@sashamarchuk-plugins   # requires ultra
+/reload-plugins
 ```
 
 ## Your data is preserved across updates
@@ -58,7 +64,7 @@ Migration steps:
 
 1. Back up your legacy contacts (optional): `cp ~/.claude/skills/create-call/contacts.json /tmp/create-call-contacts.bak.json`
 2. Remove the legacy skill: `rm -rf ~/.claude/skills/create-call`
-3. Install the plugin: `/plugin install create-call@SashaMarchuk/claude-plugins`
+3. Install the plugin: `/plugin install create-call@sashamarchuk-plugins` (after `marketplace add SashaMarchuk/claude-plugins`)
 4. Run onboarding: `/create-call --onboard`
 5. The identity wizard offers (as a one-time prompt on first run if it detects a leftover legacy contacts file anywhere in common backup locations) to import your `contacts.json` entries as a thin seed into `~/.claude/shared/identity.json`.
 
@@ -67,6 +73,18 @@ The plugin will emit a loud banner on every invocation as long as `~/.claude/ski
 ### Platform support
 
 All plugins are tested on **macOS** and **Linux**. Windows is not currently supported — the shared-identity helper uses `fcntl.flock` for cross-process locking, which is POSIX-only. A Windows fallback (`msvcrt.locking`) would be a welcome PR.
+
+### Troubleshooting install
+
+**"Plugin `<name>` not found in any marketplace"** — the marketplace was added but you're using the wrong identifier after `@`. Inside `marketplace.json` the declared name is `sashamarchuk-plugins`. Use that:
+```
+/plugin install create-call@sashamarchuk-plugins
+```
+Not `@SashaMarchuk/claude-plugins` (that's the GitHub source, which `marketplace add` takes).
+
+**"Failed to parse marketplace file... impersonates an official Anthropic/Claude marketplace"** — you're on an older clone from before 2026-04-23. Pull latest: the marketplace `name` field has been renamed from `claude-plugins` to `sashamarchuk-plugins`. Re-add: `/plugin marketplace remove SashaMarchuk-claude-plugins` then `/plugin marketplace add SashaMarchuk/claude-plugins`.
+
+**After install, plugins don't show up** — run `/reload-plugins`. Claude Code caches the skill list until reload.
 
 ## Contributing / feedback
 

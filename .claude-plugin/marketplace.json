@@ -1,6 +1,6 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "claude-plugins",
+  "name": "sashamarchuk-plugins",
   "description": "Sasha Marchuk's Claude Code plugins — opinionated tooling for ticket management, automation, and everyday engineering workflows.",
   "owner": {
     "name": "Sasha Marchuk",

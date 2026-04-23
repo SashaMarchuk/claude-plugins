@@ -1,11 +1,18 @@
 ---
-name: create-call
-description: Google Calendar event management with Google Meet. Creates, updates, and cancels events via `npx @googleworkspace/cli`. Always attaches a configurable notes bot, checks for conflicts before creating, guards against past-time typos, and resolves attendee names against the shared `~/.claude/shared/identity.json` teammate roster (same file `/clickup` uses). Two-step onboarding writes `~/.claude/create-call/config.json` (calendar defaults + always-include list) and shares user + teammates with `/clickup`. Use when the user types `/create-call`, `/create-call --auto`, `/create-call --onboard`, `/create-call --status`, `/create-call --calendar`, or says "schedule a call", "set up a meeting", "book a call with X", "move the meeting to Y", "cancel the Z call", or references a Google Meet / Calendar event.
+name: gevent
+description: Google Calendar event management with Google Meet. Creates, updates, and cancels events via `npx @googleworkspace/cli`. Always attaches a configurable notes bot, checks for conflicts before creating, guards against past-time typos, and resolves attendee names against the shared `~/.claude/shared/identity.json` teammate roster (same file `/clickup` uses). Two-step onboarding writes `~/.claude/gevent/config.json` (calendar defaults + always-include list) and shares user + teammates with `/clickup`. Use when the user types `/gevent`, `/gevent:schedule`, `/gevent:schedule --auto`, `/gevent:onboard`, `/gevent:status`, `/gevent:calendar`, or says "schedule a call", "set up a meeting", "book a call with X", "move the meeting to Y", "cancel the Z call", or references a Google Meet / Calendar event.
 ---
 
-# /create-call
+# /gevent
 
 Universal skill for scheduling, updating, and cancelling Google Calendar events. Enforces consistent title conventions, always attaches configured notes-bot attendees, and pulls teammates from the same shared roster `/clickup` uses — so names you've already taught `/clickup` just work here too.
+
+Invocation forms (sub-commands map directly to the mode flags below):
+- `/gevent` or `/gevent:schedule <seed>` — interactive create / update / cancel
+- `/gevent:schedule --auto <seed>` — silent create with defaults
+- `/gevent:onboard [identity|calendar]` — run the wizard
+- `/gevent:status` — health-check both config files
+- `/gevent:calendar` — switch active default calendar
 
 ## Step 1: Parse $ARGUMENTS
 
@@ -15,7 +22,7 @@ Universal skill for scheduling, updating, and cancelling Google Calendar events.
 | `--auto` | Silent create with defaults | `references/modes.md#auto` |
 | `--onboard` | Full wizard (identity + calendar) | `references/modes.md#onboard` |
 | `--onboard identity` | Re-run shared identity wizard only | `references/modes.md#onboard-identity` |
-| `--onboard calendar` | Re-run create-call-local wizard only | `references/modes.md#onboard-calendar` |
+| `--onboard calendar` | Re-run gevent-local wizard only | `references/modes.md#onboard-calendar` |
 | `--status` | Config health check (both files) | `references/modes.md#status` |
 | `--calendar` | Switch active calendar (primary ↔ other) | `references/modes.md#calendar` |
 
@@ -23,17 +30,17 @@ Universal skill for scheduling, updating, and cancelling Google Calendar events.
 
 ## Step 2: Pre-flight (every invocation, in order)
 
-1. **Shadow check FIRST.** If `~/.claude/skills/create-call/` exists (legacy user-level skill), the user-level skill wins over the plugin by Claude Code precedence — meaning if you're reading THIS, the legacy is NOT installed (good) or the user has already disabled it. Still, if the directory exists, prepend a loud banner on every invocation until it's gone:
-   > `⚠ Legacy ~/.claude/skills/create-call/ still exists — this plugin won't take full effect until you remove it: rm -rf ~/.claude/skills/create-call`
+1. **Shadow check FIRST.** If `~/.claude/skills/create-call/` exists (legacy user-level skill — this plugin is the `create-call` successor, now renamed to `gevent`), the user-level skill wins over plugin-installed skills by Claude Code precedence. If the directory exists, prepend a loud banner on every invocation until it's gone:
+   > `⚠ Legacy user-level create-call skill detected at ~/.claude/skills/create-call/ — this plugin is now called gevent; remove the legacy with rm -rf ~/.claude/skills/create-call`
    
    Do not HALT — the plugin can still function (the user may have intentionally disabled model-invocation on the legacy skill). But the warning is non-dismissible until the directory is gone.
 
 2. **Read shared identity** from `~/.claude/shared/identity.json`. If missing or `onboarding_complete != true`:
-   - **In `--auto` mode**: HALT with "identity missing — run `/create-call --onboard` first" (don't drag the user into interactive onboarding mid-auto).
+   - **In `--auto` mode**: HALT with "identity missing — run `/gevent:onboard` first" (don't drag the user into interactive onboarding mid-auto).
    - In interactive mode: redirect to `--onboard identity` with one-line explanation; carry the original request as a call seed to resume after onboarding.
 
-3. **Read create-call config** from `~/.claude/create-call/config.json`. If missing or `onboarding_complete != true`:
-   - **In `--auto` mode**: HALT with "config missing — run `/create-call --onboard calendar` first".
+3. **Read gevent config** from `~/.claude/gevent/config.json`. If missing or `onboarding_complete != true`:
+   - **In `--auto` mode**: HALT with "config missing — run `/gevent:onboard calendar` first".
    - In interactive mode: redirect to `--onboard calendar`; carry the seed.
 
 4. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard. (Enforced in code by the helper — see `references/config-schema.md` → `SchemaVersionTooNew`.)
@@ -66,7 +73,7 @@ Full rules + worked examples in `references/event-format.md`. Enforce:
 
 **Timezone** — always use IANA names (`America/New_York`, `Europe/Kyiv`). Never hardcode `-04:00` / `-05:00` UTC offsets — Google handles DST.
 
-**Attendees** — always start with the `always_include` list from `~/.claude/create-call/config.json` (typically the notes bot). Append user-requested attendees. **Never add the organizer** (`user.email` from identity.json) to the attendee list — Google auto-includes the organizer.
+**Attendees** — always start with the `always_include` list from `~/.claude/gevent/config.json` (typically the notes bot). Append user-requested attendees. **Never add the organizer** (`user.email` from identity.json) to the attendee list — Google auto-includes the organizer.
 
 **Conference** — create Google Meet (`conferenceSolutionKey.type = "hangoutsMeet"`) unless user explicitly says "no video" or "phone only".
 
@@ -78,7 +85,7 @@ Full rules + worked examples in `references/event-format.md`. Enforce:
 
 ## Defaults (applied unless user overrides in preview)
 
-All values read from `~/.claude/create-call/config.json` → `defaults` + `always_include`.
+All values read from `~/.claude/gevent/config.json` → `defaults` + `always_include`.
 
 | Field | Default source | Override signal |
 |---|---|---|
@@ -111,7 +118,7 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/clic
 
 ### Calendar
 
-Default is `primary` (the user's own Google account). Override via `--calendar` switch or per-invocation "on the team calendar." Calendar list lives in `~/.claude/create-call/config.json` → `defaults.calendar` and the optional `calendars[]` registry.
+Default is `primary` (the user's own Google account). Override via `--calendar` switch or per-invocation "on the team calendar." Calendar list lives in `~/.claude/gevent/config.json` → `defaults.calendar` and the optional `calendars[]` registry.
 
 ### Conflict detection (before create)
 
@@ -136,7 +143,7 @@ Derive `requestId` = `<title-slug>-<unix-timestamp>`. On create failure mid-flig
 Refuse creation with a one-line reason when any of these hold:
 
 - `~/.claude/shared/identity.json` missing or incomplete (pre-flight step 2 HALT)
-- `~/.claude/create-call/config.json` missing or incomplete (pre-flight step 3 HALT)
+- `~/.claude/gevent/config.json` missing or incomplete (pre-flight step 3 HALT)
 - Google Workspace CLI not authenticated
 - Title missing or empty after extraction
 - Date or start time missing
@@ -172,7 +179,7 @@ After any edit, redraw the preview and repeat. Cancel abandons the draft.
 ## Files (user state, OUTSIDE the plugin dir — survives `/plugin update`)
 
 - `~/.claude/shared/identity.json` — **SHARED with `/clickup`**. User profile + teammate roster. Both skills read and append.
-- `~/.claude/create-call/config.json` — create-call-local. Calendar defaults, always-include attendees, behavior flags.
+- `~/.claude/gevent/config.json` — gevent-local. Calendar defaults, always-include attendees, behavior flags.
 
 All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file — see the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/clickup` fields this plugin doesn't know about).
 
@@ -197,4 +204,4 @@ Schemas + examples in `references/config-schema.md`.
 
 - `references/modes.md` — detailed flow for every mode
 - `references/event-format.md` — title, time parsing, attendee conventions with examples
-- `references/config-schema.md` — identity.json + create-call/config.json formats + atomic-write helper
+- `references/config-schema.md` — identity.json + gevent/config.json formats + atomic-write helper

@@ -1,9 +1,9 @@
 # Config schemas
 
-The create-call skill reads **two** JSON files on every invocation:
+The gevent skill reads **two** JSON files on every invocation:
 
 1. `~/.claude/shared/identity.json` — user profile + teammate roster, shared with `/clickup`.
-2. `~/.claude/create-call/config.json` — create-call-specific calendar defaults + always-include attendees.
+2. `~/.claude/gevent/config.json` — gevent-specific calendar defaults + always-include attendees.
 
 ## Non-negotiable file rules
 
@@ -11,7 +11,7 @@ These apply to BOTH JSON files, whenever the skill writes them:
 
 1. **Atomic write** — write to `<file>.tmp` in the same dir, `fsync`, then `os.replace(tmp, file)`. Never edit in place.
 2. **`fcntl.flock`** — take an exclusive lock on a sibling sentinel file (`<file>.lock`) for the entire read-modify-write. The kernel releases the lock when the process dies, so stale locks are impossible.
-3. **Preserve unknown keys** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/clickup` may have added fields to a teammate record that this version of `/create-call` does not know about; they must survive a rewrite.
+3. **Preserve unknown keys** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/clickup` may have added fields to a teammate record that this version of `/gevent` does not know about; they must survive a rewrite.
 4. **`schemaVersion: 1`** — integer at the top of every file. If a reader sees a higher version it does not understand, refuse to write (read-only fallback) rather than downgrade.
 5. **On corrupt JSON** — move the file to `<file>.corrupt-<epoch>` and start fresh from skeleton, with a banner to the user.
 
@@ -74,7 +74,7 @@ Every write path in this skill must go through `atomic_update` (or a Bash equiva
 
 ---
 
-## `~/.claude/shared/identity.json` (SHARED — /clickup + /create-call)
+## `~/.claude/shared/identity.json` (SHARED — /clickup + /gevent)
 
 Written the first time either skill's onboarding runs. Read on every invocation of either skill.
 
@@ -122,14 +122,14 @@ A single teammate can carry multiple tags (union across discovery passes during 
 - `"clickup"` — **deprecated** alias for `"clickup-workspace"`. Still recognized on read.
 - `"create-call"` — **deprecated** alias for `"manual"`. Still recognized on read.
 
-### What `/create-call` uses from identity.json
+### What `/gevent` uses from identity.json
 
 - `user.email` — the organizer (auto-excluded from attendee arrays).
 - `user.name` — shown in preview headers.
 - `teammates[].first_name`, `latin_alias`, `email`, `active`, `full_name` — the attendee resolver input.
 - `teammates[].external_ids.google` — if present, not strictly required (email is enough for Calendar invites). Future Google People API integration can populate this.
 
-### What `/create-call` writes to identity.json
+### What `/gevent` writes to identity.json
 
 - **Upserts a new teammate** when the resolver sees zero matches and the user provides a valid full email (see SKILL.md → Resolution rules for validation regex + IDNA mixed-script rejection). Record shape: `{first_name: <typed>, latin_alias: <typed or ASCII>, full_name: <typed if provided>, email: <confirmed>, external_ids: {}, active: true, sources: ["manual"], last_validated_at: null}`.
 - **Never touches `user.*`** — identity wizard owns that slice.
@@ -138,7 +138,7 @@ A single teammate can carry multiple tags (union across discovery passes during 
 
 ---
 
-## `~/.claude/create-call/config.json` (create-call-only)
+## `~/.claude/gevent/config.json` (gevent-only)
 
 Written by `--onboard calendar`. Read on every invocation.
 
@@ -195,7 +195,7 @@ Written by `--onboard calendar`. Read on every invocation.
 
 ### What `/clickup` should NOT do with this file
 
-`/clickup` must NOT read or write `~/.claude/create-call/config.json`. It's create-call-private. The boundary: shared state lives in `identity.json`; everything else is plugin-local.
+`/clickup` must NOT read or write `~/.claude/gevent/config.json`. It's gevent-private. The boundary: shared state lives in `identity.json`; everything else is plugin-local.
 
 ### Validation on load
 

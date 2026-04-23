@@ -38,14 +38,14 @@
       "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/ultra-analyzer"
     },
     {
-      "name": "create-call",
-      "description": "Universal /create-call skill for scheduling, updating, and cancelling Google Calendar events with Google Meet — always attaches a configurable notes bot, conflict detection, past-time guard, two-step onboarding (identity + calendar defaults). Reads teammates from ~/.claude/shared/identity.json, the same file the `clickup` plugin uses, so names resolve the same way in both.",
+      "name": "gevent",
+      "description": "Universal /gevent skill for scheduling, updating, and cancelling Google Calendar events with Google Meet — always attaches a configurable notes bot, conflict detection, past-time guard, two-step onboarding (identity + calendar defaults). Reads teammates from ~/.claude/shared/identity.json, the same file the `clickup` plugin uses, so names resolve the same way in both.",
       "author": {
         "name": "Sasha Marchuk"
       },
-      "source": "./plugins/create-call",
+      "source": "./plugins/gevent",
       "category": "productivity",
-      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/create-call"
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/gevent"
     }
   ]
 }

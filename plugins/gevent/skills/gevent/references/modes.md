@@ -1,4 +1,4 @@
-# /create-call modes
+# /gevent modes
 
 Detailed flow for each mode. Load only the section for the current invocation.
 
@@ -8,7 +8,7 @@ Detailed flow for each mode. Load only the section for the current invocation.
 - [auto](#auto) — silent create with defaults
 - [onboard](#onboard) — full wizard (identity → calendar)
 - [onboard-identity](#onboard-identity) — shared identity wizard only
-- [onboard-calendar](#onboard-calendar) — create-call-local wizard only
+- [onboard-calendar](#onboard-calendar) — gevent-local wizard only
 - [status](#status) — health check of both files
 - [calendar](#calendar) — switch active calendar
 
@@ -94,7 +94,7 @@ Silent create. Skip preview. No interactive prompts beyond the safety-net refusa
 Full wizard. Runs `onboard-identity` → `onboard-calendar` back-to-back. Skips whichever slice is already complete.
 
 1. If `~/.claude/shared/identity.json` missing or `onboarding_complete != true` → run [onboard-identity](#onboard-identity).
-2. If `~/.claude/create-call/config.json` missing or `onboarding_complete != true` → run [onboard-calendar](#onboard-calendar).
+2. If `~/.claude/gevent/config.json` missing or `onboarding_complete != true` → run [onboard-calendar](#onboard-calendar).
 3. If a call seed was carried in, resume [default](#default) with that seed.
 
 ---
@@ -103,7 +103,7 @@ Full wizard. Runs `onboard-identity` → `onboard-calendar` back-to-back. Skips 
 
 Writes `~/.claude/shared/identity.json` — **shared with `/clickup`**. Read-only for every subsequent skill that needs user + teammates.
 
-This flow is **identical in both `/clickup` and `/create-call`** — onboarding from either skill produces the same identity.json populated from the maximum set of sources available on this machine. Running it from either side is equivalent; the other skill just inherits the result.
+This flow is **identical in both `/clickup` and `/gevent`** — onboarding from either skill produces the same identity.json populated from the maximum set of sources available on this machine. Running it from either side is equivalent; the other skill just inherits the result.
 
 ### Flow
 
@@ -390,7 +390,7 @@ Only prompt for teammates where EITHER the proposal differs from the current `la
 - has a legacy alias (strong signal — user picked it once already), OR
 - `calendar_count >= 2` (met in at least two small meetings in 14d)
 
-Sort within the card by `(has_legacy desc, calendar_count desc, first_name asc)`. Hard cap at **20 lines** for fatigue control; remaining teammates keep `latin_alias = first_name`. Document this in a card footer: `"N more teammates defaulted to first_name — re-run /create-call --onboard identity to refine."`.
+Sort within the card by `(has_legacy desc, calendar_count desc, first_name asc)`. Hard cap at **20 lines** for fatigue control; remaining teammates keep `latin_alias = first_name`. Document this in a card footer: `"N more teammates defaulted to first_name — re-run /gevent --onboard identity to refine."`.
 
 ##### Collision pre-pass (MANDATORY — never present a card with built-in collisions)
 
@@ -455,7 +455,7 @@ If the user interrupts mid-flow, `onboarding_complete` stays `false` in identity
 
 ## onboard-calendar
 
-Writes `~/.claude/create-call/config.json`. Assumes `~/.claude/shared/identity.json` is complete; if not, redirects to [onboard-identity](#onboard-identity) first.
+Writes `~/.claude/gevent/config.json`. Assumes `~/.claude/shared/identity.json` is complete; if not, redirects to [onboard-identity](#onboard-identity) first.
 
 ### Flow
 
@@ -474,7 +474,7 @@ Writes `~/.claude/create-call/config.json`. Assumes `~/.claude/shared/identity.j
    - `check_conflicts`: `true`
    - `past_time_check`: `true`
 
-4. **Write config** to `~/.claude/create-call/config.json` via atomic helper + flock on `~/.claude/create-call/.config.json.lock`. Fields: `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`, `defaults`, `behavior`, `always_include[]`.
+4. **Write config** to `~/.claude/gevent/config.json` via atomic helper + flock on `~/.claude/gevent/.config.json.lock`. Fields: `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`, `defaults`, `behavior`, `always_include[]`.
 
 5. **If a call seed was carried in**, resume [default](#default) now.
 
@@ -487,15 +487,15 @@ Health check across BOTH files. Read-only.
 ### Output
 
 ```
-/create-call status
+/gevent status
 ─────────────────────────────────────
 identity.json    (~/.claude/shared/)
   User:          Sashko Marchuk <sasha@…>
   Teammates:     18
   Schema:        v1  ✓
-  Shared with:   /clickup, /create-call
+  Shared with:   /clickup, /gevent
 
-create-call/config.json
+gevent/config.json
   Calendar:      primary
   Timezone:      America/New_York
   Duration:      30 min default
@@ -512,11 +512,11 @@ Never mutates state. Safe to run any time.
 
 ## calendar
 
-Switch the active default calendar. Only mutates `~/.claude/create-call/config.json` (`defaults.calendar`).
+Switch the active default calendar. Only mutates `~/.claude/gevent/config.json` (`defaults.calendar`).
 
 ### Flow
 
 1. `npx @googleworkspace/cli calendar calendarList list --params '{}' 2>/dev/null` to fetch all calendars the current auth has access to.
 2. `AskUserQuestion` (single-select) with the list.
-3. On pick, atomic-write `defaults.calendar` in `~/.claude/create-call/config.json`.
+3. On pick, atomic-write `defaults.calendar` in `~/.claude/gevent/config.json`.
 4. Confirm: "Active calendar is now `<name>`. Future events default here unless overridden."

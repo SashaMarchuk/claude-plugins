@@ -82,7 +82,7 @@ Omit the line entirely if the beneficiary role is not extractable from source. R
 
 ### Assignee (dual-key resolver, teammates live in shared identity.json)
 
-The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/create-call` reads the same file — changes here are seen there.
+The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/gevent` reads the same file — changes here are seen there.
 
 **Homoglyph-collision gate (runs before every silent single-match)**: compute the UTS #39 skeleton of the typed input (`unicodedata.normalize("NFKC", s).casefold()` + confusables-map transform). If the skeleton matches an EXISTING teammate AND raw byte-strings differ (i.e. visually identical but distinct records), FORCE disambiguation — never silent-match. Legitimate pure-script names (all-Cyrillic, all-Latin) never trigger this (no skeleton collision with anyone else). Only lookalike collisions trigger it. This precedence is load-bearing and overrides any "silent-allow" rule elsewhere.
 
@@ -157,12 +157,12 @@ After any edit, redraw the preview and repeat. Cancel deletes the draft snapshot
 
 ## Files (user state, OUTSIDE the plugin dir — survives `/plugin update`)
 
-- `~/.claude/shared/identity.json` — **SHARED with `/create-call`**. User profile + teammate roster (first_name, latin_alias, full_name, email, external_ids, active, sources, last_validated_at). Both skills read and append.
+- `~/.claude/shared/identity.json` — **SHARED with `/gevent`**. User profile + teammate roster (first_name, latin_alias, full_name, email, external_ids, active, sources, last_validated_at). Both skills read and append.
 - `~/.claude/clickup/config.json` — clickup-local. Workspace, lists + aliases, defaults, behavior flags. No `user` or `teammates` here.
 - `~/.claude/clickup/memory.md` — learned patterns + corrections (markdown, human-editable).
 - `~/.claude/clickup/drafts/` — per-invocation idempotency snapshots.
 
-All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file — see the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/create-call` fields this plugin doesn't know about).
+All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file — see the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/gevent` fields this plugin doesn't know about).
 
 Schemas + examples in `references/config-schema.md`.
 

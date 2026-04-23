@@ -105,9 +105,9 @@ Full wizard. Runs `onboard-identity` → `onboard-workspace` back-to-back. Skips
 
 ## onboard-identity
 
-Writes `~/.claude/shared/identity.json` — **shared with `/create-call`**. Read-only for every subsequent skill that needs user + teammates.
+Writes `~/.claude/shared/identity.json` — **shared with `/gevent`**. Read-only for every subsequent skill that needs user + teammates.
 
-This flow is **identical in both `/clickup` and `/create-call`** — onboarding from either skill produces the same identity.json populated from the maximum set of sources available on this machine. Running it from either side is equivalent; the other skill just inherits the result.
+This flow is **identical in both `/clickup` and `/gevent`** — onboarding from either skill produces the same identity.json populated from the maximum set of sources available on this machine. Running it from either side is equivalent; the other skill just inherits the result.
 
 ### Flow
 
@@ -479,7 +479,7 @@ Writes `~/.claude/clickup/config.json` (clickup-local). Assumes `~/.claude/share
 
 4. **Write config** to `~/.claude/clickup/config.json` via atomic helper + flock on `~/.claude/clickup/.config.json.lock`. Fields: `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`, `workspace`, `lists`, `defaults`, `behavior: {}`.
 
-5. **If switching workspaces** (the user had a different `workspace` before): any teammates in `identity.json` whose `external_ids.clickup` is NOT in the new workspace's member list get `active: false`. Surface this as a banner. Do not delete — other skills (like `/create-call`) still use the email + name.
+5. **If switching workspaces** (the user had a different `workspace` before): any teammates in `identity.json` whose `external_ids.clickup` is NOT in the new workspace's member list get `active: false`. Surface this as a banner. Do not delete — other skills (like `/gevent`) still use the email + name.
 
 6. **If a ticket seed was carried in**, resume [default](#default) now.
 
@@ -534,7 +534,7 @@ identity.json    (~/.claude/shared/)
   User:          Sashko Marchuk <sasha@…>
   Teammates:     18  (3 validated >7 days ago — auto-refresh pending)
   Schema:        v1  ✓
-  Shared with:   /clickup, /create-call
+  Shared with:   /clickup, /gevent
 
 clickup/config.json
   Workspace:     Speed&Functions (id: 90151491867)
@@ -562,5 +562,5 @@ Switch the active ClickUp workspace. Only mutates `~/.claude/clickup/config.json
 3. On pick, atomically update `~/.claude/clickup/config.json` with new `workspace.id` + `workspace.name`. Re-fetch lists for the new workspace; replace `lists[]`.
 4. **Fetch new workspace members**. For each teammate in `~/.claude/shared/identity.json`:
    - If their `external_ids.clickup` IS in the new workspace → bump `last_validated_at`, ensure `active: true`.
-   - If their `external_ids.clickup` is NOT in the new workspace → set `active: false`, keep all other fields (email, name, `/create-call` still uses them).
+   - If their `external_ids.clickup` is NOT in the new workspace → set `active: false`, keep all other fields (email, name, `/gevent` still uses them).
 5. Prompt: "Run `/clickup --onboard workspace` if you want to refresh lists + add aliases for this workspace."

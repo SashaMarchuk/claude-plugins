@@ -2,7 +2,7 @@
 
 The clickup skill reads **two** JSON files on every invocation:
 
-1. `~/.claude/shared/identity.json` — user profile + teammate roster, shared with `/create-call`.
+1. `~/.claude/shared/identity.json` — user profile + teammate roster, shared with `/gevent`.
 2. `~/.claude/clickup/config.json` — clickup-specific state (workspace, lists, preferences).
 
 Plus a human-editable `~/.claude/clickup/memory.md` (learned rules) and a `drafts/` subdir for idempotency snapshots.
@@ -13,7 +13,7 @@ These apply to BOTH JSON files, whenever the skill writes them:
 
 1. **Atomic write** — write to `<file>.tmp` in the same dir, `fsync`, then `os.replace(tmp, file)`. Never edit in place.
 2. **`fcntl.flock`** — take an exclusive lock on a sibling sentinel file (`<file>.lock`) for the entire read-modify-write. The kernel releases the lock when the process dies, so stale locks are impossible.
-3. **Preserve unknown keys** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/create-call` may have added fields to a teammate record that this version of `/clickup` does not know about; they must survive a rewrite.
+3. **Preserve unknown keys** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/gevent` may have added fields to a teammate record that this version of `/clickup` does not know about; they must survive a rewrite.
 4. **`schemaVersion: 1`** — integer at the top of every file. If a reader sees a higher version it does not understand, refuse to write (read-only fallback) rather than downgrade.
 5. **On corrupt JSON** — move the file to `<file>.corrupt-<epoch>` and start fresh from skeleton, with a banner to the user.
 
@@ -76,7 +76,7 @@ Every write path in this skill must go through `atomic_update` (or a Bash equiva
 
 ---
 
-## `~/.claude/shared/identity.json` (SHARED — /clickup + /create-call)
+## `~/.claude/shared/identity.json` (SHARED — /clickup + /gevent)
 
 Written the first time either skill's onboarding runs. Read on every invocation of either skill.
 
@@ -126,8 +126,8 @@ Written the first time either skill's onboarding runs. Read on every invocation 
 - `teammates[].first_name` — the teammate's first name as they use it (Cyrillic ok). Used by the NFC-fallback branch of the resolver.
 - `teammates[].latin_alias` — ASCII-only short form. Required for every teammate (even if Latin-scripted name = alias). Primary key for the resolver.
 - `teammates[].email` — canonical identity. Upserts are keyed on email.
-- `teammates[].external_ids` — same open map as user. Optional per teammate. `/clickup` populates `clickup`; `/create-call` populates `google` when it has it.
-- `teammates[].active` — boolean. `/clickup` flips to `false` when a teammate disappears from workspace members. `/create-call` still allows scheduling with inactive teammates but surfaces a banner.
+- `teammates[].external_ids` — same open map as user. Optional per teammate. `/clickup` populates `clickup`; `/gevent` populates `google` when it has it.
+- `teammates[].active` — boolean. `/clickup` flips to `false` when a teammate disappears from workspace members. `/gevent` still allows scheduling with inactive teammates but surfaces a banner.
 - `teammates[].sources` — array of origins. A single teammate can carry multiple tags (union across discovery passes). Reserved values:
   - `"clickup-workspace"` — pulled from `mcp__clickup__clickup_get_workspace_members` (current workspace members)
   - `"clickup-tasks"` — pulled from `mcp__clickup__clickup_filter_tasks` assignees on the user's open tasks (catches contractors/external collaborators not in the workspace roster)

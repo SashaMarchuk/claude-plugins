@@ -43,6 +43,11 @@ Invocation forms (sub-commands map directly to the mode flags below):
    - **In `--auto` mode**: HALT with "config missing — run `/gevent:onboard calendar` first".
    - In interactive mode: redirect to `--onboard calendar`; carry the seed.
 
+3a. **Notes-bot preference gate (MANDATORY).** After the config loads, check `behavior.notes_bot_decided`. If the field is missing or `!= true`, the onboarding is incomplete regardless of every other flag — the user has not yet made an explicit yes/no decision on the always-include notes-bot.
+   - **In `--auto` mode**: HALT with "notes-bot preference missing — run `/gevent:onboard calendar` first".
+   - In interactive mode: redirect to `--onboard calendar` (carry the seed). The wizard's notes-bot step (see `references/modes.md#onboard-calendar`) loops until the user picks one of three options and sets `behavior.notes_bot_decided: true`.
+   - `always_include: []` is a valid state ONLY when `behavior.notes_bot_decided == true` (user explicitly chose "no bot"). An empty array without the flag is NOT valid and triggers this gate.
+
 4. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard. (Enforced in code by the helper — see `references/config-schema.md` → `SchemaVersionTooNew`.)
 
 5. **Verify Google Workspace CLI auth.** Capture BOTH stdout and stderr so real errors can be classified:
@@ -94,7 +99,7 @@ All values read from `~/.claude/gevent/config.json` → `defaults` + `always_inc
 | Duration | `defaults.duration_minutes` (`30`) | "15 mins", "1 hour" |
 | Send updates | `defaults.send_updates` (`all`) | "silent invite" → `none` |
 | Conference | `defaults.conference_type` (`hangoutsMeet`) | "no video" → skip |
-| Always-include | `always_include[]` | "just me and Misha" → omit always-include |
+| Always-include | `always_include[]` (empty array = user opted out via onboarding; `behavior.notes_bot_decided` gates pre-flight) | "just me and Misha" → omit always-include |
 
 ---
 
@@ -144,6 +149,7 @@ Refuse creation with a one-line reason when any of these hold:
 
 - `~/.claude/shared/identity.json` missing or incomplete (pre-flight step 2 HALT)
 - `~/.claude/gevent/config.json` missing or incomplete (pre-flight step 3 HALT)
+- Notes-bot preference not yet decided (`behavior.notes_bot_decided != true` — pre-flight step 3a HALT)
 - Google Workspace CLI not authenticated
 - Title missing or empty after extraction
 - Date or start time missing

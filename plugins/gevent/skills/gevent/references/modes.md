@@ -463,20 +463,36 @@ Writes `~/.claude/gevent/config.json`. Assumes `~/.claude/shared/identity.json` 
    - `npx @googleworkspace/cli calendar calendarList list --params '{}' 2>/dev/null` — list calendars the user can access.
    - `npx @googleworkspace/cli calendar settings get --params '{"setting":"timezone"}' 2>/dev/null` — resolve the primary calendar's timezone.
 
-2. **Confirm defaults** (single `AskUserQuestion` round, consolidated):
+2. **Notes-bot decision (MANDATORY, explicit, no skip).** This is a dedicated `AskUserQuestion` round that runs BEFORE the rest of the calendar defaults. The wizard loops on this question until the user picks one of the three options — there is no "skip" and no default-and-proceed. The answer controls `always_include[]` AND sets `behavior.notes_bot_decided: true`.
+
+   ```
+   Auto-include a notes-bot on every event you schedule?
+   [Yes — use notes.bot@speedandfunction.com (recommended)]
+   [Yes — different email (e.g., your own recorder bot)]
+   [No — I don't use a notes bot]
+   ```
+
+   Decision storage:
+   - **Option 1** ("Yes — use default") → `always_include: [{email: "notes.bot@speedandfunction.com", tag: "notes_bot", optional: true}]`, `behavior.notes_bot_decided: true`.
+   - **Option 2** ("Yes — different email") → follow-up `AskUserQuestion` asking for the email. Validate against the same regex SKILL.md uses (`^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$`) AND reject any domain with non-ASCII characters. On failure, re-prompt with the reason. On valid email → `always_include: [{email: "<entered>", tag: "notes_bot", optional: true}]`, `behavior.notes_bot_decided: true`.
+   - **Option 3** ("No — I don't use a notes bot") → `always_include: []`, `behavior.notes_bot_decided: true`. This is a valid, explicit opt-out — the empty array + flag together mean "user reviewed and declined."
+
+   If the user dismisses the card or the response is unparseable, re-ask until one of the three options is chosen. This step must complete before step 3.
+
+3. **Confirm remaining defaults** (single `AskUserQuestion` round, consolidated):
    - Default calendar: show auto-detected primary, allow override.
    - Default timezone: show auto-detected, allow override (IANA names).
    - Default duration: `30` minutes (prefill, allow override).
-   - Always-include notes-bot email: prefill `notes.bot@speedandfunction.com` (allow override OR "skip, I don't use a notes bot").
 
-3. **Confirm behavior flags** (prefilled, allow override):
+4. **Confirm behavior flags** (prefilled, allow override):
    - `confirm_before_create`: `true`
    - `check_conflicts`: `true`
    - `past_time_check`: `true`
+   - `notes_bot_decided`: `true` (already set by step 2 — never editable here; surfaced for transparency only).
 
-4. **Write config** to `~/.claude/gevent/config.json` via atomic helper + flock on `~/.claude/gevent/.config.json.lock`. Fields: `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`, `defaults`, `behavior`, `always_include[]`.
+5. **Write config** to `~/.claude/gevent/config.json` via atomic helper + flock on `~/.claude/gevent/.config.json.lock`. Fields: `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`, `defaults`, `behavior` (including `notes_bot_decided: true`), `always_include[]`.
 
-5. **If a call seed was carried in**, resume [default](#default) now.
+6. **If a call seed was carried in**, resume [default](#default) now.
 
 ---
 

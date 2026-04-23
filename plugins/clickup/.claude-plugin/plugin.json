@@ -1,7 +1,7 @@
 {
   "name": "clickup",
-  "version": "1.2.0",
-  "description": "Universal /clickup skill for creating and managing ClickUp tickets with enforced quality standards — Connextra user stories, evidence-only descriptions, fuzzy list aliases, first-name teammate resolution, duplicate detection, idempotent create, and a two-step onboarding wizard.",
+  "version": "1.3.0",
+  "description": "Universal /clickup skill for creating and managing ClickUp tickets with enforced quality standards \u2014 Connextra user stories, evidence-only descriptions, fuzzy list aliases, first-name teammate resolution, duplicate detection, idempotent create, and a two-step onboarding wizard.",
   "author": {
     "name": "Sasha Marchuk",
     "url": "https://github.com/SashaMarchuk"

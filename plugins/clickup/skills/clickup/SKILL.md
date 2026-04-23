@@ -1,6 +1,7 @@
 ---
 name: clickup
 description: ClickUp ticket creation, modification, and workspace management with enforced quality standards. Creates consistent tickets using Connextra user stories, evidence-only descriptions, fuzzy list aliases, first-name teammate resolution, bug-keyword type inference, priority-keyword inference, duplicate detection, idempotent create, and preview-and-edit confirmation. Includes a two-step onboarding wizard, persistent user config + memory files, and a stale-config reminder. Use when the user types /clickup, /clickup --auto, /clickup --onboard, /clickup --memory, /clickup --status, /clickup --workspace, or says "create a ticket", "add to backlog", "put in ClickUp", "make a task", "file a bug in ClickUp", "create a ClickUp task", or references a ClickUp list, task, or workflow.
+user-invocable: false
 ---
 
 # /clickup

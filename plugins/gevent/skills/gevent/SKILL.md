@@ -1,6 +1,7 @@
 ---
 name: gevent
 description: Google Calendar event management with Google Meet. Creates, updates, and cancels events via `npx @googleworkspace/cli`. Always attaches a configurable notes bot, checks for conflicts before creating, guards against past-time typos, and resolves attendee names against the shared `~/.claude/shared/identity.json` teammate roster (same file `/clickup` uses). Two-step onboarding writes `~/.claude/gevent/config.json` (calendar defaults + always-include list) and shares user + teammates with `/clickup`. Use when the user types `/gevent`, `/gevent:schedule`, `/gevent:schedule --auto`, `/gevent:onboard`, `/gevent:status`, `/gevent:calendar`, or says "schedule a call", "set up a meeting", "book a call with X", "move the meeting to Y", "cancel the Z call", or references a Google Meet / Calendar event.
+user-invocable: false
 ---
 
 # /gevent

@@ -7,6 +7,7 @@ description: |
   Supports tiers (--small/--medium/--large/--xl), multi-terminal coordination,
   and wrapping other skills.
 disable-model-invocation: false
+user-invocable: false
 allowed-tools:
   - Read
   - Write

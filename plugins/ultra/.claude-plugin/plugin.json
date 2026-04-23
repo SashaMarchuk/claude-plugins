@@ -1,6 +1,6 @@
 {
   "name": "ultra",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Use when maximum rigor is needed: research, implementation, validation, creation, or any complex task requiring independent verification. Supports tiers (--small/--medium/--large/--xl), multi-terminal coordination, and wrapping other skills.",
   "author": {
     "name": "Sasha Marchuk",

@@ -1,6 +1,6 @@
 {
   "name": "create-call",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Universal /create-call skill for scheduling, updating, and cancelling Google Calendar events with Google Meet. Reads teammates from ~/.claude/shared/identity.json (same file /clickup uses). Two-step onboarding (identity + calendar defaults), always-include attendees (e.g. notes bot), conflict detection, past-time guard, and atomic config writes.",
   "author": {
     "name": "Sasha Marchuk",

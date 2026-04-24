@@ -23,6 +23,14 @@ Universal skill for creating and managing ClickUp tickets. Enforces consistent t
 
 **Precedence on conflict:** `--onboard` > `--status` > `--memory` > `--workspace` > `--auto` > default. Flag arguments are space-separated (`--onboard identity`, not `--onboard=identity`). Positional args after flags are the ticket-seed text.
 
+**Seed-text 4 KB cap (pre-extract truncation).** Any seed text — pasted transcript, previous-turn context carried forward, positional args — longer than **4096 bytes** (UTF-8 encoded) is truncated BEFORE the extract step. Truncation point: the nearest **sentence boundary** (period, question mark, exclamation mark, or newline) at or before the 4096-byte mark. If no sentence boundary exists in the first 4096 bytes, fall back to the nearest whitespace; if none, hard-cut at 4096 bytes. After truncation, show the user an explicit banner:
+
+```
+[SEED-TRUNCATED: <N> bytes dropped at sentence boundary]
+```
+
+Where `<N>` is the byte count of the dropped tail. The banner is load-bearing — the operator must know that downstream extraction saw only the truncated prefix, not the full paste. Rationale: the evidence-only rule is the only fence against attacker-controlled bulk paste; a 4 KB cap bounds the blast radius of a pasted tracking pixel / prompt injection / `@mention` flood without degrading legitimate ticket-creation flows (most seed texts are well under 4 KB). Closes PLG-clickup-F14.
+
 ## Step 2: Pre-flight (every invocation, in order)
 
 1. **Read shared identity** from `~/.claude/shared/identity.json`. If missing or `onboarding_complete != true`:

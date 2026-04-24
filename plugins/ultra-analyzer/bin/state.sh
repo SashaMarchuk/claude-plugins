@@ -101,6 +101,21 @@ case "$cmd" in
     state_file="$run_path/state.json"
     tmp=$(mktemp)
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    # Enforce .current_step enum. The enum mirrors the pipeline state
+    # machine documented in skills/run/SKILL.md. Partial mitigation for
+    # C-1 (gate bypass); the full gate-consult lives below.
+    if [[ "$json_path" == ".current_step" ]]; then
+      # Strip surrounding quotes if value is JSON-encoded (e.g. '"discover"').
+      step_val="${value#\"}"; step_val="${step_val%\"}"
+      case "$step_val" in
+        init|pre-discover-gate|discover|analyze|pre-synthesize-gate|synthesize|done|failed) ;;
+        *)
+          echo "ERROR: .current_step must be one of {init, pre-discover-gate, discover, analyze, pre-synthesize-gate, synthesize, done, failed} (got: $step_val)" >&2
+          rm -f "$tmp"
+          exit 7
+          ;;
+      esac
+    fi
     # Treat value as JSON if parseable, else as string
     if echo "$value" | jq empty 2>/dev/null; then
       jq "$json_path = $value | .updated_at = \"$now\"" "$state_file" > "$tmp"

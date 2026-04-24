@@ -25,9 +25,18 @@ Only when BOTH `--task=<name>` AND `--terminal=<N>` flags are present. Without t
 
 ~/.claude/skills/ultra/
   global-lessons.md       # Self-improvement log (GLOBAL, cross-project, cross-task).
-                          # Canonical path — this is the ONLY lessons path. Do NOT write
-                          # to `.planning/ultra/lessons.md` or any per-project variant.
-                          # See SKILL.md "Self-Improvement" for the shard-write protocol.
+                          # Legacy aggregate file — read by Step 5 lessons ingest, but
+                          # NOT written to anymore (would race under parallel /ultra
+                          # finishes). New entries go to the shard dir below.
+  global-lessons/         # Per-run timestamped shards (concurrent-write safe).
+                          # One file per /ultra finish:
+                          #   <YYYY-MM-DD-HHMMSS>-<task-slug>.md
+                          # Two parallel /ultra finishes produce TWO distinct shards —
+                          # both entries preserved. No flock needed (unique filenames).
+                          # Canonical path — this is the ONLY lessons write target.
+                          # Do NOT write to `.planning/ultra/lessons.md` or any
+                          # per-project variant. See SKILL.md "Self-Improvement" for
+                          # the shard-write protocol + symlink defense.
 ```
 
 ## Symlink-safe Write Protocol (CRIT-3 — MANDATORY for every file in the state tree)

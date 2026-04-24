@@ -55,11 +55,15 @@ Invocation forms (sub-commands map directly to the mode flags below):
    ```
    out=$(npx @googleworkspace/cli calendar calendars get --params '{"calendarId":"primary"}' 2>/tmp/gws_stderr.$$); rc=$?; err=$(cat /tmp/gws_stderr.$$); rm -f /tmp/gws_stderr.$$
    ```
-   Classify `rc` / `err`:
-   - `rc == 0` and `out` contains a calendar JSON → auth OK.
-   - `err` matches `/401|403|invalid.*credential|token.*expired|login required/i` → HALT: "Run `! npx @googleworkspace/cli auth login --services calendar,people` and retry."
-   - `err` matches `/503|rate limit|timeout|ENETUNREACH|ECONNREFUSED/i` → HALT: "Google API transient error — retry in 30s. Raw: `${err}`."
-   - Anything else → HALT with `${err}` verbatim so the user can see the real failure (never silently swallow stderr).
+   Classify `rc` / `out` / `err` in this order (first match wins). **The "auth OK" branch is a schema check, NOT a prose heuristic** — JSON-shaped error bodies at HTTP 200 MUST fall through to re-auth:
+
+   1. **Auth OK (schema check, not substring match).** `rc == 0` AND `out` parses as JSON AND the parsed object has key `id` AND does NOT have key `error`. Only then is auth considered valid. A response like `{"error":{"code":401,"message":"Unauthorized"}}` returned at HTTP 200 (observed on some proxy wrappers) has no `id` and HAS `error` — it fails this check and falls through to the re-auth branch below.
+   2. **Re-auth required (broadened regex — matches stdout OR stderr, since some CLIs write errors to stdout).** If `out` parses as JSON AND has key `error` (covers HTTP-200-plus-error-body), OR `(err + out)` matches `/\b(401|403|407|5\d\d)\b|invalid.*credential|token.*expired|login required|unauthorized|forbidden|proxy authentication|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|certificate|self.signed|SSL|TLS|Fehler|ошибка/i` → HALT (do NOT retry, do NOT silent-swallow): "Google API auth or network failure detected. Run `! npx @googleworkspace/cli auth login --services calendar,people` and retry. Raw: `${err || out}`." HTTP 407 (proxy-auth), ENOTFOUND (DNS), ECONNREFUSED (transparent proxy), and localized error strings all land here.
+   3. **Setup problem (CLI missing / npm not installed).** `(err + out)` matches `/command not found|npm ERR!|MODULE_NOT_FOUND|Cannot find module|E404|npx: not found/i` → HALT: "Google Workspace CLI not installed. Run `! npm i -g @googleworkspace/cli` (or `npx @googleworkspace/cli --help` to verify)."
+   4. **Transient (explicit retry guidance, not silent).** `(err + out)` matches `/\brate limit\b|quotaExceeded|userRateLimitExceeded|backendError|temporarily unavailable/i` → HALT: "Google API transient error — retry in 30s. Raw: `${err || out}`."
+   5. **Fallthrough — NEVER silent-pass.** Any other failure shape (empty stderr + non-JSON stdout, unclassified error) → HALT with `${err || out}` verbatim AND a re-auth pointer: "Unclassified CLI failure. If this persists, re-auth with `! npx @googleworkspace/cli auth login --services calendar,people`."
+
+   The ordering is load-bearing: schema check runs BEFORE substring checks so an HTTP-200-plus-error-body never silent-passes as "auth OK." The regex match is against the CONCATENATION of stdout+stderr because different CLI versions and proxy wrappers split error text differently; matching only stderr misses stderr-on-stdout variants.
 
 6. **Pending-seed resumption.** If a seed was carried from step 2 or step 3 (identity or calendar wizard just completed), resume default flow with that seed now.
 

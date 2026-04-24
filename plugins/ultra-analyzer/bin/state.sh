@@ -17,6 +17,61 @@ set -euo pipefail
 # Require jq
 command -v jq >/dev/null || { echo "ERROR: jq not installed" >&2; exit 1; }
 
+# Convert a caller-provided jq-style dot-path into a JSON path array suitable
+# for `getpath($p) / setpath($p; ...)`. Only accepts the limited grammar the
+# analyzer actually uses:
+#   .a.b.c                -> ["a","b","c"]
+#   .a."quoted-seg".b     -> ["a","quoted-seg","b"]
+# Anything else (pipes, commas, parens, whitespace, `[`, `]`, `=`, `;`) is a
+# jq-injection attempt and is rejected. Closes H-2 systemically — all writes
+# now go through jq --argjson with a validated path array, so caller values
+# can never become jq program fragments. Emits the JSON array on stdout,
+# exits 9 on rejection.
+_path_to_json_array() {
+  local raw="$1"
+  # Must begin with "." and contain no injection-friendly metacharacters.
+  case "$raw" in
+    .*) ;;
+    *)  echo "ERROR: json-path must start with '.' (got: $raw)" >&2; return 9 ;;
+  esac
+  if printf '%s' "$raw" | LC_ALL=C grep -q '[][|,()[:space:];=]'; then
+    echo "ERROR: json-path rejected — contains disallowed character (got: $raw)" >&2
+    return 9
+  fi
+  local rest="${raw#.}"
+  local -a segs=()
+  while [[ -n "$rest" ]]; do
+    if [[ "$rest" == \"* ]]; then
+      # Quoted segment: ."seg" — closing quote must precede the next . or EOS.
+      rest="${rest#\"}"
+      local seg="${rest%%\"*}"
+      if [[ "$seg" == "$rest" ]]; then
+        echo "ERROR: json-path has unterminated quoted segment (got: $raw)" >&2
+        return 9
+      fi
+      segs+=("$seg")
+      rest="${rest#$seg\"}"
+    else
+      # Bare segment: up to next "." or EOS. Allowed chars: [A-Za-z0-9_-].
+      local seg="${rest%%.*}"
+      if ! printf '%s' "$seg" | LC_ALL=C grep -qE '^[A-Za-z0-9_-]+$'; then
+        echo "ERROR: json-path bare segment must match [A-Za-z0-9_-]+ (got: $seg in $raw)" >&2
+        return 9
+      fi
+      segs+=("$seg")
+      rest="${rest#$seg}"
+    fi
+    # Consume the separating "." (if present).
+    case "$rest" in
+      .*) rest="${rest#.}" ;;
+      "") ;;
+      *)  echo "ERROR: json-path parse error near '$rest' (got: $raw)" >&2; return 9 ;;
+    esac
+  done
+  # Emit as JSON array.
+  printf '%s\n' "${segs[@]}" | jq -R . | jq -s .
+}
+
 cmd="${1:-}"
 shift || { echo "Usage: state.sh {init|get|set|inc|dec|checkpoint} ..." >&2; exit 1; }
 
@@ -91,7 +146,16 @@ case "$cmd" in
   get)
     run_path="${1:?run-path required}"
     json_path="${2:?json-path required}"
-    jq -r "$json_path" "$run_path/state.json"
+    path_arr=$(_path_to_json_array "$json_path") || exit 9
+    # Match legacy `jq -r '.path'` output: string -> unquoted, null -> "null",
+    # scalar (number/bool) -> its textual form, object/array -> compact JSON.
+    jq -r --argjson p "$path_arr" '
+      getpath($p) as $v
+      | if   $v == null   then "null"
+        elif ($v|type) == "string" then $v
+        elif ($v|type) == "number" or ($v|type) == "boolean" then ($v|tostring)
+        else ($v|tojson) end
+    ' "$run_path/state.json"
     ;;
 
   set)
@@ -142,11 +206,17 @@ case "$cmd" in
           ;;
       esac
     fi
-    # Treat value as JSON if parseable, else as string
+    # Parameterize jq program via --argjson for path and value.
+    # Caller-supplied text is never interpolated into the jq program string,
+    # so jq-program injection like `.x = 1 | .status = "passed"` is impossible.
+    # Closes H-2.
+    path_arr=$(_path_to_json_array "$json_path") || exit 9
     if echo "$value" | jq empty 2>/dev/null; then
-      jq "$json_path = $value | .updated_at = \"$now\"" "$state_file" > "$tmp"
+      jq --argjson p "$path_arr" --argjson v "$value" --arg now "$now" \
+         'setpath($p; $v) | .updated_at = $now' "$state_file" > "$tmp"
     else
-      jq --arg v "$value" "$json_path = \$v | .updated_at = \"$now\"" "$state_file" > "$tmp"
+      jq --argjson p "$path_arr" --arg v "$value" --arg now "$now" \
+         'setpath($p; $v) | .updated_at = $now' "$state_file" > "$tmp"
     fi
     mv "$tmp" "$state_file"
     ;;
@@ -158,6 +228,8 @@ case "$cmd" in
     lockdir="$state_file.lock.d"
     tmp=$(mktemp)
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    # Validate+serialize path before acquiring the lock so we fail fast.
+    path_arr=$(_path_to_json_array "$counter") || { rm -f "$tmp"; exit 9; }
     # Portable mkdir-based lock (works on macOS without flock).
     # Atomic: mkdir fails if dir exists. Spin with cap to avoid deadlock.
     waited=0
@@ -172,7 +244,10 @@ case "$cmd" in
     done
     # Ensure lock is released even on error.
     trap 'rmdir "$lockdir" 2>/dev/null || true; rm -f "$tmp"' EXIT
-    jq "$counter += 1 | .updated_at = \"$now\"" "$state_file" > "$tmp"
+    # Parameterized: no caller text enters the jq program string. Closes H-2.
+    jq --argjson p "$path_arr" --arg now "$now" \
+       'setpath($p; (getpath($p) // 0) + 1) | .updated_at = $now' \
+       "$state_file" > "$tmp"
     mv "$tmp" "$state_file"
     rmdir "$lockdir"
     trap - EXIT
@@ -185,6 +260,7 @@ case "$cmd" in
     lockdir="$state_file.lock.d"
     tmp=$(mktemp)
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    path_arr=$(_path_to_json_array "$counter") || { rm -f "$tmp"; exit 9; }
     # Same mkdir-based lock discipline as `inc`.
     waited=0
     while ! mkdir "$lockdir" 2>/dev/null; do
@@ -197,7 +273,9 @@ case "$cmd" in
       fi
     done
     trap 'rmdir "$lockdir" 2>/dev/null || true; rm -f "$tmp"' EXIT
-    jq "$counter -= 1 | .updated_at = \"$now\"" "$state_file" > "$tmp"
+    jq --argjson p "$path_arr" --arg now "$now" \
+       'setpath($p; (getpath($p) // 0) - 1) | .updated_at = $now' \
+       "$state_file" > "$tmp"
     mv "$tmp" "$state_file"
     rmdir "$lockdir"
     trap - EXIT

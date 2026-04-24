@@ -352,10 +352,13 @@ for field in (priority, assignee, list, task_type, tag, status):
 competing at tier 3 are resolved by monotonic rule-id (older wins —
 established patterns beat new-arrival overrides).
 
-### Staleness
+### Staleness + auto-demotion
 
-- Last applied > 60 days ago → flag as stale.
-- Applied count > 20 → flag as confirmed-useful.
+- **`last_applied_at` > 60 days ago** → flag as stale (banner in `--status`; rule still auto-applies at tier 3).
+- **`last_applied_at` > 90 days ago** → **auto-demote to `advisory` tier**. An advisory rule does NOT auto-apply at tier 3 of the 4-tier precedence above. It is ONLY surfaced as a suggestion in interactive `--memory list` output (format: `⚠ advisory: rule-<id> (last applied <N> days ago)`). A 120-day-old rule is explicitly NOT applied — the resolver skips it at tier 3 and falls through to tier 4 (default) unless the operator re-promotes it via `/clickup --memory add` (which resets `last_applied_at` to now). This closes PLG-clickup-F15: the previous "banner but still apply" behaviour let noisy old rules fire indefinitely. The auto-demote is mechanical — the 90-day threshold is measured from `last_applied_at` at each pre-flight run; no human decision required.
+- **`Applied count` > 20** → flag as confirmed-useful (leave alone, even if stale).
+
+Implementation note: auto-demotion is a read-time determination, not a persistent mutation. The rule's on-disk record is unchanged; only the resolver treats it as advisory. A rule re-promoted by matching current-turn source text (re-application resets `last_applied_at`) returns to tier 3 automatically on the NEXT invocation.
 
 ---
 

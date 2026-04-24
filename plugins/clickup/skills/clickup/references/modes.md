@@ -546,11 +546,12 @@ Manage learned patterns in `~/.claude/clickup/memory.md`.
 
 On each run, after extraction, scan memory rules. For each rule where `Pattern` matches source text, apply its `Action` — unless the user has explicitly overridden that field in this invocation. Increment `Applied count` and update `Last applied`.
 
-### Staleness
+### Staleness + auto-demotion
 
 On `--status` or when pre-flight banner triggers, flag:
-- Rules unused in last 60 days → "candidate for removal"
-- Rules applied >20 times → "confirmed useful, leave alone"
+- Rules unused in last 60 days → "candidate for removal" (still auto-apply).
+- Rules unused in last 90 days → **auto-demoted to `advisory`** — do NOT auto-apply at tier 3 of the 4-tier precedence. A 120-day rule is explicitly NOT applied. See `config-schema.md` → Staleness + auto-demotion for the full rule. Closes PLG-clickup-F15.
+- Rules applied >20 times → "confirmed useful, leave alone" (overrides staleness flags).
 
 ---
 

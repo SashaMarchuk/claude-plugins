@@ -94,10 +94,31 @@ Arithmetic on resolved results. Categorical bucketing by keyword-match is allowe
 Also write `<RUN_PATH>/findings/TNNN.meta.json` with the same metadata as structured JSON for later aggregation.
 
 ## Step 8: Invoke validator
-Invoke via bash so the validator runs under the profile's `validator_model` (NOT a Skill-tool invocation, which would inherit the worker's model and defeat cross-model hallucination detection):
+Invoke via bash so the validator runs under the profile's `validator_model` (NOT a Skill-tool invocation, which would inherit the worker's model and defeat cross-model hallucination detection).
+
+**Cross-model assertion (closes C-3).** Determine the topic complexity from its front-matter / filename. If complexity is `S`, prefer `.profile.validator_model_complexity_S`; otherwise use `.profile.validator_model`. Then MECHANICALLY REFUSE to invoke the validator when `$VALIDATOR_MODEL == $model` — fall back to the next tier up (`haiku -> sonnet -> opus`). If worker is already at the top tier (`opus`), fall back DOWN to `sonnet` as a last resort so the validator is still cross-model.
 
 ```bash
-VALIDATOR_MODEL=$(jq -r '.profile.validator_model // "haiku"' <RUN_PATH>/state.json)
+# $model is the worker's model, already bound by launch-terminal.sh.
+# Determine complexity from the topic file (Complexity: S|M|L).
+complexity=$(awk -F': *' '/^[[:space:]]*Complexity[[:space:]]*:/ {print $2; exit}' "$topic" | tr -d ' ')
+if [[ "$complexity" == "S" ]]; then
+  VALIDATOR_MODEL=$(jq -r '.profile.validator_model_complexity_S // .profile.validator_model // "haiku"' <RUN_PATH>/state.json)
+else
+  VALIDATOR_MODEL=$(jq -r '.profile.validator_model // "haiku"' <RUN_PATH>/state.json)
+fi
+
+# Mechanical cross-model assertion. Never run validator == worker.
+if [[ "$VALIDATOR_MODEL" == "$model" ]]; then
+  case "$model" in
+    haiku)  VALIDATOR_MODEL="sonnet" ;;
+    sonnet) VALIDATOR_MODEL="opus"   ;;
+    opus)   VALIDATOR_MODEL="sonnet" ;;  # no higher tier; step down
+    *)      VALIDATOR_MODEL="sonnet" ;;
+  esac
+  echo "[analyze-unit] WARN: profile declared validator_model == worker_model ($model); falling back to $VALIDATOR_MODEL" >&2
+fi
+
 claude --plugin-dir ${CLAUDE_PLUGIN_ROOT} --model "$VALIDATOR_MODEL" --print "/ultra-analyzer:validate-finding <RUN_PATH>/findings/TNNN.md"
 ```
 

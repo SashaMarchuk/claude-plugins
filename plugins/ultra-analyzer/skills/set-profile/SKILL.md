@@ -28,7 +28,8 @@ Each tier declares downstream effects. Write them all into `state.profile` as a 
   "ultra_gate_tier": "--large",
   "worker_model": "sonnet",
   "worker_model_complexity_S": "haiku",
-  "validator_model": "haiku",
+  "validator_model": "opus",
+  "validator_model_complexity_S": "sonnet",
   "synthesizer_model": "opus",
   "topic_target_min": 45,
   "topic_target_max": 70,
@@ -42,7 +43,8 @@ Each tier declares downstream effects. Write them all into `state.profile` as a 
 tier: small
 ultra_gate_tier: --small
 worker_model: haiku (all complexities)
-validator_model: haiku
+validator_model: sonnet
+validator_model_complexity_S: sonnet
 synthesizer_model: sonnet
 topic_target: 15-25
 redundancy_pair_rate_p1: 0.20
@@ -54,7 +56,8 @@ suggested_parallel_terminals: 1-2
 tier: medium
 ultra_gate_tier: --medium
 worker_model: sonnet (M/L), haiku (S)
-validator_model: haiku
+validator_model: opus
+validator_model_complexity_S: sonnet
 synthesizer_model: sonnet
 topic_target: 25-45
 redundancy_pair_rate_p1: 0.40
@@ -66,7 +69,8 @@ suggested_parallel_terminals: 2-3
 tier: large
 ultra_gate_tier: --large
 worker_model: sonnet (M/L), haiku (S)
-validator_model: haiku
+validator_model: opus
+validator_model_complexity_S: sonnet
 synthesizer_model: opus
 topic_target: 45-70
 redundancy_pair_rate_p1: 0.60
@@ -79,11 +83,23 @@ tier: xl
 ultra_gate_tier: --xl
 worker_model: opus (M/L), sonnet (S)
 validator_model: sonnet
+validator_model_complexity_S: haiku
 synthesizer_model: opus
 topic_target: 70-120
 redundancy_pair_rate_p1: 0.80
 suggested_parallel_terminals: 5-10
 ```
+
+### Cross-model separation rule (C-3 hard constraint)
+
+For EVERY tier, the following must hold:
+- `validator_model != worker_model` (for M/L complexity topics)
+- `validator_model_complexity_S != worker_model_complexity_S` (for S topics)
+
+If you edit the tier tables above, re-verify this constraint. `analyze-unit`
+enforces a runtime fallback that bumps the validator one tier when this
+would otherwise be violated, but set-profile should get it right by default
+so the fallback is never silently invoked.
 
 ## Step 3: Write the profile
 ```bash

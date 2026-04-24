@@ -72,6 +72,7 @@ If the resolved tier is `--xl`, the launcher MUST print the following single-lin
 Rules:
 - The string MUST be emitted to the user-visible channel (main context) BEFORE the orchestrator Agent is spawned in Step 5.
 - The string MUST be emitted irrespective of `--ask` / `--ask=critical` / `--ask=all` flag state — none of those flags suppress it.
+- **Parent-agent / Skill-tool entry path (HIGH-6)**: the preflight MUST also fire when `/ultra` is invoked programmatically — not only on human slash-command entry (`/ultra …` typed in a terminal or via `commands/run.md`), but also when a parent agent invokes this skill via the `Skill` tool (recall `disable-model-invocation: false` in the frontmatter at line 9). The launcher is the single gatekeeper; `$ARGUMENTS` may arrive from either path, and the `--xl` detection MUST happen and emit the pre-flight string before any downstream action regardless of the entry path. Parent-agent invocations DO NOT bypass the Step 3a preflight, and likewise DO NOT bypass Step 3c's `--i-know-the-cost` gate below — the same cost-warning string surfaces on programmatic entry exactly as on CLI entry.
 - Lower tiers (`--small` / `--medium` / `--large`) do NOT emit this string. They may emit their own informational counts, but the "23 Opus agents" preflight is `--xl`-only.
 
 ### Step 3b: Handle bare `--ask` (Start Sync)
@@ -96,6 +97,8 @@ If the resolved tier is `--xl` AND a wrapped skill was detected in Step 1, the l
   ```
 
 The `--i-know-the-cost` gate is specifically for the `--xl` + wrapped-skill combination. `--xl` alone (no wrapped skill) does NOT require this flag — Step 3a's preflight is sufficient. Lower tiers with a wrapped skill also do NOT require this flag. The gate refuses unless the user (or parent agent) explicitly acknowledges the compounded cost.
+
+**Parent-agent / Skill-tool entry path (HIGH-6) — Step 3c also applies**: like Step 3a, this refusal MUST fire when `/ultra` is invoked programmatically by a parent agent via the `Skill` tool, not only on human slash-command entry. A prompt-injected parent agent cannot bypass the compounded-cost gate by calling the skill directly; the launcher enforces the refusal on every entry path.
 
 ## Step 4: Check for --resume
 

@@ -86,7 +86,8 @@ Launch ONE Agent with `model: "opus"` and `run_in_background: false`. The orches
 - The --ask level for the orchestrator to respect
 - Previous state if --resume
 - Lessons from `~/.claude/skills/ultra/global-lessons.md` if it exists
-- If wrapping a skill: instruct the orchestrator to use the `Skill` tool to invoke the wrapped skill during Phase 2, passing the scope analysis as $ARGUMENTS. The wrapped skill's output becomes Phase 2's output.
+- If wrapping a skill: instruct the orchestrator to use the `Skill` tool to invoke the wrapped skill during Phase 2, passing the scope analysis as $ARGUMENTS. The wrapped skill's output is ingested per the **Wrapped-skill output contract** in `phases.md` Phase 2:
+  - Size cap: 50 KB (51200 bytes). On exceed, offload to `.planning/ultra/<task>/phase2/wrapped-skill-output.md` and feed Phase 3 only a `[WRAPPED-SKILL-OFFLOAD: <path> <bytes> bytes]` pointer — never the inline prose.
 
 **Critical instruction in orchestrator prompt**: "Return ONLY an executive summary to the main context. All detailed findings go to .planning/ultra/<task>/ files."
 

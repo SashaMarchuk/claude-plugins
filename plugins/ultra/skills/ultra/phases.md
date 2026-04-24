@@ -52,7 +52,14 @@ All tiers run ALL phases. Agent count and depth vary by tier. Phases are STRICTL
 **CRITICAL ISOLATION RULE**: Each researcher agent MUST receive identical context and MUST NOT see other agents' outputs. Include this in every researcher prompt:
 > "You are one of N researchers working independently. You MUST NOT see or reference other agents' work. Arrive at your own conclusions based solely on your investigation."
 
-**If wrapping a skill**: The wrapped skill (e.g., /deep-research) replaces this phase. The orchestrator uses the `Skill` tool to invoke the wrapped skill, passing the task description + scope analysis as arguments. The skill's output becomes this phase's output. Note: when wrapping a skill that has its own multi-agent pipeline (like /deep-research), that skill's internal validation is separate from /ultra's Phases 5-8 — both run independently.
+**If wrapping a skill**: The wrapped skill (e.g., /deep-research) replaces this phase. The orchestrator uses the `Skill` tool to invoke the wrapped skill, passing the task description + scope analysis as arguments.
+
+**Wrapped-skill output contract — size cap + offload (MANDATORY)**:
+1. **Size cap: 50 KB.** Measure the wrapped skill's returned text length in bytes (UTF-8). If it exceeds 50 KB (51200 bytes), the orchestrator MUST offload it to disk instead of ingesting it inline.
+2. **Offload path**: `.planning/ultra/<task>/phase2/wrapped-skill-output.md` (one file per wrapped-skill invocation; if multiple skills are wrapped in the same run, use `.planning/ultra/<task>/phase2/<agent-id>/return.md` per Q2 decisions).
+3. **On-exceed behaviour**: write the raw output to the offload path, then feed Phase 3 ONLY a path reference of the form `[WRAPPED-SKILL-OFFLOAD: .planning/ultra/<task>/phase2/wrapped-skill-output.md <SIZE_BYTES> bytes]` — NEVER the prose. Phase 3 must treat the path as an opaque pointer; to synthesise, Phase 3 reads the file via the Read tool with explicit line ranges, not by re-inlining the whole blob.
+
+The skill's (possibly offloaded) output becomes this phase's output. Note: when wrapping a skill that has its own multi-agent pipeline (like /deep-research), that skill's internal validation is separate from /ultra's Phases 5-8 — both run independently.
 
 **If multi-terminal**: Before starting, check `.planning/ultra/<task>/claims/` for territory already claimed by other terminals. Claim unclaimed territory via lock files. After 3-5 steps, re-verify your claims are still unique.
 

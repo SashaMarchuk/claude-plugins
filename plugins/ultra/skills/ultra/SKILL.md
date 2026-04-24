@@ -145,6 +145,14 @@ When the orchestrator returns:
 
 After displaying results, append a 2-3 line entry to `~/.claude/skills/ultra/global-lessons.md` (create if it doesn't exist). Format: `## YYYY-MM-DD: task-name [project-name] (--tier, mode)`. Include: what tier was used, whether the pipeline was effective, any issues encountered. The `[project-name]` tag should be derived from the project directory name or git remote.
 
+**Symlink-safe write (CRIT-3, MANDATORY)** — the launcher MUST NOT silently follow a symlink at the lessons-file path. Before any open/write, resolve the parent directory with `realpath -e` / `readlink -f` and run `lstat` (or `stat -L=false` / Python `os.lstat`) on the final component. If the final component is a symlink, the launcher MUST REFUSE to write and emit this loud warning on the user-visible channel (do NOT follow the link):
+
+```
+[/ultra lessons] REFUSED: ~/.claude/skills/ultra/global-lessons.md (or its parent) is a symlink. Refusing to write through it — a malicious symlink could redirect the append to ~/.ssh/authorized_keys or other sensitive targets. Resolve the symlink manually, then retry. (CRIT-3)
+```
+
+Equivalent acceptable implementation: open with `O_NOFOLLOW` (POSIX) or `O_NOFOLLOW | O_CLOEXEC` and treat `ELOOP` as the refusal trigger. Either path — lstat-then-refuse, or O_NOFOLLOW — is required; the launcher MUST NEVER silently open through a symlink. This rule applies to BOTH the lessons file AND every state-tree write described in `coordination.md` (state.json, coordination.json, claims/*.lock, findings/*.json, territory-map.json, synthesis.lock, synthesis.md, summary.md). See `coordination.md` "Symlink-safe Write Protocol" for the shared primitive.
+
 ## Quick Reference
 
 ```

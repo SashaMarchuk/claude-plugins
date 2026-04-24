@@ -30,6 +30,28 @@ Only when BOTH `--task=<name>` AND `--terminal=<N>` flags are present. Without t
                           # See SKILL.md "Self-Improvement" for the shard-write protocol.
 ```
 
+## Symlink-safe Write Protocol (CRIT-3 — MANDATORY for every file in the state tree)
+
+Every write under `.planning/ultra/<task>/` (state.json, coordination.json, claims/*.lock, findings/*.json, territory-map.json, synthesis.lock, synthesis.md, summary.md) AND the `~/.claude/skills/ultra/global-lessons*` lessons paths MUST follow this protocol. Plain open-write-close via the Write tool silently follows symlinks — a malicious symlink planted at any of these paths redirects the write to any target the user's process can write (e.g. `~/.ssh/authorized_keys`, cron spool, shell rc files).
+
+### Rule 1 — Symlink defense (CRIT-3)
+
+Before any write, the orchestrator MUST either:
+- (a) `lstat` the final path component; if it is a symlink, REFUSE the write and emit the warning below to the user-visible channel (do NOT follow the link), OR
+- (b) open the file with `O_NOFOLLOW` (POSIX) / `O_NOFOLLOW | O_CLOEXEC` and treat `ELOOP` as the refusal trigger.
+
+The parent directory MUST also be resolved with `realpath -e` / `readlink -f` and verified to be inside the expected root (`$PWD/.planning/ultra/<task>/` for state-tree writes; `~/.claude/skills/ultra/` for lessons writes). A symlinked parent is ALSO a refusal trigger — attackers can redirect writes either by symlinking the directory or the final file.
+
+Refusal message (literal format):
+
+```
+[/ultra state-tree] REFUSED: <abs-path> (or its parent) is a symlink. Refusing to write through it — a malicious symlink could redirect this state write to a sensitive target. Resolve the symlink manually, then retry. (CRIT-3)
+```
+
+Silent fall-through is forbidden. The orchestrator MUST NEVER call the Write tool on a path where `lstat` reports a symlink at the final component or any ancestor inside the state root.
+
+(Rule 2: Atomic rename, Rule 3: Advisory flock, Rule 4: Claim-preservation — documented in the next section, "Atomic-Write + Flock + Append-Log Protocol".)
+
 ### state.json Schema
 
 Used for BOTH single-terminal and multi-terminal runs. Updated after each phase completes.

@@ -132,9 +132,14 @@ Default is `primary` (the user's own Google account). Override via `--calendar` 
 
 ### Conflict detection (before create)
 
-1. Query `npx @googleworkspace/cli calendar events list --params '{"calendarId":"<cal>","timeMin":"<start>","timeMax":"<end>","singleEvents":true,"orderBy":"startTime"}' 2>/dev/null` for the proposed window.
-2. If any event overlaps, surface in the preview: "You have `<title>` at `<time>`. Create anyway?"
-3. In `--auto`: block if overlap ≥ 50% of proposed duration; surface "possible conflict" but proceed if overlap < 50%.
+1. Query `npx @googleworkspace/cli calendar events list --params '{"calendarId":"<cal>","timeMin":"<start>","timeMax":"<end>","singleEvents":true,"orderBy":"startTime","maxResults":10}' 2>/dev/null` for the proposed window. Cap at `maxResults:10` — the decision is "does ANY conflict exist in this window," not "enumerate every event on a heavy-traffic calendar."
+2. If any event overlaps, surface in the preview: "You have `<title>` at `<time>`. Create anyway?" For each existing event in the window, classify and compute `overlap_minutes` per the math below, then sum ALL overlaps and compare against `proposed_minutes`.
+3. **Overlap math (explicit, applied per-existing-event then summed).** Let `P_start`, `P_end` be the proposed event's resolved UTC datetimes; `proposed_minutes = max(0, (P_end - P_start).total_seconds() / 60)`. For each existing event `E` in the window:
+   - **Timed event** (`E.start.dateTime` + `E.end.dateTime` present): `overlap_minutes_E = max(0, (min(P_end, E.end) - max(P_start, E.start)).total_seconds() / 60)`.
+   - **All-day event** (`E.start.date` present, no `dateTime`): treat the entire all-day span as a 100%-overlap conflict — `overlap_minutes_E = proposed_minutes` (full coverage). Rationale: a calendar `date`-only field has no wall-clock, so we cannot timezone-resolve it safely across attendee zones; refusing to silently skip all-day events is the safe default. The all-day event is ALWAYS treated as conflicting for any proposed window that falls on or overlaps that date.
+   - **Cumulative (multi-event) overlap.** Sum `overlap_minutes_E` across ALL events in the window — NOT the max, NOT just "any event overlaps." Three 20-minute events adjacent inside a 60-minute proposal produce `overlap_minutes_total = 60`, which is 100% overlap even though no single event covers ≥ 50% on its own.
+4. **Zero-duration proposed event** (`P_end == P_start`, i.e. `proposed_minutes == 0`). Any existing event whose interval `[E.start, E.end)` STRICTLY contains `P_start`, OR any all-day event on that date, is a conflict — treat as 100% overlap (block under `--auto`). Do NOT divide by zero; the `max(1, proposed_minutes)` denominator below is ONLY for the percentage display — the zero-duration block decision is the direct "point-inside-interval" check.
+5. **Percentage + auto-block rule.** `overlap_pct = overlap_minutes_total / max(1, proposed_minutes)`. In `--auto`: block creation if `overlap_pct >= 0.50` OR zero-duration-point-in-interval hit OR any all-day overlap is present. Surface "possible conflict" but proceed if `0 < overlap_pct < 0.50` and no all-day hit. In interactive mode, always surface in the preview regardless of threshold.
 
 ### Past-time guard
 
@@ -160,7 +165,7 @@ Refuse creation with a one-line reason when any of these hold:
 - Date or start time missing
 - At least one attendee (beyond always-include) requested but unresolvable
 - Resolved start time in the past
-- Conflict ≥ 50% overlap with an existing event
+- Cumulative conflict overlap ≥ 50% of proposed duration (summed across all existing events in the window), OR zero-duration proposed time falls inside an existing event's interval, OR any all-day event exists on the proposed date — see "Conflict detection" above for math
 
 The spirit of `--auto` is "save with whatever exists." If what exists is too little to produce a non-garbage event, refuse. `--auto` NEVER opens interactive onboarding or any `AskUserQuestion` prompt — if setup is incomplete, it HALTs with a clear one-liner pointing to the fix command.
 

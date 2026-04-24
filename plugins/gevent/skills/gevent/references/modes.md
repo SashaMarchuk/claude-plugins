@@ -83,7 +83,7 @@ Silent create. Skip preview. No interactive prompts beyond the safety-net refusa
 1. **Safety-net check first** (see SKILL.md → `--auto` safety net). On refuse condition, HALT with one-line reason.
 2. **Extract + resolve** as in default Steps 1–3, but never ask questions. Use defaults for everything unresolved.
 3. **Past-time refuse** — don't silently schedule in the past.
-4. **Conflict check** at the `--auto` threshold (≥ 50% overlap blocks; < 50% surfaces "possible conflict" banner and proceeds).
+4. **Conflict check** at the `--auto` threshold per SKILL.md → Conflict detection: block on cumulative overlap ≥ 50% of proposed duration (summed across all existing events), on zero-duration proposed time falling inside an existing interval, or on any all-day event on the proposed date. Surface "possible conflict" banner and proceed only when 0 < overlap < 50% AND no all-day hit.
 5. **Create immediately** via `events insert`.
 6. **Return** event URL + 2-line summary.
 

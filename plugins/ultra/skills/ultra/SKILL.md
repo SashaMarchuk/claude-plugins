@@ -57,15 +57,32 @@ Read these files from `${CLAUDE_SKILL_DIR}`:
 5. `anti-slop-rules.md` — evidence audit rules (passed to orchestrator for Phase 8)
 6. `devil-advocate.md` — adversarial protocol (passed to orchestrator for Phases 5-6)
 
-## Step 3: Handle --ask (Start Sync)
+## Step 3: Cost Pre-flight + Handle --ask (Start Sync)
 
-Only if `--ask` (bare, no `=value`) is present, use AskUserQuestion BEFORE spawning the orchestrator:
+### Step 3a: Unconditional cost pre-flight at `--xl`
+
+If the resolved tier is `--xl`, the launcher MUST print the following single-line cost notice **BEFORE any sub-agent spawn, before Step 4, before Step 5, and BEFORE the `--ask` AskUserQuestion gate below**. This runs UNCONDITIONALLY — it is not gated on `--ask`, `--ask=critical`, `--ask=all`, or `--resume`. It fires on every `--xl` entry.
+
+**Pre-flight string (literal format, MUST contain the tokens "23", "Opus", and "agents")**:
+
+```
+[/ultra --xl] Spawning ~23 Opus agents across 9 phases (3 PR + 5 R + 3 V + 2 D + 1 C + 2 F + 2 AG + 1 J + 1 A + 1 SM + 1 EO + 1 S = 23). Tier model: Opus. Estimated cost range: high. Proceeding...
+```
+
+Rules:
+- The string MUST be emitted to the user-visible channel (main context) BEFORE the orchestrator Agent is spawned in Step 5.
+- The string MUST be emitted irrespective of `--ask` / `--ask=critical` / `--ask=all` flag state — none of those flags suppress it.
+- Lower tiers (`--small` / `--medium` / `--large`) do NOT emit this string. They may emit their own informational counts, but the "23 Opus agents" preflight is `--xl`-only.
+
+### Step 3b: Handle bare `--ask` (Start Sync)
+
+Only if `--ask` (bare, no `=value`) is present, use AskUserQuestion AFTER the Step 3a cost pre-flight (if any) and BEFORE spawning the orchestrator:
 - Present your understanding of the task
 - Show the tier configuration and agent count
 - Show the detected task type and focus area
 - Ask if this matches their intent
 
-`--ask=critical` and `--ask=all` do NOT trigger this pre-flight sync — they are passed to the orchestrator for in-pipeline pauses only.
+`--ask=critical` and `--ask=all` do NOT trigger this pre-flight sync — they are passed to the orchestrator for in-pipeline pauses only. They also do NOT suppress Step 3a.
 
 ## Step 4: Check for --resume
 

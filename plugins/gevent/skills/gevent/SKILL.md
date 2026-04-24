@@ -118,7 +118,7 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/clic
 4. **Third pass** — casefold match on `teammates[].email` (when user typed an email directly).
 5. **Single match** → use that email.
 6. **Multiple matches** → `AskUserQuestion` disambiguation (show full names + emails).
-7. **Zero matches** → prompt for full email. Validate email against `^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$` AND reject any domain with non-ASCII characters (IDNA mixed-script attack defense) — on failure, re-prompt with the reason. On valid email, upsert into `teammates[]` with `sources: ["manual"]` + `last_validated_at: null` via the atomic write helper in `references/config-schema.md`.
+7. **Zero matches** → prompt for full email. Validate email against `^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$` AND reject any domain with non-ASCII characters (IDNA mixed-script attack defense) AND reject any domain OR any domain-label that begins with `xn--` (IDN punycode rejection — `xn--pple-43d.com` is pure ASCII but unpacks to `аpple.com` with Cyrillic `а`, defeating the non-ASCII check on its own). On failure, re-prompt with the reason. On valid email, upsert into `teammates[]` with `sources: ["manual"]` + `last_validated_at: null` via the atomic write helper in `references/config-schema.md`.
 8. **Inactive teammate** (`active: false`) → surface banner, allow but confirm: "`X` is marked inactive (not in current ClickUp workspace). Still invite?"
 9. In `--auto`: if ambiguous or attendee unresolvable AND no obvious default → refuse with one-line reason.
 

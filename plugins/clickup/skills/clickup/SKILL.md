@@ -93,7 +93,7 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/geve
 4. **Third pass** — casefold match on `teammates[].email` (when user typed an email).
 5. **Single match** → fill silently.
 6. **Multiple matches** → prompt disambiguation (show full names + emails).
-7. **Zero matches** → freeform prompt for full email. Validate against `^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$` AND reject any domain with non-ASCII characters (IDNA mixed-script attack defense). On failure, re-prompt with the reason. On valid email, upsert into `teammates[]` with `sources: ["manual"]` + `last_validated_at: null` via the atomic write helper. A later MCP refresh will enrich with `external_ids.clickup` + `full_name`.
+7. **Zero matches** → freeform prompt for full email. Validate against `^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$` AND reject any domain with non-ASCII characters (IDNA mixed-script attack defense) AND reject any domain OR any domain-label that begins with `xn--` (IDN punycode rejection — `xn--pple-43d.com` is pure ASCII but unpacks to `аpple.com` with Cyrillic `а`, so the non-ASCII check alone is bypassable). On failure, re-prompt with the reason. On valid email, upsert into `teammates[]` with `sources: ["manual"]` + `last_validated_at: null` via the atomic write helper. A later MCP refresh will enrich with `external_ids.clickup` + `full_name`.
 8. **Re-validation guard**: before assigning, check `teammate.active == true`. On deactivated user, block; force re-prompt.
 9. In `--auto`: if ambiguous or deactivated AND no memory rule resolves unambiguously → refuse with one-line reason.
 

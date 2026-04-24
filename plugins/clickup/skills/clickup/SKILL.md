@@ -23,6 +23,14 @@ Universal skill for creating and managing ClickUp tickets. Enforces consistent t
 
 **Precedence on conflict:** `--onboard` > `--status` > `--memory` > `--workspace` > `--auto` > default. Flag arguments are space-separated (`--onboard identity`, not `--onboard=identity`). Positional args after flags are the ticket-seed text.
 
+**`--onboard --auto` is REJECTED at parse time.** If `$ARGUMENTS` contains BOTH `--onboard` AND `--auto` (in any order, with or without a sub-arg like `--onboard identity`), HALT BEFORE any pre-flight step with the one-liner:
+
+```
+refusing --onboard --auto: onboarding must be interactive (AskUserQuestion required). Run `/clickup --onboard` alone first, then retry `/clickup --auto "<seed>"`.
+```
+
+Rationale: `--onboard` requires `AskUserQuestion` rounds (see `references/modes.md` → `onboard-identity` Step 2/3/4/7); `--auto` explicitly bans interactive prompts ("silent create with defaults"). The combined invocation has no valid execution — either AskUserQuestion opens (violating `--auto`) or onboarding silently skips (violating `--onboard` precedence). An LLM resolves this differently each run; the only safe behaviour is parse-time refusal. Closes PLG-clickup-F5.
+
 **Seed-text 4 KB cap (pre-extract truncation).** Any seed text — pasted transcript, previous-turn context carried forward, positional args — longer than **4096 bytes** (UTF-8 encoded) is truncated BEFORE the extract step. Truncation point: the nearest **sentence boundary** (period, question mark, exclamation mark, or newline) at or before the 4096-byte mark. If no sentence boundary exists in the first 4096 bytes, fall back to the nearest whitespace; if none, hard-cut at 4096 bytes. After truncation, show the user an explicit banner:
 
 ```

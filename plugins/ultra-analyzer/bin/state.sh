@@ -103,7 +103,7 @@ case "$cmd" in
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     # Enforce .current_step enum. The enum mirrors the pipeline state
     # machine documented in skills/run/SKILL.md. Partial mitigation for
-    # C-1 (gate bypass); the full gate-consult lives below.
+    # C-1 (gate bypass); the full gate-consult layers on top below.
     if [[ "$json_path" == ".current_step" ]]; then
       # Strip surrounding quotes if value is JSON-encoded (e.g. '"discover"').
       step_val="${value#\"}"; step_val="${step_val%\"}"
@@ -113,6 +113,32 @@ case "$cmd" in
           echo "ERROR: .current_step must be one of {init, pre-discover-gate, discover, analyze, pre-synthesize-gate, synthesize, done, failed} (got: $step_val)" >&2
           rm -f "$tmp"
           exit 7
+          ;;
+      esac
+      # Gate-consult: forward transitions past a gate step require the
+      # corresponding ultra_gates.<gate>.verdict == "PASS". `failed` is
+      # the terminal-failure path and bypasses gate checks. Closes C-1.
+      pre_discover_verdict=$(jq -r '.ultra_gates."pre-discover".verdict // "pending"' "$state_file")
+      pre_synthesize_verdict=$(jq -r '.ultra_gates."pre-synthesize".verdict // "pending"' "$state_file")
+      case "$step_val" in
+        discover|analyze|pre-synthesize-gate)
+          if [[ "$pre_discover_verdict" != "PASS" ]]; then
+            echo "ERROR: cannot advance .current_step to '$step_val' — ultra_gates.pre-discover.verdict is '$pre_discover_verdict' (require PASS)" >&2
+            rm -f "$tmp"
+            exit 8
+          fi
+          ;;
+        synthesize|done)
+          if [[ "$pre_discover_verdict" != "PASS" ]]; then
+            echo "ERROR: cannot advance .current_step to '$step_val' — ultra_gates.pre-discover.verdict is '$pre_discover_verdict' (require PASS)" >&2
+            rm -f "$tmp"
+            exit 8
+          fi
+          if [[ "$pre_synthesize_verdict" != "PASS" ]]; then
+            echo "ERROR: cannot advance .current_step to '$step_val' — ultra_gates.pre-synthesize.verdict is '$pre_synthesize_verdict' (require PASS)" >&2
+            rm -f "$tmp"
+            exit 8
+          fi
           ;;
       esac
     fi

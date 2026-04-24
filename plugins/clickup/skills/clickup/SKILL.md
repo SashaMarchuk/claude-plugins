@@ -126,8 +126,14 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/geve
 
 ### Idempotency (retry safety)
 
-1. Generate UUID idempotency key per invocation.
-2. **Before** calling `mcp__clickup__clickup_create_task`, write draft to `~/.claude/clickup/drafts/<uuid>.json`.
+1. Generate UUID idempotency key per invocation. **Must be UUIDv4.** Pin the regex gate below on the generated key AND on any externally-provided UUID (e.g. any future `/clickup --retry <uuid>` flag or task-id parse path) BEFORE any filesystem operation:
+
+   ```
+   ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$
+   ```
+
+   This is load-bearing: it rejects path-traversal payloads like `../../etc/passwd`, empty strings, shell-metachar injection, and non-v4 UUIDs (v1/v3/v5) in one check. A value that fails this regex MUST NOT be used to compose any path under `~/.claude/clickup/drafts/` — HALT with "invalid UUID — refusing to compose draft path". Today the UUID is LLM-generated so traversal is not immediately exploitable, but this gate is the load-bearing defense for any future feature that accepts a user-provided UUID (command-line retry flag, crash-recovery path, etc.).
+2. **Before** calling `mcp__clickup__clickup_create_task`, write draft to `~/.claude/clickup/drafts/<uuid>.json` — ONLY after the UUID passed the regex gate above.
 3. Include the key as a marker in the ticket description (hidden HTML comment: `<!-- ck:<uuid> -->`) so retries can find partial successes.
 4. On create timeout/error, search the list for the key before re-creating.
 

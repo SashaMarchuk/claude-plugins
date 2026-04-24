@@ -12,7 +12,7 @@ Plus a human-editable `~/.claude/clickup/memory.md` (learned rules) and a `draft
 These apply to BOTH JSON files, whenever the skill writes them:
 
 1. **Atomic write** — write to `<file>.tmp` in the same dir, `fsync`, then `os.replace(tmp, file)`. Never edit in place.
-2. **`fcntl.flock`** — take an exclusive lock on a sibling sentinel file (`<file>.lock`) for the entire read-modify-write. The kernel releases the lock when the process dies, so stale locks are impossible.
+2. **`fcntl.flock`** — take an exclusive lock on a sibling sentinel file (`<file>.lock` — NO leading dot on the sibling; e.g. `identity.json` → `identity.json.lock`). For the SHARED `identity.json` file the canonical cross-plugin lock path is **`~/.claude/shared/identity.json.lock`** (matches `/gevent`'s helper exactly — deviation breaks mutual exclusion). Hold the lock for the entire read-modify-write. The kernel releases the lock when the process dies, so stale locks are impossible.
 3. **Preserve unknown keys** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/gevent` may have added fields to a teammate record that this version of `/clickup` does not know about; they must survive a rewrite.
 4. **`schemaVersion: 1`** — integer at the top of every file. If a reader sees a higher version it does not understand, refuse to write (read-only fallback) rather than downgrade.
 5. **On corrupt JSON** — move the file to `<file>.corrupt-<epoch>` and start fresh from skeleton, with a banner to the user.

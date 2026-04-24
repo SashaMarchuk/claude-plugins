@@ -163,7 +163,7 @@ After any edit, redraw the preview and repeat. Cancel deletes the draft snapshot
 - `~/.claude/clickup/memory.md` — learned patterns + corrections (markdown, human-editable).
 - `~/.claude/clickup/drafts/` — per-invocation idempotency snapshots.
 
-All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file — see the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/gevent` fields this plugin doesn't know about).
+All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file. The canonical identity.json lock is **`~/.claude/shared/identity.json.lock`** (NO leading dot — sibling of `identity.json`, not a dotfile). This path is the cross-plugin contract shared with `/gevent`; any deviation breaks mutual exclusion. See the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/gevent` fields this plugin doesn't know about).
 
 Schemas + examples in `references/config-schema.md`.
 

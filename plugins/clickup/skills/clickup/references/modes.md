@@ -445,7 +445,7 @@ Re-running `--onboard identity` diffs EACH teammate's current `latin_alias` agai
 
 #### Step 8 — Write identity.json atomically
 
-Via the `atomic_update` helper (see `config-schema.md` → "Reference write helper"). `fcntl.flock` on `~/.claude/shared/.identity.json.lock` for the entire read-modify-write. Set `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`.
+Via the `atomic_update` helper (see `config-schema.md` → "Reference write helper"). `fcntl.flock` on `~/.claude/shared/identity.json.lock` (canonical cross-plugin lock path — NO leading dot; sibling of `identity.json`) for the entire read-modify-write. Set `schemaVersion: 2`, `schemaVersion_bumped_at: <now>`, `onboarding_complete: true`, `updated_at: <now>`.
 
 #### Step 9 — Preserve unknown keys (always)
 

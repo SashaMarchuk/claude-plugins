@@ -188,7 +188,7 @@ After any edit, redraw the preview and repeat. Cancel abandons the draft.
 - `~/.claude/shared/identity.json` — **SHARED with `/clickup`**. User profile + teammate roster. Both skills read and append.
 - `~/.claude/gevent/config.json` — gevent-local. Calendar defaults, always-include attendees, behavior flags.
 
-All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file — see the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/clickup` fields this plugin doesn't know about).
+All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file. The canonical identity.json lock is **`~/.claude/shared/identity.json.lock`** (NO leading dot — sibling of `identity.json`, not a dotfile). This path is the cross-plugin contract shared with `/clickup`; any deviation breaks mutual exclusion. See the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/clickup` fields this plugin doesn't know about).
 
 Schemas + examples in `references/config-schema.md`.
 

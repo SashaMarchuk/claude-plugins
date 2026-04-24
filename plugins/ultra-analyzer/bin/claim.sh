@@ -41,5 +41,13 @@ base=$(basename "$topic")
 dest="$in_progress/$base"
 mv "$topic" "$dest"
 
+# Counter invariant: moving pending -> in-progress decrements pending and
+# increments in-progress so that
+#   topics_total == done + failed + pending + in_progress
+# holds throughout the claim/release/requeue cycle. Closes C-2.
+bindir=$(cd "$(dirname "$0")" && pwd)
+bash "$bindir/state.sh" dec "$run_path" .counters.topics_pending
+bash "$bindir/state.sh" inc "$run_path" .counters.topics_in_progress
+
 # Absolute path for downstream tooling.
 echo "$(cd "$(dirname "$dest")" && pwd)/$(basename "$dest")"

@@ -6,6 +6,7 @@
 #   state.sh get  <run-path> <json-path>          — read field (e.g. .current_step)
 #   state.sh set  <run-path> <json-path> <value>  — write field
 #   state.sh inc  <run-path> <counters.field>     — atomic increment
+#   state.sh dec  <run-path> <counters.field>     — atomic decrement
 #   state.sh checkpoint <run-path>                — snapshot state.json to checkpoints/
 #
 # RUN_PATH is the absolute or cwd-relative path to .planning/ultra-analyzer/<run>/
@@ -17,7 +18,7 @@ set -euo pipefail
 command -v jq >/dev/null || { echo "ERROR: jq not installed" >&2; exit 1; }
 
 cmd="${1:-}"
-shift || { echo "Usage: state.sh {init|get|set|inc|checkpoint} ..." >&2; exit 1; }
+shift || { echo "Usage: state.sh {init|get|set|inc|dec|checkpoint} ..." >&2; exit 1; }
 
 case "$cmd" in
   init)
@@ -72,6 +73,7 @@ case "$cmd" in
           topics_done: 0,
           topics_failed: 0,
           topics_pending: 0,
+          topics_in_progress: 0,
           findings_passed: 0,
           findings_failed: 0
         },
@@ -129,6 +131,31 @@ case "$cmd" in
     trap - EXIT
     ;;
 
+  dec)
+    run_path="${1:?run-path required}"
+    counter="${2:?counter field required (e.g. .counters.topics_pending)}"
+    state_file="$run_path/state.json"
+    lockdir="$state_file.lock.d"
+    tmp=$(mktemp)
+    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    # Same mkdir-based lock discipline as `inc`.
+    waited=0
+    while ! mkdir "$lockdir" 2>/dev/null; do
+      sleep 0.1
+      waited=$((waited + 1))
+      if [[ $waited -gt 300 ]]; then
+        echo "ERROR: state.sh dec lock timeout on $lockdir (held by another worker for >30s)" >&2
+        rm -f "$tmp"
+        exit 4
+      fi
+    done
+    trap 'rmdir "$lockdir" 2>/dev/null || true; rm -f "$tmp"' EXIT
+    jq "$counter -= 1 | .updated_at = \"$now\"" "$state_file" > "$tmp"
+    mv "$tmp" "$state_file"
+    rmdir "$lockdir"
+    trap - EXIT
+    ;;
+
   checkpoint)
     run_path="${1:?run-path required}"
     state_file="$run_path/state.json"
@@ -143,7 +170,7 @@ case "$cmd" in
 
   *)
     echo "Unknown command: $cmd" >&2
-    echo "Usage: state.sh {init|get|set|inc|checkpoint} ..." >&2
+    echo "Usage: state.sh {init|get|set|inc|dec|checkpoint} ..." >&2
     exit 1
     ;;
 esac

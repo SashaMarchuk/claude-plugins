@@ -27,17 +27,24 @@ case "$outcome" in
     mkdir -p "$run_path/topics/done"
     mv "$tmp" "$run_path/topics/done/$base"
     bash "$bindir/state.sh" inc "$run_path" .counters.topics_done
+    # in-progress -> done: keep sum invariant intact.
+    bash "$bindir/state.sh" dec "$run_path" .counters.topics_in_progress
     ;;
   failed)
     mkdir -p "$run_path/topics/failed"
     mv "$tmp" "$run_path/topics/failed/$base"
     bash "$bindir/state.sh" inc "$run_path" .counters.topics_failed
+    # in-progress -> failed: keep sum invariant intact.
+    bash "$bindir/state.sh" dec "$run_path" .counters.topics_in_progress
     ;;
   requeue)
     mkdir -p "$run_path/topics/pending"
     tagged="${base%.md}__retry-$(date +%s)-${reason}.md"
     mv "$tmp" "$run_path/topics/pending/$tagged"
     # Do not increment done/failed — topic remains unresolved.
+    # in-progress -> pending: keep sum invariant intact. Closes C-2.
+    bash "$bindir/state.sh" dec "$run_path" .counters.topics_in_progress
+    bash "$bindir/state.sh" inc "$run_path" .counters.topics_pending
     ;;
   *)
     echo "ERROR: unknown outcome: $outcome" >&2

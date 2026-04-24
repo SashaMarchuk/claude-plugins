@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # requeue.sh — move a topic from done/ back to pending/ with retry tag.
 # Used by Gate 2 (pre-synthesize) when /ultra flags a finding that should
-# not have passed. Decrements counters.topics_done and counters.findings_passed
-# (if the finding was counted as passed) and increments counters.topics_pending.
+# not have passed. Decrements counters.topics_done (always), decrements
+# counters.findings_passed (only if the prior verdict was PASS), and
+# increments counters.topics_pending so the sum invariant
+# `topics_total == done + failed + pending + in_progress` holds.
 #
 # Usage:
 #   requeue.sh <run-path> <topic-basename> <reason-slug>
@@ -42,29 +44,19 @@ if [[ -f "$finding_file" ]]; then
   cp "$finding_file" "$archive/${topic_base%.md}.${ts}.findings.md"
   rm "$finding_file"
 fi
+
+# Always adjust topics counters to preserve the sum invariant.
+# done -> pending regardless of prior verdict. Closes C-2.
+bash "$bindir/state.sh" dec "$run_path" .counters.topics_done
+bash "$bindir/state.sh" inc "$run_path" .counters.topics_pending
+
 if [[ -f "$verdict_file" ]]; then
   # Only decrement findings_passed if the prior verdict was PASS.
   prior_verdict=$(jq -r '.verdict' "$verdict_file" 2>/dev/null || echo "unknown")
   cp "$verdict_file" "$archive/${topic_base%.md}.${ts}.verdict.json"
   rm "$verdict_file"
   if [[ "$prior_verdict" == "PASS" ]]; then
-    # Manual decrement via jq (state.sh has no dec op).
-    state_file="$run_path/state.json"
-    lockdir="$state_file.lock.d"
-    waited=0
-    while ! mkdir "$lockdir" 2>/dev/null; do
-      sleep 0.1
-      waited=$((waited + 1))
-      [[ $waited -gt 300 ]] && { echo "ERROR: lock timeout on requeue" >&2; exit 3; }
-    done
-    trap 'rmdir "$lockdir" 2>/dev/null || true' EXIT
-    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    tmp_state=$(mktemp)
-    jq ".counters.topics_done -= 1 | .counters.findings_passed -= 1 | .updated_at = \"$now\"" \
-       "$state_file" > "$tmp_state"
-    mv "$tmp_state" "$state_file"
-    rmdir "$lockdir"
-    trap - EXIT
+    bash "$bindir/state.sh" dec "$run_path" .counters.findings_passed
   fi
 fi
 

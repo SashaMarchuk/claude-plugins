@@ -312,11 +312,45 @@ Last updated: 2026-04-22
 - **Action**: imperative, one ticket field.
 - **Added / Last applied / Applied count**: maintained by the skill.
 
-### Application order
+### Application order (4-tier precedence — load-bearing)
 
-1. Extract from source → candidate fields.
-2. For each rule in order: if pattern matches AND target field is not user-overridden → apply action, update `Last applied` + `Applied count`.
-3. Explicit user input in the current turn ALWAYS wins over rules.
+Resolve every ticket field using EXACTLY these four tiers, highest wins.
+This precedence is pinned so "memory rule says X, but keyword in the
+current turn says Y" resolves deterministically — closes PLG-clickup-F10.
+
+1. **Explicit CLI flag / field-set in the current turn** (strongest).
+   The user typed `--priority=high` or explicitly wrote "assign to Misha"
+   as a direct imperative. Always wins; never overridden by anything below.
+2. **Keyword-in-turn from source text** (second strongest).
+   The current turn's source includes a priority-keyword (e.g.
+   "low priority typo for Daria" → priority=low per the keyword table at
+   SKILL.md → Defaults → Priority). Keyword-in-turn explicitly WINS over
+   any memory rule that says otherwise. Example: memory rule
+   "Daria = P1" + source "low priority typo for Daria" → priority resolves
+   to `low` (keyword beats memory). Without this tie-break, a noisy old
+   memory rule would override a clear operator signal in the current turn.
+3. **Memory rule** (third).
+   Stored `## rule-<id>` matches the source text's Pattern AND the target
+   field is not set by tier 1 or tier 2. Apply Action; increment
+   `Applied count`; update `Last applied`. Subject to staleness gate
+   below (rules auto-demoted at 90 days advisory-only).
+4. **Default** (weakest).
+   Whatever the Defaults table in SKILL.md pins (priority=normal,
+   status=backlog, task_type=task, etc.).
+
+Resolution loop (pseudocode):
+
+```
+for field in (priority, assignee, list, task_type, tag, status):
+    if tier1_match(field, turn): value = tier1_match(field, turn); continue
+    if tier2_match(field, turn): value = tier2_match(field, turn); continue
+    if tier3_match(field, memory, turn): value = tier3_match(...); continue
+    value = tier4_default(field)
+```
+
+**No tie-break ambiguity**: tiers are strictly ordered. Two memory rules
+competing at tier 3 are resolved by monotonic rule-id (older wins —
+established patterns beat new-arrival overrides).
 
 ### Staleness
 

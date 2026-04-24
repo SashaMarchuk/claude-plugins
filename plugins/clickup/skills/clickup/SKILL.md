@@ -76,7 +76,7 @@ Omit the line entirely if the beneficiary role is not extractable from source. R
 | Field | Default | Override signal |
 |---|---|---|
 | Language | English | none — always EN |
-| Priority | `normal` | urgent/ASAP/P0/burning → urgent; "high priority"/P1 → high; "low priority"/P3 → low |
+| Priority | `normal` | urgent/ASAP/P0/burning → urgent; "high priority"/P1 → high; "low priority"/P3 → low. Resolved via the **4-tier precedence** in `references/config-schema.md` → "Application order": (1) explicit CLI flag > (2) keyword-in-turn > (3) memory rule > (4) default. Keyword-in-turn WINS over memory — e.g. memory rule "Daria = P1" + source "low priority typo for Daria" → priority=low. |
 | Status | `backlog` | only if user explicitly names another status |
 | Task type | `task` | bug signals: `bug`, `broken`, `fails`, `failing`, `regression`, `crash`, `500`, `error`, `doesn't work`, `not working` → propose `bug`, confirm in preview |
 | Tag | none | source names one, or memory rule applies |

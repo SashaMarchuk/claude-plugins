@@ -163,8 +163,13 @@ case "$cmd" in
     json_path="${2:?json-path required}"
     value="${3?value required}"
     state_file="$run_path/state.json"
+    lockdir="$state_file.lock.d"
     tmp=$(mktemp)
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    # Validate path up front so we fail fast without taking the lock.
+    # Caller-supplied text is never interpolated into the jq program string;
+    # only --argjson values reach jq. Closes H-2.
+    path_arr=$(_path_to_json_array "$json_path") || { rm -f "$tmp"; exit 9; }
     # Enforce .current_step enum. The enum mirrors the pipeline state
     # machine documented in skills/run/SKILL.md. Partial mitigation for
     # C-1 (gate bypass); the full gate-consult layers on top below.
@@ -179,38 +184,56 @@ case "$cmd" in
           exit 7
           ;;
       esac
-      # Gate-consult: forward transitions past a gate step require the
-      # corresponding ultra_gates.<gate>.verdict == "PASS". `failed` is
-      # the terminal-failure path and bypasses gate checks. Closes C-1.
+    fi
+    # Take the same mkdir-based lock as `inc`/`dec` so a concurrent set and
+    # inc cannot read-modify-write stale JSON and clobber each other.
+    # Closes H-7.
+    waited=0
+    while ! mkdir "$lockdir" 2>/dev/null; do
+      sleep 0.1
+      waited=$((waited + 1))
+      if [[ $waited -gt 300 ]]; then
+        echo "ERROR: state.sh set lock timeout on $lockdir (held by another worker for >30s)" >&2
+        rm -f "$tmp"
+        exit 4
+      fi
+    done
+    trap 'rmdir "$lockdir" 2>/dev/null || true; rm -f "$tmp"' EXIT
+    # Gate-consult runs INSIDE the lock so the verdict we read is the verdict
+    # we write against — another writer cannot flip the gate between our
+    # read and our mv. Closes C-1.
+    if [[ "$json_path" == ".current_step" ]]; then
+      step_val="${value#\"}"; step_val="${step_val%\"}"
       pre_discover_verdict=$(jq -r '.ultra_gates."pre-discover".verdict // "pending"' "$state_file")
       pre_synthesize_verdict=$(jq -r '.ultra_gates."pre-synthesize".verdict // "pending"' "$state_file")
       case "$step_val" in
         discover|analyze|pre-synthesize-gate)
           if [[ "$pre_discover_verdict" != "PASS" ]]; then
             echo "ERROR: cannot advance .current_step to '$step_val' — ultra_gates.pre-discover.verdict is '$pre_discover_verdict' (require PASS)" >&2
+            rmdir "$lockdir" 2>/dev/null || true
             rm -f "$tmp"
+            trap - EXIT
             exit 8
           fi
           ;;
         synthesize|done)
           if [[ "$pre_discover_verdict" != "PASS" ]]; then
             echo "ERROR: cannot advance .current_step to '$step_val' — ultra_gates.pre-discover.verdict is '$pre_discover_verdict' (require PASS)" >&2
+            rmdir "$lockdir" 2>/dev/null || true
             rm -f "$tmp"
+            trap - EXIT
             exit 8
           fi
           if [[ "$pre_synthesize_verdict" != "PASS" ]]; then
             echo "ERROR: cannot advance .current_step to '$step_val' — ultra_gates.pre-synthesize.verdict is '$pre_synthesize_verdict' (require PASS)" >&2
+            rmdir "$lockdir" 2>/dev/null || true
             rm -f "$tmp"
+            trap - EXIT
             exit 8
           fi
           ;;
       esac
     fi
-    # Parameterize jq program via --argjson for path and value.
-    # Caller-supplied text is never interpolated into the jq program string,
-    # so jq-program injection like `.x = 1 | .status = "passed"` is impossible.
-    # Closes H-2.
-    path_arr=$(_path_to_json_array "$json_path") || exit 9
     if echo "$value" | jq empty 2>/dev/null; then
       jq --argjson p "$path_arr" --argjson v "$value" --arg now "$now" \
          'setpath($p; $v) | .updated_at = $now' "$state_file" > "$tmp"
@@ -219,6 +242,8 @@ case "$cmd" in
          'setpath($p; $v) | .updated_at = $now' "$state_file" > "$tmp"
     fi
     mv "$tmp" "$state_file"
+    rmdir "$lockdir"
+    trap - EXIT
     ;;
 
   inc)

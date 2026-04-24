@@ -50,7 +50,55 @@ Refusal message (literal format):
 
 Silent fall-through is forbidden. The orchestrator MUST NEVER call the Write tool on a path where `lstat` reports a symlink at the final component or any ancestor inside the state root.
 
-(Rule 2: Atomic rename, Rule 3: Advisory flock, Rule 4: Claim-preservation — documented in the next section, "Atomic-Write + Flock + Append-Log Protocol".)
+### Rule 2 — Atomic rename (HIGH-4, replaces plain Write on every state-tree file)
+
+Every state-tree file MUST be written via the write-temp + atomic-rename protocol, NOT plain open-write-close:
+
+1. Write the new payload to a sibling temp file on the SAME filesystem as the final target: `<target>.tmp.<pid>.<nonce>` (e.g. `state.json.tmp.12345.a7f3`). Same-filesystem is required so `rename(2)` is atomic — cross-filesystem rename is NOT atomic and falls back to copy+delete.
+2. `fsync` (or tool-level equivalent — e.g. explicit `sync` via Bash; Python `os.fsync`) the temp file so the new content is on durable storage BEFORE the rename.
+3. `rename(<tmp>, <target>)` — POSIX guarantees this is atomic; readers see EITHER the old inode OR the new one, never a partial/truncated/interleaved file.
+4. Re-apply Rule 1 (symlink defense) to `<target>` immediately BEFORE rename: if `<target>` has become a symlink since the last check (TOCTOU), REFUSE. The rename then either replaces a regular file or creates a new one; it MUST NOT follow a symlink.
+
+Rationale: plain Write under concurrent access leaves windows where a reader observes a truncated or half-written `state.json`, which silently breaks `--resume` (JSON parse fails → launcher warns "no state file, start fresh" per SKILL.md:110, which downgrades tier). Atomic rename eliminates those windows — every `state.json` observed on disk is a complete, consistent snapshot.
+
+### Rule 3 — Advisory flock (HIGH-4, required for every shared file)
+
+Files with multi-writer semantics — `coordination.json`, `territory-map.json`, `synthesis.lock`, and `state.json` under multi-terminal runs — MUST be protected by an advisory file lock. The launcher / orchestrator prompt MUST implement:
+
+- Acquire `flock(<target>.lock, LOCK_EX)` (Linux `flock(1)` / BSD `flock(2)` / Python `fcntl.flock`) BEFORE the read-modify-rename cycle. The lock file is a sibling of the target, e.g. `coordination.json.lock`, and is NEVER itself renamed — only `flock`-ed. Create the lock file with `O_CREAT | O_NOFOLLOW` if it does not exist.
+- Hold the lock across the ENTIRE read-modify-rename sequence: (i) read current payload, (ii) merge this terminal's update into it, (iii) Rule 2 write-temp + rename. Release the lock only after rename succeeds.
+- On lock contention, block up to 30 seconds, then surface `[/ultra state-tree] flock contention on <target>` on the user-visible channel and retry; do NOT give up silently.
+- Single-terminal runs (no `--terminal` flag) MAY skip the flock for per-terminal files (`findings/terminal-N.json`, `claims/terminal-N.lock`) because only one writer exists. Shared files (`coordination.json`, `territory-map.json`, `synthesis.lock`, `state.json`) ALWAYS require the flock regardless of terminal count — a future `--resume` from a different terminal is still a concurrent writer.
+
+Rationale: advisory flock gives mutual exclusion across the read-modify-rename window. Without it, two terminals both read the payload, both merge their own update into a stale snapshot, both write-temp, and both rename — the second rename destroys the first terminal's contribution. Flock serializes the cycle so merges compose.
+
+### Rule 4 — Claim-preservation invariant (HIGH-4, fixes "earliest wins" synthesis lock)
+
+The synthesis-lock rule at Step 4 of "Last Terminal Detection & Synthesis" below ("If multiple claims (file was overwritten): Compare `claimed_at` timestamps. Earliest wins.") is UNIMPLEMENTABLE under plain file overwrite — once the file is overwritten, the earlier claim is gone and no timestamp comparison is possible. With Rules 2 + 3 in force, the correct invariant is an append-log:
+
+**Every concurrent claim MUST be preserved as an entry in a JSON array, not a single scalar `claimed_by` field.** The `synthesis.lock` payload schema becomes:
+
+```json
+{
+  "claims": [
+    { "terminal": 1, "claimed_at": "2026-04-25T10:00:00Z" },
+    { "terminal": 2, "claimed_at": "2026-04-25T10:00:03Z" }
+  ]
+}
+```
+
+Each terminal:
+1. `flock`-s `synthesis.lock.lock` (Rule 3).
+2. Reads current `synthesis.lock` (or initialises `{"claims": []}` if absent).
+3. Appends its own `{terminal, claimed_at}` entry to the `claims` array.
+4. Write-temps + atomically renames (Rule 2).
+5. Releases the flock.
+
+Under this invariant, N concurrent claims ALL land in the array — none are lost to overwrite. "Earliest wins" becomes a well-defined lookup: `winner = min(claims, key=claim.claimed_at)`. The 15-second grace period at Step 4 below remains in place as a second-chance correctness check, but correctness no longer depends on the overwrite NOT happening.
+
+**Same append-log pattern applies to `coordination.json`'s `terminals` registry** and any other "N terminals merge into shared map" write in this document: never overwrite the shared object wholesale. Each terminal's write is a read-merge-rename under flock, preserving every prior terminal's fields.
+
+**Verification property (for T-HIGH-4)**: under two concurrent `/ultra --task=X --terminal=1/2` runs, both terminals' `coordination.json` registrations AND both terminals' `synthesis.lock` claims MUST be present in the final files. This is the contractual acceptance criterion for Rules 2-4 together.
 
 ### state.json Schema
 
@@ -93,7 +141,7 @@ When a terminal starts with `--terminal=N --task=<name>`:
 }
 ```
 
-4. Update `last_phase_update` timestamp in `coordination.json` after completing EACH phase. This replaces heartbeats — synchronous agents cannot emit periodic writes, so phase completion is the liveness signal.
+4. Update `last_phase_update` timestamp in `coordination.json` after completing EACH phase. This replaces heartbeats — synchronous agents cannot emit periodic writes, so phase completion is the liveness signal. Every such update MUST follow the read-modify-rename-under-flock cycle from Rules 2 + 3 of the Symlink-safe Write Protocol above: acquire `flock(coordination.json.lock, LOCK_EX)`, read current payload, merge this terminal's `last_phase_update` into its own subkey, write-temp to `coordination.json.tmp.<pid>.<nonce>`, atomically rename, release lock. Never overwrite the shared `terminals` object wholesale; the append-log invariant (Rule 4) requires every terminal's fields to survive concurrent writes.
 
 ## Territory Claiming (Strict Lock Files)
 
@@ -187,19 +235,23 @@ Read `coordination.json`. Are ALL registered (non-stale) terminals "finished"?
 - If YES: Proceed to Step 3.
 
 ### Step 3: Claim Synthesis
-Write `synthesis.lock`:
+
+Under the append-log protocol (Rule 4 above), `synthesis.lock` is a JSON array of claims, NOT a single scalar. Each terminal acquires `flock(synthesis.lock.lock, LOCK_EX)`, reads the current claims array (or `{"claims": []}` if absent), appends its own entry, write-temps + atomically renames, then releases the flock:
+
 ```json
 {
-  "claimed_by": N,
-  "claimed_at": "ISO8601"
+  "claims": [
+    { "terminal": N, "claimed_at": "ISO8601" }
+  ]
 }
 ```
 
 ### Step 4: Wait & Verify (15-second grace period)
-Use Bash tool: `sleep 15` to wait. Then re-read `synthesis.lock`.
-- If `claimed_by` is still YOUR terminal number: You are the synthesizer. Proceed.
-- If `claimed_by` changed to another terminal: That terminal is the synthesizer. Exit.
-- If multiple claims (file was overwritten): Compare `claimed_at` timestamps. Earliest wins.
+
+Use Bash tool: `sleep 15` to wait for any concurrent claim to land. Then re-read `synthesis.lock`.
+- If the `claims` array has only YOUR entry: you are the synthesizer. Proceed.
+- If the `claims` array has multiple entries: apply the "earliest wins" lookup: `winner = min(claims, key=c.claimed_at)`. If the winner is YOUR terminal, proceed. Otherwise that terminal is the synthesizer; exit.
+- Claim-preservation invariant: under Rules 2-4 (Symlink-safe Write Protocol above), NO claim is ever lost to overwrite. Every concurrent claim lands in the array. "Earliest wins" is a well-defined deterministic lookup, not a best-effort compare-with-whatever-survived.
 
 ### Step 5: Run Synthesis
 The synthesizing terminal:

@@ -68,9 +68,19 @@ User may provide event ID, or a title + approximate time.
 
 ### Cancel flow (Step 7)
 
-1. **Find event** (same as update).
-2. **Confirm**: `AskUserQuestion` "Cancel `<title>` on `<date>` at `<time>`? Attendees will be notified."
-3. **Delete** via `events delete` with `sendUpdates: "all"`.
+1. **Find event** (same as update). Extract `attendees[]` from the resolved event; compute `attendee_count = len(attendees or [])` (excluding `resource: true` and declined-organizer entries).
+2. **Resolve `sendUpdates` mode** — honor `config.defaults.send_updates` (same as create flow), NOT a hardcoded `"all"`. Three modes: `"all"` (Google-default blast), `"externalOnly"`, `"none"` (silent cancel; no emails). If the config value is missing or not one of the three, fall back to `"all"`.
+3. **High-attendee confirmation prompt (MANDATORY when `attendee_count > 10`).** Regardless of the configured `send_updates`, when `attendee_count > 10` prompt an explicit `AskUserQuestion` to confirm the notification mode:
+   ```
+   Cancelling `<title>` on `<date>` at `<time>` — <attendee_count> attendees.
+   How should Google notify them?
+     [All attendees — send cancellation emails to all <attendee_count>]
+     [External only — notify only attendees outside your domain]
+     [None — silent cancel, no emails]
+   ```
+   The user's pick overrides `config.defaults.send_updates` for THIS cancel only. The count in the prompt is load-bearing — it is the blast-radius surface the user needs to see before clicking confirm.
+4. **Confirm**: `AskUserQuestion` "Cancel `<title>` on `<date>` at `<time>`? `<attendee_count>` attendees will be notified via `<resolved_sendUpdates>`." The attendee count and resolved mode BOTH appear verbatim — never show a confirmation without the count.
+5. **Delete** via `events delete` with `sendUpdates: <resolved_sendUpdates>` (value resolved in step 2, possibly overridden in step 3). NEVER hardcode `"all"`.
 
 ---
 

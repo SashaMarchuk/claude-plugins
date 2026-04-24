@@ -44,10 +44,26 @@ def atomic_update(path, mutate):
         except json.JSONDecodeError:
             os.replace(path, path + f".corrupt-{int(time.time())}")
             data = {}
+        # Quarantine gate: the schemaVersion field MUST exist and MUST be an int.
+        # Anything else — string ("999"), float (1.0), null, missing key, list,
+        # dict — is corruption or a forged payload. Quarantine to
+        # `<file>.corrupt-<epoch>` and refuse write. This closes the silent-
+        # downgrade vector where a non-int schemaVersion fell through the
+        # isinstance() guard and got rewritten as CURRENT_SCHEMA_VERSION, losing
+        # newer-format data.
+        if data and ("schemaVersion" not in data or not isinstance(data.get("schemaVersion"), int)):
+            os.replace(path, path + f".corrupt-{int(time.time())}")
+            raise SchemaVersionTooNew(
+                f"{path} has missing or non-integer schemaVersion "
+                f"(got {type(data.get('schemaVersion')).__name__}={data.get('schemaVersion')!r}); "
+                "quarantined. Refusing write."
+            )
         # Refuse to write if on-disk schema is newer than this code understands.
         # Prevents a newer writer from being silently downgraded by older reader.
+        # Back-compat window (90 days per SCHEMA_VERSION_DEPRECATION_DAYS):
+        # readers accept schemaVersion in {CURRENT_SCHEMA_VERSION - 1, CURRENT_SCHEMA_VERSION}.
         on_disk_version = data.get("schemaVersion", CURRENT_SCHEMA_VERSION)
-        if isinstance(on_disk_version, int) and on_disk_version > CURRENT_SCHEMA_VERSION:
+        if on_disk_version > CURRENT_SCHEMA_VERSION:
             raise SchemaVersionTooNew(
                 f"{path} has schemaVersion={on_disk_version}, this helper supports {CURRENT_SCHEMA_VERSION}. "
                 "Update the plugin and retry."

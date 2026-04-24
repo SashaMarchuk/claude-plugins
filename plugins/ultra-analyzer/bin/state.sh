@@ -23,6 +23,12 @@ shift || { echo "Usage: state.sh {init|get|set|inc|dec|checkpoint} ..." >&2; exi
 case "$cmd" in
   init)
     run_name="${1:?run-name required}"
+    # Sanitize run-name — strict allowlist to block path traversal
+    # (e.g. `../../tmp/evil`) and shell-meta injection. Closes H-3.
+    [[ "$run_name" =~ ^[A-Za-z0-9_-]+$ ]] || {
+      echo "ERROR: run-name must match ^[A-Za-z0-9_-]+$ (got: $run_name)" >&2
+      exit 6
+    }
     # Connector hint is free-form (e.g. "mongo", "fs", "custom", "github-api").
     # Informational only — actual routing goes through <run>/connector.md.
     connector_hint="${2:-custom}"

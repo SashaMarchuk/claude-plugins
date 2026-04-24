@@ -117,7 +117,7 @@ This flow is **identical in both `/clickup` and `/gevent`** — onboarding from 
 - Your full name
 - Your work email
 
-Seed the skeleton: `{schemaVersion: 1, user: {name, email, external_ids: {}}, teammates: [], onboarding_complete: false, updated_at: <now>}`.
+Seed the skeleton: `{schemaVersion: 2, user: {name, email, external_ids: {}}, teammates: [], onboarding_complete: false, updated_at: <now>}`.
 
 #### Step 3 — **Confirm user identity ACROSS sources** (before teammate search)
 
@@ -441,7 +441,7 @@ Re-running `--onboard identity` diffs EACH teammate's current `latin_alias` agai
 
 #### Step 8 — Write identity.json atomically
 
-Via the `atomic_update` helper (see `config-schema.md` → "Reference write helper"). `fcntl.flock` on `~/.claude/shared/.identity.json.lock` for the entire read-modify-write. Set `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`.
+Via the `atomic_update` helper (see `config-schema.md` → "Reference write helper"). `fcntl.flock` on `~/.claude/shared/identity.json.lock` for the entire read-modify-write. Set `schemaVersion: 2`, `onboarding_complete: true`, `updated_at: <now>`.
 
 #### Step 9 — Preserve unknown keys (always)
 
@@ -490,7 +490,7 @@ Writes `~/.claude/gevent/config.json`. Assumes `~/.claude/shared/identity.json` 
    - `past_time_check`: `true`
    - `notes_bot_decided`: `true` (already set by step 2 — never editable here; surfaced for transparency only).
 
-5. **Write config** to `~/.claude/gevent/config.json` via atomic helper + flock on `~/.claude/gevent/.config.json.lock`. Fields: `schemaVersion: 1`, `onboarding_complete: true`, `updated_at: <now>`, `defaults`, `behavior` (including `notes_bot_decided: true`), `always_include[]`.
+5. **Write config** to `~/.claude/gevent/config.json` via atomic helper + flock on `~/.claude/gevent/.config.json.lock`. Fields: `schemaVersion: 2`, `onboarding_complete: true`, `updated_at: <now>`, `defaults`, `behavior` (including `notes_bot_decided: true`), `always_include[]`.
 
 6. **If a call seed was carried in**, resume [default](#default) now.
 

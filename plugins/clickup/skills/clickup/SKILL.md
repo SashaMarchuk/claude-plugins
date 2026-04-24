@@ -113,10 +113,16 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/geve
 ### Duplicate detection (before create)
 
 1. Search open tickets in target list via `mcp__clickup__clickup_filter_tasks` (include_closed=false).
-2. Compute lemmatized token overlap between candidate title and each open ticket's title.
-3. **Interactive mode**: surface top 3 at ≥70% overlap. User picks `create anyway` / `link to existing` / `cancel`.
-4. **`--auto` mode**: only block at ≥90% overlap. Below that, proceed silently.
-5. Also compare source-language keywords (before translation) to catch cross-language dupes.
+2. **Pinned similarity metric — deterministic under identical inputs.** Compute the **Jaccard coefficient** on **casefolded, NFKC-normalised word tokens** between the candidate title and each open ticket's title:
+   - **Tokenise**: split on Unicode whitespace + ASCII punctuation `[\s\.,;:!?\(\)\[\]\{\}"'`\-/\\]+`. Drop empty tokens.
+   - **Normalise each token**: `unicodedata.normalize("NFKC", tok).casefold()`. (Casefold — NOT `.lower()` — handles Turkish İ/i and German ß correctly; NFKC collapses compatibility variants like fullwidth digits.)
+   - **Stopword removal** (fixed list, documented — do NOT expand arbitrarily): `{"a","an","and","are","as","at","be","by","for","from","has","have","in","is","it","its","of","on","or","that","the","to","was","were","will","with"}`. English-only; source-language keyword compare at step 5 handles other languages.
+   - **Build two sets** `A` (candidate tokens) and `B` (existing-ticket tokens) from the remaining tokens.
+   - **Jaccard** = `|A ∩ B| / |A ∪ B|`. If `|A ∪ B| == 0` (both titles empty after stopword removal), overlap = 0.
+   This metric is pinned so two runs on the same inputs always agree on whether the 70% / 89.5% / 90% bands trigger.
+3. **Interactive mode**: surface top 3 at Jaccard `>= 0.70` overlap. User picks `create anyway` / `link to existing` / `cancel`.
+4. **`--auto` mode**: only block at Jaccard `>= 0.895` overlap (pinned threshold — deliberately just below the 0.90 boundary to catch near-identical titles that LLM-generated phrasing drift would otherwise slip past). Below that, proceed silently. Above, HALT with "possible duplicate: <url> (Jaccard=<value>, threshold 0.895)".
+5. Also compare source-language keywords (before translation) to catch cross-language dupes. Same metric (Jaccard on casefolded-NFKC tokens); stopword set is English-only, so non-English token sets skip stopword removal (the information content of e.g. "і", "та" is minimal but they'd dilute the set; if this becomes a problem in practice, add a per-language stopword map under config — do NOT silently expand the English list).
 
 ### Idempotency (retry safety)
 

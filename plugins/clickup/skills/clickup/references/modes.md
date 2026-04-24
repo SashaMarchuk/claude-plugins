@@ -284,14 +284,20 @@ Confirm Latin aliases for non-Latin teammates (edit the right side; leave as-is 
   …
 ```
 
-Default transliteration uses Python's `unicodedata.normalize("NFKD", name)` then strip combining marks, then pass through a Cyrillic→Latin table:
+Default transliteration uses Python's `unicodedata.normalize("NFKD", name)` then strip combining marks, then pass through a Cyrillic→Latin table. **The hard sign `ъ` and soft sign `ь` map to distinct marker characters (NOT empty string) to preserve distinguishability between otherwise-identical names** — closes PLG-clickup-F11 (`Миша` vs `Мишьа` would otherwise collapse to identical `Misha`, defeating the homoglyph gate):
 
 ```python
 CYRILLIC_TO_LATIN = {
     "а":"a","б":"b","в":"v","г":"h","ґ":"g","д":"d","е":"e","є":"ie","ё":"io",
     "ж":"zh","з":"z","и":"y","і":"i","ї":"i","й":"i","к":"k","л":"l","м":"m",
     "н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"kh",
-    "ц":"ts","ч":"ch","ш":"sh","щ":"shch","ъ":"","ы":"y","ь":"","э":"e","ю":"iu","я":"ia",
+    "ц":"ts","ч":"ch","ш":"sh","щ":"shch",
+    # Hard/soft signs preserved as markers (NOT dropped to ""). This is load-
+    # bearing: dropping both would collapse `Миша` (no sign) and `Мишьа`
+    # (soft sign) to the same `Misha` latin_alias, and the homoglyph gate
+    # on latin_alias would then silently accept both as identical records.
+    # The markers are ASCII-safe, unambiguous, and visually signal "sign present".
+    "ъ":"__","ы":"y","ь":"_","э":"e","ю":"iu","я":"ia",
 }
 def translit(name):
     out = []
@@ -306,6 +312,33 @@ def translit(name):
             out.append("")  # unknown non-ASCII → drop
     return "".join(out).strip()
 ```
+
+The teammate record carries a **`translit_alias` field** (separate from `latin_alias` — kept in `identity.json` under `teammates[]`) containing the raw output of `translit()` including sign-markers. This preserves the distinguishing signal even when `latin_alias` is a user-chosen short form (e.g. `Misha`). The `translit_alias` is ONLY consumed by the collision pre-pass below — never rendered in tickets.
+
+**Mandatory collision pre-pass on ALL new transliterations (not only UX-fatigue-filtered ones).** Before any silent upsert of a new Cyrillic-sourced teammate, run this check:
+
+```python
+def collision_prepass(new_teammate, existing_teammates):
+    new_tr = translit(new_teammate["first_name"])
+    new_la = new_teammate["latin_alias"]
+    for existing in existing_teammates:
+        ex_tr = existing.get("translit_alias") or translit(existing["first_name"])
+        ex_la = existing["latin_alias"]
+        # Collision: translit_alias identical OR latin_alias identical
+        # (after casefold). Fires even when the Cyrillic originals differ
+        # only by a sign (ь / ъ) that the marker-preserving table now
+        # keeps distinct in translit_alias — but the user-chosen
+        # latin_alias may still collide. Either collision forces
+        # disambiguation.
+        if new_tr.casefold() == ex_tr.casefold() or new_la.casefold() == ex_la.casefold():
+            return ("collision", existing)
+    return ("no-collision", None)
+```
+
+On collision: NEVER silent-upsert. Force `AskUserQuestion` disambiguation with the full names, Cyrillic originals, emails, and transliterated forms shown. This extends the Step 7b collision-pre-pass (previously only run on UX-fatigue-filtered short-alias proposals) to EVERY new transliteration regardless of whether the teammate surfaces in the Step 7b card. Examples:
+
+- `Миша` (new) vs `Мишьа` (existing) with marker table: `translit_alias = "Misha"` vs `"Mish_a"` → translit_alias differs → if `latin_alias` also differs (e.g. "Misha" vs "Misha.A"), no collision; if `latin_alias` identical, collision fires on `latin_alias`.
+- `Миша` (new) vs `Миша` (existing, different email, different last name): `translit_alias` identical → collision fires; disambiguation prompt required.
 
 If the transliteration yields an empty string (e.g. all-emoji or all-symbol name), fall back to the email local-part before `@`.
 

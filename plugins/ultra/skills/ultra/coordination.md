@@ -23,8 +23,11 @@ Only when BOTH `--task=<name>` AND `--terminal=<N>` flags are present. Without t
   synthesis.lock          # Lock file for synthesis claim
   summary.md              # Executive summary
 
-.planning/ultra/
-  lessons.md              # Self-improvement log (GLOBAL, not per-task)
+~/.claude/skills/ultra/
+  global-lessons.md       # Self-improvement log (GLOBAL, cross-project, cross-task).
+                          # Canonical path — this is the ONLY lessons path. Do NOT write
+                          # to `.planning/ultra/lessons.md` or any per-project variant.
+                          # See SKILL.md "Self-Improvement" for the shard-write protocol.
 ```
 
 ### state.json Schema

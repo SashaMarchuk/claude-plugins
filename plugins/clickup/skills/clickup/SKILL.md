@@ -34,7 +34,13 @@ Universal skill for creating and managing ClickUp tickets. Enforces consistent t
 3. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard.
 4. **Read memory** from `~/.claude/clickup/memory.md`. Apply rules. If any rule is unused >60 days or applied >20 times, prepend a one-line review banner: "`💡 N memory rules may be stale — run /clickup --memory list`".
 5. **Check config freshness.** If `config.updated_at` > 30 days ago, prepend: "`💡 Config is 30+ days old — run /clickup --onboard to refresh`". Non-blocking.
-6. **Verify ClickUp MCP auth.** On 401 / timeout / disconnected MCP, HALT with re-auth instructions. **Never fabricate a success URL.**
+6. **Verify ClickUp MCP auth with a specific named probe.** Call `mcp__clickup__clickup_get_workspace_hierarchy` (low-cost, returns a small workspace-tree payload — matches the existing call pattern in the workspace-switch flow at `references/modes.md` → `workspace`). Classify the return via named dispatch — DO NOT collapse into a single "fail" bucket:
+   - **`auth-ok`** — call returns a workspace list (any non-empty result, even a single workspace). Proceed.
+   - **`auth-fail`** — HTTP 401 / 403, MCP reports "not authenticated" / "invalid token" / "disconnected" / any explicit credential-rejection error. HALT with re-auth instructions: "ClickUp MCP auth failed (rc=auth-fail). Run `mcp__clickup__authenticate` then retry /clickup."
+   - **`retryable-network`** — timeout, connection refused, DNS failure, HTTP 5xx, or MCP server process unreachable. Retry ONCE after 2s backoff; on second failure HALT with "ClickUp MCP unreachable (rc=retryable-network). Check network/MCP server, then retry /clickup." Do NOT escalate to `auth-fail` — a transient network error is not a credential problem.
+   - **`other`** — any unclassified error (malformed response, unexpected shape). HALT with the raw error and rc=other; never silently proceed.
+
+   **Never fabricate a success URL.** The probe MUST fire on EVERY invocation — do not skip under context pressure. If you cannot name the probe call or classify its return in your own words, you have not verified auth.
 7. **Re-validate teammates lazily.** If any `teammates[].last_validated_at` > 7 days (or `null`), silently fetch workspace members; diff against identity; surface significant changes (removed users, renames) as a banner. Updates go to `~/.claude/shared/identity.json` via the atomic helper in `references/config-schema.md`.
 
 ## Step 3: Route by flag

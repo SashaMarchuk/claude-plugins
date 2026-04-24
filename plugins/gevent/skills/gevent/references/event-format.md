@@ -155,6 +155,45 @@ If there's nothing worth saying, leave description empty.
 
 4. **Delete the tempfile in a `finally` clause**, not "on success" — orphan event bodies in /tmp are low-signal noise for a later attacker scraping `/tmp`.
 
+### Worked example — `events patch` (UPDATE flow)
+
+Parallel discipline to `events insert`: build in Python, write to a tempfile, pass via `$(cat ...)`, classify errors, delete in `finally`. Only include CHANGED fields in the patch body — unsent fields are preserved server-side.
+
+```python
+import json, tempfile, time, os
+# patch_body contains ONLY the fields being changed. Do NOT include `id`,
+# `htmlLink`, `created`, etc. — they're immutable or server-derived.
+patch_body = {
+    "start": {"dateTime": "2026-04-23T15:00:00", "timeZone": "America/New_York"},
+    "end":   {"dateTime": "2026-04-23T15:30:00", "timeZone": "America/New_York"},
+}
+ts = int(time.time())
+tmp_path = f"/tmp/cal_patch_{ts}.json"
+try:
+    with open(tmp_path, "w") as f:
+        json.dump(patch_body, f, ensure_ascii=False)  # auto-escapes quotes / control chars
+    # pass tmp_path to the shell block below via env var or f-string
+finally:
+    # always delete, even on exception — see rule 4 above
+    try:
+        os.remove(tmp_path)
+    except FileNotFoundError:
+        pass
+```
+
+```bash
+# <event_id> comes from the prior events list / events get response, NOT user-typed.
+# sendUpdates honors config.defaults.send_updates (same as create flow — never hardcoded).
+npx @googleworkspace/cli calendar events patch \
+  --params "$(python3 -c "import json; print(json.dumps({'calendarId':'primary','eventId':'<event_id>','sendUpdates':'<config.defaults.send_updates>','conferenceDataVersion':1}))")" \
+  --json "$(cat /tmp/cal_patch_${ts}.json)" 2>/tmp/gws_err.${ts}
+rc=$?; err=$(cat /tmp/gws_err.${ts}); rm -f /tmp/gws_err.${ts} /tmp/cal_patch_${ts}.json
+```
+
+On non-zero `rc`, classify `err` via the same auth / network / transient / fallthrough buckets as SKILL.md pre-flight step 5 — NEVER silently swallow. On HTTP 404, surface "Event not found — it may have been deleted or the ID is stale" instead of the raw stderr.
+
+**Why the parallel structure matters.** `events patch` accepts user-typed strings (new title, new description, new attendee display names) on the same threat surface as `events insert`. Inline `--json '{...}'` for patch would re-introduce the injection vector that tempfile discipline closes for insert. Same rules apply; this worked example removes ambiguity.
+
 ### Input validation (all user-typed strings that enter the body)
 
 Before calling `json.dump`:

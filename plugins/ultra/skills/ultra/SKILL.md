@@ -84,6 +84,19 @@ Only if `--ask` (bare, no `=value`) is present, use AskUserQuestion AFTER the St
 
 `--ask=critical` and `--ask=all` do NOT trigger this pre-flight sync — they are passed to the orchestrator for in-pipeline pauses only. They also do NOT suppress Step 3a.
 
+### Step 3c: `--xl` + wrapped-skill combined-cost gate (requires `--i-know-the-cost`)
+
+If the resolved tier is `--xl` AND a wrapped skill was detected in Step 1, the launcher MUST check `$ARGUMENTS` for the explicit literal flag `--i-know-the-cost`. This covers the compounding cost-bomb scenario where /ultra's 23-agent swarm runs alongside the wrapped skill's own multi-agent pipeline (e.g. `/deep-research`'s internal swarm), producing 25+ simultaneous Opus sub-agents.
+
+- If `--i-know-the-cost` is present in `$ARGUMENTS`: proceed to Step 4.
+- If `--i-know-the-cost` is ABSENT: the launcher MUST REFUSE to proceed. Emit this exact refusal message to the user-visible channel and stop (do NOT spawn the orchestrator, do NOT call AskUserQuestion — just stop):
+
+  ```
+  [/ultra --xl + wrapped skill] REFUSED: combined --xl swarm (~23 Opus agents) plus a wrapped skill's own multi-agent pipeline is a compounding cost-bomb. Re-run with --i-know-the-cost to acknowledge, or drop to --large / --medium / --small.
+  ```
+
+The `--i-know-the-cost` gate is specifically for the `--xl` + wrapped-skill combination. `--xl` alone (no wrapped skill) does NOT require this flag — Step 3a's preflight is sufficient. Lower tiers with a wrapped skill also do NOT require this flag. The gate refuses unless the user (or parent agent) explicitly acknowledges the compounded cost.
+
 ## Step 4: Check for --resume
 
 If `--resume` is present:

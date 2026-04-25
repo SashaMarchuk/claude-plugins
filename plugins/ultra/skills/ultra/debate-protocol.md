@@ -33,15 +33,35 @@ Launch F1, F2, AG1, AG2 in PARALLEL. They must NOT see each other's arguments.
 
 Each side receives the opposing side's arguments and must respond.
 
-**MANDATORY CONCESSION RULE**: Each agent MUST use the exact phrase `"I concede [X]"` for any point where the opposing evidence is stronger than their position. Agents who refuse to concede ANY point when evidence clearly favors the opponent are flagged for intellectual dishonesty.
+**MANDATORY CONCESSION RULE (MED-3, structured schema)**: Each agent MUST emit a structured concession block — NOT a free-form exact phrase — for any point where the opposing evidence is stronger than their position. Soft concessions like "you have a point", "fair enough", "OK that's reasonable", or "I concede" without the schema fields are FLAGGED as missing concessions and contribute to the agent's intellectual-dishonesty score.
+
+**Concession schema (literal markers + 3 required fields)**:
+
+```
+[CONCESSION-BEGIN]
+conceded: <one-line summary of the opposing point being conceded>
+evidence: <evidence anchor that won this point — [FILE:path:line], [URL:src], [AGENT:ID], or [DATA:metric]>
+residual_position: <what of the agent's original stance still stands after this concession, or "core position invalidated" if the concession undermines the whole argument>
+[CONCESSION-END]
+```
+
+The orchestrator parses concession blocks by splitting on the literal `[CONCESSION-BEGIN]` / `[CONCESSION-END]` markers. A block is **valid** only if all three fields (`conceded`, `evidence`, `residual_position`) are present, non-empty, and the `evidence` line carries a real anchor type (one of `[FILE:...]`, `[URL:...]`, `[AGENT:...]`, `[DATA:...]`). Missing markers, missing fields, or an `evidence` line without an anchor → the concession is logged as `MISSING-SCHEMA` and feeds Phase 8 as a slop flag.
 
 **Prompt for rebuttal agents**:
 > "You have seen the opposing side's 3 arguments with evidence. For each argument:
-> 1. If their evidence is stronger than your position on this point, you MUST write: 'I concede [their point]' followed by why.
+> 1. If their evidence is stronger than your position on this point, you MUST emit a concession block in the schema:
+>    ```
+>    [CONCESSION-BEGIN]
+>    conceded: <their point>
+>    evidence: <anchor that wins it, e.g. [FILE:src/api.ts:42] or [DATA:p99=12ms]>
+>    residual_position: <what of your stance still holds, or "core position invalidated">
+>    [CONCESSION-END]
+>    ```
+>    Soft language ("you have a point", "fair enough", a bare `I concede` without the three fields) does NOT count — the orchestrator parses on the literal markers.
 > 2. If you can counter their evidence, present your counter-evidence with citations.
 > 3. If the point is genuinely debatable, state why and what additional evidence would resolve it.
 >
-> Intellectual honesty is paramount. Refusing to concede when evidence is clear is itself a form of slop."
+> Intellectual honesty is paramount. Refusing to concede when evidence is clear, OR concedeing without the schema, is itself a form of slop."
 
 ### Round C: Final Statements
 
@@ -88,16 +108,17 @@ The judge MUST classify the verdict using the following numeric rule. Compute th
 
 ## Concession Tracker
 
-The orchestrator maintains a concession tracker:
+The orchestrator maintains a concession tracker by parsing the structured `[CONCESSION-BEGIN]` / `[CONCESSION-END]` blocks emitted in Round B (see MANDATORY CONCESSION RULE above). Each tracker entry records all three schema fields verbatim:
 
 ```
 CONCESSION LOG:
-- F1 conceded: [point] because [evidence]
-- AG2 conceded: [point] because [evidence]
-- F2 refused to concede [point] despite [evidence] → FLAG: intellectual dishonesty
+- F1: conceded="<point>" evidence="<anchor>" residual_position="<text>"
+- AG2: conceded="<point>" evidence="<anchor>" residual_position="core position invalidated"
+- F2: MISSING-SCHEMA — wrote "you have a point" without [CONCESSION-BEGIN]/[CONCESSION-END] markers → FLAG: soft concession, schema not used
+- F2: NO-CONCESSION on [point] despite [evidence] → FLAG: intellectual dishonesty
 ```
 
-The concession log is a PRIMARY output signal — it reveals which positions actually survived scrutiny. Include it in the Phase 9 synthesis.
+Soft concessions ("you have a point", "fair enough", bare `I concede` without the three required fields) are tracked as `MISSING-SCHEMA` rather than as valid concessions. Both `MISSING-SCHEMA` and `NO-CONCESSION` flags feed Phase 8 (Anti-Slop) and the judge's `Intellectual honesty (0-10)` axis. The concession log is a PRIMARY output signal — it reveals which positions actually survived scrutiny under the structured schema. Include it in the Phase 9 synthesis.
 
 ## Consensus Trap Detection
 

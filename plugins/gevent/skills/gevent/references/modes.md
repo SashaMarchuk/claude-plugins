@@ -26,7 +26,41 @@ Interactive mode. Detects intent (create / update / cancel) from the user's phra
 | **Update** | "move", "reschedule", "change", "update", "add attendee" | Update flow (Step 6) |
 | **Cancel** | "cancel", "delete", "remove" | Cancel flow (Step 7) |
 
-If genuinely ambiguous, `AskUserQuestion` once to disambiguate.
+#### Precedence rule (load-bearing — cancel + update simultaneous)
+
+When a single turn matches BOTH the cancel-verb set AND the update-verb set (e.g. "cancel and reschedule X to 3pm", "delete the old one and move it to Friday", "remove and re-book Misha for Tuesday"), **update wins over cancel** — route to the Update flow, NOT the Cancel flow. Rationale: cancel-then-recreate has user-visible side effects that re-scheduling does NOT — every attendee receives a cancellation email AND a fresh invite (two notifications, often interpreted as "the meeting was cancelled" because the cancellation lands first), the original event ID is destroyed (breaking any external links / Slack reminders / Sembly recordings tied to that ID), and the conferenceData (Meet link) is regenerated, invalidating bookmarks. A single `events patch` reschedule preserves the event ID, the Meet link, and any third-party hooks — and Google sends a single "updated" notification per attendee instead of two.
+
+Algorithm:
+
+```python
+CANCEL_VERBS = {"cancel", "delete", "remove"}
+UPDATE_VERBS = {"move", "reschedule", "change", "update", "add attendee", "remove attendee"}
+text = phrase.casefold()
+has_cancel = any(v in text for v in CANCEL_VERBS)
+has_update = any(v in text for v in UPDATE_VERBS)
+has_new_time = bool(re.search(r"\bto \d|at \d|on \w+day|tomorrow|next week", text))
+if has_cancel and has_update:
+    intent = "update"  # update wins; reschedule semantics preferred
+elif has_cancel and has_new_time:
+    intent = "update"  # "cancel and move to 3pm" without explicit update verb still implies reschedule
+elif has_cancel:
+    intent = "cancel"
+elif has_update:
+    intent = "update"
+else:
+    intent = "create"
+```
+
+Examples:
+- "cancel and reschedule X to 3pm" → cancel + update + new-time → **update** (reschedule).
+- "cancel X for me" → cancel only → cancel.
+- "delete the meeting and move it to Friday" → cancel + update + new-time → **update** (move keeps event ID).
+- "move Misha off the call" → update only (remove-attendee sub-intent) → update.
+- "remove the call" → cancel only (no update verb, no new-time) → cancel.
+
+The `/gevent:update <text>` and `/gevent:delete <text>` command shims explicitly bypass this precedence — the user has already chosen the intent at the command level. The skill's intent classifier runs only when the user invokes `/gevent` or `/gevent:schedule` without an explicit sub-command.
+
+If — AFTER applying the precedence rule — intent is still genuinely ambiguous (e.g. "do something with the X meeting"), `AskUserQuestion` once to disambiguate. The precedence rule fires BEFORE the ambiguity prompt, so the cancel+update case never triggers a needless prompt.
 
 ### Create flow
 

@@ -529,7 +529,7 @@ gevent/config.json
   Schema:        v1  ✓
 
 Google CLI auth:  OK (last verified: 4s ago)
-Legacy shadow:    ~/.claude/skills/create-call/  ⚠  remove when done migrating
+Legacy shadow:    [list every hit from the broadened glob in SKILL.md step 1 — `~/.claude/skills/create-call/`, `~/.claude.backup-*/skills/create-call/`, `~/.claude.bak/`, `~/.claude.old*/`, `~/.claude-backup-*/`, `~/.claude-plugins-backup-*/`]  ⚠  remove when done migrating
 ```
 
 Never mutates state. Safe to run any time.

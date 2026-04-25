@@ -297,10 +297,19 @@ Written by `--onboard calendar`. Read on every invocation.
 
 ## Legacy user-level skill detection
 
-If `~/.claude/skills/create-call/` exists when the plugin loads, it shadows the plugin (user-level skills take precedence over plugin-installed skills). The plugin emits a banner on every invocation:
+The shadow check uses a broadened glob (see `SKILL.md` step 1) covering the canonical path AND backup-dir variants produced by Migration Assistant / Time Machine restores, chezmoi/yadm/dotbot dotfile sync, and common user renames:
+
+- `~/.claude/skills/create-call/` (canonical)
+- `~/.claude.backup-*/skills/create-call/` and `~/.claude.backup-*/skills-create-call/`
+- `~/.claude.bak/skills/create-call/` and `~/.claude.bak/skills-create-call/`
+- `~/.claude.old*/skills/create-call/` and `~/.claude.old*/skills-create-call/`
+- `~/.claude-backup-*/skills/create-call/` and `~/.claude-backup-*/skills-create-call/`
+- `~/.claude-plugins-backup-*/skills-create-call/` and `~/.claude-plugins-backup-*/skills/create-call/`
+
+If any of those globs match a directory, the plugin emits a banner on every invocation enumerating every hit:
 
 ```
-💡 Legacy user-level create-call detected at ~/.claude/skills/create-call/ — it shadows this plugin. Remove it when you're done migrating.
+⚠ Legacy user-level create-call skill detected at: <hit_1>, <hit_2>, … — this plugin is now called gevent. Remove with: rm -rf <each path>. Backups under ~/.claude.backup-*, ~/.claude.bak, ~/.claude.old*, ~/.claude-backup-* are caught here too.
 ```
 
 The plugin does NOT auto-delete the legacy directory. The user may still have `contacts.json` data there they want to copy over. Removal is their decision.

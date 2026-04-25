@@ -31,10 +31,31 @@ Invocation forms (sub-commands map directly to the mode flags below):
 
 ## Step 2: Pre-flight (every invocation, in order)
 
-1. **Shadow check FIRST.** If `~/.claude/skills/create-call/` exists (legacy user-level skill — this plugin is the `create-call` successor, now renamed to `gevent`), the user-level skill wins over plugin-installed skills by Claude Code precedence. If the directory exists, prepend a loud banner on every invocation until it's gone:
-   > `⚠ Legacy user-level create-call skill detected at ~/.claude/skills/create-call/ — this plugin is now called gevent; remove the legacy with rm -rf ~/.claude/skills/create-call`
+1. **Shadow check FIRST (broadened glob — Migration Assistant / Time Machine / chezmoi / yadm dotfile-restore paths all covered).** Detect a shadowing legacy `create-call` skill via the union of these glob patterns AND the canonical path. The author already globs backup dirs for the legacy contacts loader at `references/modes.md` Step 7b — the shadow check uses the SAME globbing discipline so the two stay in lockstep:
+   ```python
+   import glob, pathlib
+   home = pathlib.Path.home()
+   patterns = [
+       str(home / ".claude/skills/create-call"),                       # canonical legacy path
+       str(home / ".claude.backup-*/skills/create-call"),              # macOS Migration Assistant / Time Machine restore
+       str(home / ".claude.backup-*/skills-create-call"),              # alt naming used by some restore tools
+       str(home / ".claude.bak/skills/create-call"),                   # common user rename
+       str(home / ".claude.bak/skills-create-call"),
+       str(home / ".claude.old*/skills/create-call"),                  # `.claude.old`, `.claude.old1`, `.claude.old-2026-04-24`
+       str(home / ".claude.old*/skills-create-call"),
+       str(home / ".claude-backup-*/skills/create-call"),              # dash-prefix variant (chezmoi default suffix)
+       str(home / ".claude-backup-*/skills-create-call"),
+       str(home / ".claude-plugins-backup-*/skills-create-call"),      # post-migration backup; see modes.md Step 7b
+       str(home / ".claude-plugins-backup-*/skills/create-call"),
+   ]
+   shadow_hits = []
+   for pat in patterns:
+       shadow_hits += [p for p in glob.glob(pat) if pathlib.Path(p).is_dir()]
+   ```
+   If `shadow_hits` is non-empty, prepend a loud banner on every invocation until ALL hits are removed (banner enumerates every hit path, not just the first):
+   > `⚠ Legacy user-level create-call skill detected at: <hit_1>, <hit_2>, … — this plugin is now called gevent. Remove with: rm -rf <each path>. Backups under ~/.claude.backup-*, ~/.claude.bak, ~/.claude.old*, ~/.claude-backup-* are caught here too.`
    
-   Do not HALT — the plugin can still function (the user may have intentionally disabled model-invocation on the legacy skill). But the warning is non-dismissible until the directory is gone.
+   Do not HALT — the plugin can still function (the user may have intentionally disabled model-invocation on the legacy skill). But the warning is non-dismissible until every hit directory is gone. Match `pathlib.is_dir()` rather than `is_file()` to avoid following stray symlinks. Glob expansion is intentionally NOT recursive (`**`) — bounded to one nested level to keep the pre-flight cheap on machines with deep `~/.claude.backup-*` trees.
 
 2. **Read shared identity** from `~/.claude/shared/identity.json`. If missing or `onboarding_complete != true`:
    - **In `--auto` mode**: HALT with "identity missing — run `/gevent:onboard` first" (don't drag the user into interactive onboarding mid-auto).

@@ -156,6 +156,24 @@ else
 fi
 rm -rf "$H4_PATHDIR"
 
+# ------------------------------------------------------------------ WS-9 AC M-4
+# discover-topics honors profile.topic_target band (XL = 70-120, not capped 70).
+DISCOVER_SKILL="$PLUGIN_DIR/skills/discover-topics/SKILL.md"
+# Hard-coded "Cap total at 70" must be GONE.
+if grep -q '^Cap total at 70\.$' "$DISCOVER_SKILL"; then
+  report_fail "WS9-M4: hardcoded 'Cap total at 70' removed" "still present"
+else
+  report_pass "WS9-M4: hardcoded 'Cap total at 70' removed"
+fi
+# Profile-driven band documented with xl 70-120.
+if grep -q 'TARGET_MIN' "$DISCOVER_SKILL" \
+   && grep -q 'TARGET_MAX' "$DISCOVER_SKILL" \
+   && grep -Eq '^\| xl[[:space:]]+\| 70[[:space:]]+\| 120[[:space:]]+\|' "$DISCOVER_SKILL"; then
+  report_pass "WS9-M4: profile-driven topic_target band documented (xl=70-120)"
+else
+  report_fail "WS9-M4: profile-driven topic_target band documented" "missing band table"
+fi
+
 # ------------------------------------------------------------------ WS-9 AC M-3
 # /health docs the counter-sum invariant + exits non-zero on broken state.
 HEALTH_SKILL="$PLUGIN_DIR/skills/health/SKILL.md"

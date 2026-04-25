@@ -6,7 +6,10 @@ allowed-tools: Bash, Read, Write, Glob
 ---
 
 # Role
-TOPIC DISCOVERY. Runs ONCE per run. Expand hand-authored seeds into 40-70 self-contained topic files workers can execute without conversation history.
+TOPIC DISCOVERY. Runs ONCE per run. Expand hand-authored seeds into 15-120
+self-contained topic files (the exact band depends on the active profile —
+small=15-25, medium=25-45, large=45-70, xl=70-120) that workers can
+execute without conversation history.
 
 # Invocation
   /ultra-analyzer:discover-topics <run-path>
@@ -72,11 +75,30 @@ For each seed in seeds.md:
 Number topics sequentially starting from T001. T000 is reserved for Evidence-Base Accounting (denominator report) — generate it FIRST if and only if seeds include a denominator-base seed; otherwise omit.
 
 ## Step 6: Fill seed gaps (filler topics)
-If seeds produced fewer than 40 P1 topics, generate filler P1 topics by:
+
+Honor the active profile's topic_target band (closes M-4). Read the band
+from `state.json` rather than hardcoding:
+
+```bash
+TARGET_MIN=$(jq -r '.profile.topic_target_min // 45' "$RUN_PATH/state.json")
+TARGET_MAX=$(jq -r '.profile.topic_target_max // 70' "$RUN_PATH/state.json")
+```
+
+Profile bands (from set-profile/SKILL.md):
+
+| tier   | min | max |
+|--------|-----|-----|
+| small  | 15  | 25  |
+| medium | 25  | 45  |
+| large  | 45  | 70  |
+| xl     | 70  | 120 |
+
+If seeds produced fewer than `TARGET_MIN` P1 topics, generate filler P1 topics by:
 - Varying cohort dimensions (role, tier, segment) on existing seed hypotheses
 - Extending length/frequency/distribution questions over fields present in schema
-Cap total at 70.
 
+Stop generating once total topic count reaches `TARGET_MAX`. **The XL
+profile MUST be allowed to reach 120 — never silently clip at 70.**
 For P2 and P3: match the ratios declared in config.yaml `coverage:` block (e.g. `p1: 0.6, p2: 0.3, p3: 0.1`). Default if unset: 60/30/10.
 
 ## Step 7: Redundancy pairs

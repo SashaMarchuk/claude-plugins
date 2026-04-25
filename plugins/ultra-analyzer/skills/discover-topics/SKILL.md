@@ -51,6 +51,22 @@ For each seed in seeds.md:
 - Parse priority (P1/P2/P3), hypothesis, units to touch, fields used.
 - Cross-check all referenced fields against sampled schema — if a field is NOT in schema, reject the seed with a diagnostic (do not invent field names).
 - Cross-check no referenced field is in forbidden_fields list for filter/group/sort positions (projection is tolerated if adapter nulls them safely).
+- **Sanitize the slug (closes M-1 — prompt-injection via topic filename).**
+  Topic filenames reach `claude --print` as part of the worker prompt, so
+  any content controllable by an attacker (or by a copy-paste accident in
+  seeds.md) becomes pseudo-instruction text the model could obey.
+  The slug component MUST match `^[A-Za-z0-9_.-]+$`. Reject the seed if its
+  derived slug does not. Specifically REJECT slugs containing any of:
+  - `[FILE:` / `[AGENT:` / `[DOC:` / `[DATA:` / `[URL:` (anchor markers)
+  - `Phase` / `phase` (state-machine keywords)
+  - `Ignore` / `ignore previous` (jailbreak phrases)
+  - newline / carriage-return / tab / control characters
+  - shell metacharacters: `` ` `` , `$`, `;`, `&`, `|`, `<`, `>`, `(`, `)`,
+    `{`, `}`, `*`, `?`, `~`, `!`, `'`, `"`, `\\`
+  Slugs are derived deterministically from seed hypothesis text — strip
+  forbidden characters, collapse whitespace to `-`, lowercase, and truncate
+  to 60 chars. If the derived slug becomes empty after stripping, fall
+  back to `seed-N` where N is the seed index in seeds.md.
 - Write `<run-path>/topics/pending/T{NNN}__{priority}__{slug}.md` with the topic schema from ARCHITECTURE.md.
 
 Number topics sequentially starting from T001. T000 is reserved for Evidence-Base Accounting (denominator report) — generate it FIRST if and only if seeds include a denominator-base seed; otherwise omit.

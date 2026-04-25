@@ -72,18 +72,45 @@ pick_model() {
   fi
 }
 
+# Topic-filename prompt-injection sanitizer (closes M-1).
+# Topic basenames are interpolated into the prompt string passed to
+# `claude --print`. A malicious basename (planted via filesystem race or
+# a poisoned seed) could carry pseudo-directives. Refuse anything outside
+# the strict allowlist before invoking the worker.
+basename_safe() {
+  local b="$1"
+  # Allowlist: alnum, _, ., - only. Length cap 200.
+  if [[ ! "$b" =~ ^[A-Za-z0-9_.-]+$ ]]; then return 1; fi
+  if [[ ${#b} -gt 200 ]]; then return 1; fi
+  # Reject literal injection markers even if they slip through allowlist
+  # via unicode lookalikes (the allowlist already blocks `[`, but be loud).
+  case "$b" in
+    *FILE:*|*AGENT:*|*DOC:*|*DATA:*|*URL:*|*Phase*|*phase*|*Ignore*|*ignore*) return 1 ;;
+  esac
+  return 0
+}
+
 while true; do
   topic=$(bash "$bindir/claim.sh" "$run_path") || { echo "[launch] no pending work, exiting"; break; }
+  topic_base=$(basename "$topic")
+  if ! basename_safe "$topic_base"; then
+    echo "[launch] REFUSING topic with unsafe basename: $topic_base (M-1)" >&2
+    bash "$bindir/release.sh" "$topic" failed "unsafe-basename" || true
+    continue
+  fi
   model=$(pick_model "$topic")
-  echo "[launch] topic=$(basename "$topic") model=$model"
+  echo "[launch] topic=$topic_base model=$model"
 
   # Three retry attempts on transient failures. Each attempt wrapped in timeout
   # to kill hung workers (network stall, adapter deadlock).
   ok=0
   for i in 1 2 3; do
     # TIMEOUT_CMD is guaranteed non-empty — H-4 exits at startup if missing.
+    # Delimit the topic argument with explicit BEGIN/END markers so the
+    # worker (and any LLM eyes) treat it as quoted data, not directives.
+    # Even with the allowlist above, defense in depth is cheap.
     $TIMEOUT_CMD --kill-after=30s "${WORKER_TIMEOUT_S}s" \
-      claude --plugin-dir "$plugin_dir" --model "$model" --print "/ultra-analyzer:analyze-unit $topic"
+      claude --plugin-dir "$plugin_dir" --model "$model" --print "/ultra-analyzer:analyze-unit <<TOPIC_PATH_BEGIN>>${topic}<<TOPIC_PATH_END>>"
     rc=$?
     if [[ $rc -eq 0 ]]; then
       ok=1

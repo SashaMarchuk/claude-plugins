@@ -49,7 +49,7 @@
 
 ### --xl / --extralarge
 - **Agents**: 15-25 total
-- **Models**: All Opus
+- **Models**: All Opus — **MUST be verified per-spawn (MED-11, see Sub-Agent Opus Assertion below)**
 - **State files**: MANDATORY (.planning/ultra/<task>/ always created)
 - **Pre-research**: YES (compass phase — see phases.md Phase 0)
 - **Agent allocation**:
@@ -66,6 +66,36 @@
   - 1 Synthesizer (Opus) — S1
 - **Anti-slop**: Full protocol (evidence + contradiction + cross-agent independence check)
 - **Execution agents** (Phase 4, if applicable): Opus model
+
+## Sub-Agent Opus Assertion (MED-11, MANDATORY at --xl)
+
+At `--xl`, the orchestrator's tier prose says "All Opus" but the orchestrator (which is itself constrained to Opus by SKILL.md Step 5's `model: "opus"` parameter) chooses sub-agent models when spawning via the `Agent` tool. Without an explicit verification step, a prompt-injected or buggy orchestrator could silently downgrade sub-agents to Sonnet/Haiku and the "All Opus" claim becomes unverifiable.
+
+**Mandatory verification rule (MED-11)**: at `--xl`, the orchestrator MUST verify each spawned sub-agent's `model` parameter is exactly `opus` (case-insensitive match on the literal string `opus` — not `claude-3-opus`, not `sonnet`, not `haiku`). The verification has two parts:
+
+1. **Pre-spawn assertion**: BEFORE every `Agent` tool call, the orchestrator MUST construct the call with `model: "opus"` explicitly set, then assert the model parameter is `opus` (string equality on the lowercased value). If the assertion fails, the orchestrator MUST REFUSE the spawn and emit on the user-visible channel:
+
+   ```
+   [/ultra --xl] REFUSED: sub-agent <agent-id> spawn requested with model="<actual>" — --xl REQUIRES model="opus" per tier-config.md. Aborting. (MED-11)
+   ```
+
+2. **Append to state.json sub-agent log**: every successful spawn MUST append an entry to `state.json`'s `sub_agent_log[]` array (top-level, sibling of `phases_done[]` from MED-1):
+
+   ```json
+   {
+     "sub_agent_log": [
+       { "agent_id": "R1", "phase": "phase2", "model": "opus", "spawned_at": "ISO8601" },
+       { "agent_id": "V1", "phase": "phase5", "model": "opus", "spawned_at": "ISO8601" },
+       { "agent_id": "D1", "phase": "phase6", "model": "opus", "spawned_at": "ISO8601" }
+     ]
+   }
+   ```
+
+   Writes to `sub_agent_log[]` follow the same append-only / read-modify-rename-under-flock protocol as `phases_done[]` (see coordination.md Rules 2-4).
+
+3. **Audit grep (verification property)**: at `--xl` the contractual acceptance criterion is `jq '.sub_agent_log[] | select(.model != "opus")' state.json` returns EMPTY. A non-empty result means the all-Opus claim is violated — Phase 8 (Anti-Slop) MUST surface this as a HIGH slop flag and the run is marked `MED-11 VIOLATION` in the executive summary.
+
+**Lower tiers**: small / medium / large MAY have mixed models per their tier-config blocks above. The MED-11 rule applies ONLY at `--xl`. At lower tiers, `sub_agent_log[]` is still written (audit trail) but the model field may be `sonnet` or `opus` per tier rules; the audit grep at `--xl` is the contractual gate.
 
 ## --agents=N Override
 

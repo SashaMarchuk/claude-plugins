@@ -156,6 +156,63 @@ else
 fi
 rm -rf "$H4_PATHDIR"
 
+# ------------------------------------------------------------------ WS-9 AC H-6
+# /resume documents orphan-lock auto-heal; /health documents PID-aware check.
+RESUME_SKILL="$PLUGIN_DIR/skills/resume/SKILL.md"
+HEALTH_SKILL="$PLUGIN_DIR/skills/health/SKILL.md"
+if grep -q 'heal_orphan_lock' "$RESUME_SKILL" \
+   && grep -q '\.claim\.lock\.d' "$RESUME_SKILL" \
+   && grep -q 'state\.json\.lock\.d' "$RESUME_SKILL" \
+   && grep -q 'kill -0' "$RESUME_SKILL"; then
+  report_pass "WS9-H6: /resume documents orphan-lock auto-heal"
+else
+  report_fail "WS9-H6: /resume documents orphan-lock auto-heal" "missing heal block"
+fi
+if grep -q 'PID-aware' "$HEALTH_SKILL" && grep -q 'H-6' "$HEALTH_SKILL"; then
+  report_pass "WS9-H6: /health documents PID-aware stale-lock check"
+else
+  report_fail "WS9-H6: /health documents PID-aware stale-lock check" "missing PID-aware check"
+fi
+
+# Functional test: extract heal_orphan_lock from resume SKILL and exercise it
+# against a stale lockdir. The heal block is fenced as ```bash ... ``` —
+# pluck it via awk.
+HEAL_FN=$(awk '/^heal_orphan_lock\(\) \{/,/^\}$/' "$RESUME_SKILL")
+if [[ -n "$HEAL_FN" ]]; then
+  STALE_LOCK=$(mktemp -d -t ultra-analyzer-orphan-XXXXXX)
+  ORPHAN="$STALE_LOCK/orphan.lock.d"
+  mkdir "$ORPHAN"
+  # Backdate by 60s to simulate orphan.
+  if stat -f '%m' "$ORPHAN" >/dev/null 2>&1; then
+    touch -t "$(date -v-60S +%Y%m%d%H%M.%S)" "$ORPHAN"
+  else
+    touch -d '60 seconds ago' "$ORPHAN"
+  fi
+  set +e
+  eval "$HEAL_FN"
+  heal_orphan_lock "$ORPHAN" 2>/dev/null
+  set -e
+  if [[ -d "$ORPHAN" ]]; then
+    report_fail "WS9-H6: heal_orphan_lock removes >30s orphan" "orphan lockdir still present"
+  else
+    report_pass "WS9-H6: heal_orphan_lock removes >30s orphan"
+  fi
+  # Fresh lock (just created, no PID file, age 0) — must NOT be removed.
+  FRESH="$STALE_LOCK/fresh.lock.d"
+  mkdir "$FRESH"
+  set +e
+  heal_orphan_lock "$FRESH" 2>/dev/null
+  set -e
+  if [[ -d "$FRESH" ]]; then
+    report_pass "WS9-H6: heal_orphan_lock leaves fresh lock alone"
+  else
+    report_fail "WS9-H6: heal_orphan_lock leaves fresh lock alone" "fresh lock removed"
+  fi
+  rm -rf "$STALE_LOCK"
+else
+  report_fail "WS9-H6: heal_orphan_lock function extractable" "awk failed to extract"
+fi
+
 # ------------------------------------------------------------------ WS-9 AC H-5
 # Validator + analyze-unit prose flags computed-alias forbidden fields.
 VALIDATE_SKILL="$PLUGIN_DIR/skills/validate-finding/SKILL.md"

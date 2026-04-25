@@ -24,10 +24,20 @@ Without `--fix`, only reports.
 - All required top-level fields present? (`run`, `current_step`, `status`, `counters`, `ultra_gates`)
 - If not: SEVERITY=CRITICAL, REPAIR="restore from latest checkpoint at <run>/checkpoints/".
 
-### Check 2: Stale locks
-- `<run>/topics/.claim.lock.d/` exists but no process holding it? Check age: >10 min old → stale.
-- `<run>/state.json.lock.d/` similar.
-- REPAIR: `rmdir <lockdir>`.
+### Check 2: Stale locks (PID-aware — H-6)
+For each candidate lockdir (`<run>/topics/.claim.lock.d/` and `<run>/state.json.lock.d/`):
+
+1. If `holder.pid` file exists and `kill -0 <pid>` succeeds → lock is held by
+   a live worker; leave alone.
+2. Otherwise compute age via `stat -f %m` (macOS) / `stat -c %Y` (Linux):
+   - Age > 30s with no live holder → orphan (likely SIGKILL / power loss).
+     SEVERITY=WARN, REPAIR=`rmdir <lockdir>`.
+   - Age > 10 min regardless → SEVERITY=CRITICAL, REPAIR=`rmdir <lockdir>`.
+   - Age < 30s → likely a live worker mid-write; leave alone.
+
+This logic mirrors `/ultra-analyzer:resume`'s Step 1b auto-heal so a single
+implementation rules both surfaces. Resume runs the heal automatically,
+health surfaces it as a check + reports it.
 
 ### Check 3: Orphaned in-progress topics
 - Topics in `topics/in-progress/` but no active worker process owns them.

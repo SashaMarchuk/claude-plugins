@@ -164,6 +164,34 @@ else
 fi
 rm -rf "$H4_PATHDIR"
 
+# ------------------------------------------------------------------ WS-9 AC M-6
+# Validator + connector pin deterministic late-schema rescue.
+CONNECTOR_SKILL="$PLUGIN_DIR/skills/connector/SKILL.md"
+if grep -q 'deterministic late-schema rescue' "$VALIDATE_SKILL" \
+   && grep -Eq 'No `\$sample`' "$VALIDATE_SKILL" \
+   && grep -q 'schemas.late.json' "$VALIDATE_SKILL"; then
+  report_pass "WS9-M6: validator pins deterministic rescue (no random, cached)"
+else
+  report_fail "WS9-M6: validator pins deterministic rescue" "missing"
+fi
+if grep -q '`sample_schema` MUST be deterministic' "$CONNECTOR_SKILL" \
+   && grep -q 'schemas.late.json' "$CONNECTOR_SKILL"; then
+  report_pass "WS9-M6: connector mandates deterministic sample_schema"
+else
+  report_fail "WS9-M6: connector mandates deterministic sample_schema" "missing"
+fi
+# Anti-LLM-feel: no probabilistic / random language in the rescue prose.
+RESCUE_BLOCK=$(awk '/deterministic late-schema rescue/,/^For every unit/' "$VALIDATE_SKILL")
+if printf '%s' "$RESCUE_BLOCK" | grep -Eiq 'random|shuffl|probabilis|stochast|score'; then
+  if printf '%s' "$RESCUE_BLOCK" | grep -Eiq 'No.*\$sample|No.*ORDER BY RAND|no random|no probabilistic'; then
+    report_pass "WS9-M6: rescue prose explicitly negates randomness"
+  else
+    report_fail "WS9-M6: rescue prose explicitly negates randomness" "found random/scoring without negation"
+  fi
+else
+  report_pass "WS9-M6: rescue prose has no random/probabilistic language"
+fi
+
 # ------------------------------------------------------------------ WS-9 AC M-5
 # Validator + synthesize-report refuse empty `## Contradictions` sections.
 if grep -q 'empty-contradictions' "$VALIDATE_SKILL" \

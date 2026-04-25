@@ -81,7 +81,34 @@ Read `<RUN_PATH>/state/schemas.json` (written by discover-topics).
 
 For every field name referenced in the findings' Queries executed section:
 - It must appear in the sampled schema for the collection/unit touched.
-- EXCEPTION: if a field is NOT in schemas.json but IS in the topic's `Fields used`, call `bash ${CLAUDE_PLUGIN_ROOT}/bin/adapter.sh <RUN_PATH> sample_schema <unit> 500` to re-sample. If field appears in re-sample → check PASS-with-warning (`late-schema-hit`). If still absent → FAIL with `hallucinated-field: <name>`.
+- EXCEPTION (deterministic late-schema rescue — closes M-6): if a field is
+  NOT in schemas.json but IS in the topic's `Fields used`, call:
+
+  ```bash
+  bash ${CLAUDE_PLUGIN_ROOT}/bin/adapter.sh <RUN_PATH> sample_schema <unit> 500
+  ```
+
+  with TWO determinism constraints the adapter MUST honor:
+
+  1. **Deterministic ordering.** The adapter sorts the source records by
+     primary key (`_id` for Mongo, `rowid` for sqlite, mtime+path for fs)
+     BEFORE taking the first 500. No `$sample`, no `ORDER BY RAND()`, no
+     random shuffling. Same N + same source state = same 500 records.
+  2. **Pinned cache.** First call writes the resampled schema to
+     `<RUN_PATH>/state/schemas.late.json` keyed by `<unit>`. Subsequent
+     calls on the SAME field+unit return the cached schema rather than
+     re-sampling. The cache is invalidated only when the source's
+     enumerate count changes (or `state/schemas.json` is regenerated).
+
+  Verdict rule:
+  - Field present in late-resample → check PASS-with-warning
+    (`late-schema-hit`). The `late_schema_hits` array in the verdict JSON
+    is sorted lexicographically so two reruns produce byte-identical
+    output.
+  - Field still absent → FAIL with `hallucinated-field: <name>`.
+
+  Same inputs (same finding, same source state) → same verdict on every
+  invocation. No LLM-feel scoring, no probabilistic rescue.
 
 For every unit (collection/file/URL/page) referenced: it must appear in the adapter's enumeration. If not → FAIL with `hallucinated-unit: <id>`.
 

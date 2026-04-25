@@ -74,6 +74,13 @@ Before returning ANY query result, scan for fields/patterns in the forbidden lis
 
 # Hard rules
 - NEVER improvise outside the 6 contract operations. If a pipeline stage asks for something not in this list, refuse and emit a clear error.
+- `sample_schema` MUST be deterministic (closes M-6). Sort source records
+  by primary key (`_id` for Mongo, `rowid` for sqlite, sorted-path+mtime
+  for fs) BEFORE taking the first N. No `$sample`, no `ORDER BY RAND()`,
+  no random shuffling. Cache the schema for late-rescue at
+  `<run-path>/state/schemas.late.json` keyed by unit; subsequent calls
+  on the same unit return the cached schema until enumerate count
+  changes or schemas.json is regenerated.
 - NEVER bypass budget constraints from `connector.md :: Budget constraints`.
 - NEVER leak secrets (API keys, tokens, passwords) into stdout or findings. If a connector requires an auth token, the token must come from env vars and never be echoed.
 - NEVER cache credentials in `<run-path>/` files that could be shared.

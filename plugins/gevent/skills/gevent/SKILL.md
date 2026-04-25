@@ -42,7 +42,12 @@ Reject BEFORE attempting title extraction so the error message names the actual 
 
 ## Step 2: Pre-flight (every invocation, in order)
 
-**L-19 — mechanical pre-flight via `scripts/preflight.py`.** The shadow check, schema-version validation, and auth probe described in steps 1–5 below are ALSO available as a runnable Python script at `plugins/gevent/scripts/preflight.py`. Run `python plugins/gevent/scripts/preflight.py` BEFORE the prose checks below — exit code 0 means all three mechanical invariants pass; non-zero exits with a diagnostic on stderr. The prose checks are kept as fallback for environments where Python is unavailable, but the script is the canonical enforcement: prose-as-code is brittle, the script is mechanical. See L-19 in `.audits/gevent-report.md`.
+**L-19 — mechanical pre-flight via `scripts/preflight.py` (REQUIRED first action).** Before evaluating ANY of the prose pre-flight steps below, run `python scripts/preflight.py` (resolved relative to the plugin root, e.g. `python plugins/gevent/scripts/preflight.py`). The script ships three mechanical invariants matching the prose:
+- `detect_shadow_dirs()` — broad glob (canonical + `~/.claude.backup-*`, `~/.claude.bak/`, `~/.claude.old*/`, `~/.claude-backup-*`, `~/.claude-plugins-backup-*`).
+- `validate_schema()` — `schemaVersion` int, `behavior.notes_bot_decided` strict bool, `always_include` array, `defaults.calendar` matches `CALENDAR_ID_RE` (M-4), `defaults.send_updates` / `duration_minutes` / `conference_type` (L-6).
+- `auth_probe()` — runs `npx @googleworkspace/cli calendar calendars get` and applies the SKILL.md step 5 classifier (schema check + broadened error regex).
+
+Exit codes: `0` all pass; `1` shadow hit (banner — non-fatal); `2` schema failed (HALT); `3` auth failed (HALT — re-auth); `4` script crashed. Run `python plugins/gevent/scripts/preflight.py` BEFORE step 1 below; if it exits non-zero, surface the script's stderr to the user and act per the exit code. The prose steps below are the fallback semantics for environments where Python is unavailable AND the documentation source-of-truth that the script implements.
 
 1. **Shadow check FIRST (broadened glob — Migration Assistant / Time Machine / chezmoi / yadm dotfile-restore paths all covered).** Detect a shadowing legacy `create-call` skill via the union of these glob patterns AND the canonical path. The author already globs backup dirs for the legacy contacts loader at `references/modes.md` Step 7b — the shadow check uses the SAME globbing discipline so the two stay in lockstep:
    ```python

@@ -64,9 +64,27 @@ After all three rounds, J1 receives the complete transcript and evaluates:
 > 4. **Concession impact** (0-10): How damaging were the concessions to each side's core position?
 >
 > Deliver your verdict:
-> - Which side wins and by how much (decisive / narrow / mixed)?
+> - Which side wins and by how much (decisive / narrow / mixed)? Apply the deterministic threshold table below — do NOT pick subjectively.
 > - What is the concession-adjusted conclusion?
 > - Are there unresolved points that need escalation?"
+
+### Verdict Threshold Table (MED-2, MANDATORY — deterministic, not judge-feel)
+
+The judge MUST classify the verdict using the following numeric rule. Compute the **per-axis signed delta**: `Δ_i = score_FOR_i − score_AGAINST_i` for each of the 4 axes (Evidence quality, Intellectual honesty, Argument survival, Concession impact). Each `Δ_i ∈ [-10, +10]`. Compute the **sum delta**: `Σ = Δ_1 + Δ_2 + Δ_3 + Δ_4`, with `Σ ∈ [-40, +40]`. Compute the **sign-agreement count**: `K = number of axes where sign(Δ_i) is the same as sign(Σ)` (treat `Δ_i = 0` as agreeing with `Σ`'s sign).
+
+| Verdict | Rule | Example |
+|---|---|---|
+| **decisive (FOR wins)** | `Σ ≥ +8` AND `K = 4` (all four axes lean FOR) | `Δ = (+3, +2, +2, +2)` → `Σ=+9`, `K=4` → decisive FOR |
+| **decisive (AGAINST wins)** | `Σ ≤ −8` AND `K = 4` (all four axes lean AGAINST) | `Δ = (−2, −3, −2, −2)` → `Σ=−9`, `K=4` → decisive AGAINST |
+| **narrow (FOR edge)** | `+1 ≤ Σ ≤ +7` OR (`Σ ≥ +8` AND `K < 4`) | `Δ = (+2, +1, +1, 0)` → `Σ=+4`, `K=4` → narrow FOR |
+| **narrow (AGAINST edge)** | `−7 ≤ Σ ≤ −1` OR (`Σ ≤ −8` AND `K < 4`) | `Δ = (−2, −1, −1, 0)` → `Σ=−4` → narrow AGAINST |
+| **mixed** | `Σ = 0` OR signs of `Δ_i` are split (`K ≤ 2`) regardless of `Σ` | `Δ = (+5, −4, +3, −4)` → `Σ=0`, `K=2` → mixed |
+
+**Worked example (acceptance criterion)**: 4-axis sum `Σ = +4` (e.g. `Δ = (+2, +1, +1, 0)`) → row 3 → **narrow FOR**. The judge MUST output `narrow` for this case; outputting `decisive` or `mixed` is a protocol violation flagged by Phase 8.
+
+**Tie rule**: if `Σ = 0` exactly, the verdict is `mixed` regardless of `K` — there is no "judge picks the side that argued better"; ties surface as mixed and feed Phase 9 as an unresolved finding requiring user adjudication when `--ask=critical` or `--ask=all`.
+
+**Anti-slop verification**: Phase 8 (Anti-Slop Audit, `anti-slop-rules.md`) recomputes the verdict from the 4-axis scores and FAILs the audit if the judge's stated verdict disagrees with the deterministic rule. The judge cannot override the table.
 
 ## Concession Tracker
 

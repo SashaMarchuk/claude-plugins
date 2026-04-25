@@ -156,6 +156,52 @@ else
 fi
 rm -rf "$H4_PATHDIR"
 
+# ------------------------------------------------------------------ WS-9 AC M-3
+# /health docs the counter-sum invariant + exits non-zero on broken state.
+HEALTH_SKILL="$PLUGIN_DIR/skills/health/SKILL.md"
+if grep -q 'Counter-sum invariant' "$HEALTH_SKILL" \
+   && grep -q 'topics_total == ' "$HEALTH_SKILL" \
+   && grep -q 'topics_in_progress' "$HEALTH_SKILL"; then
+  report_pass "WS9-M3: /health documents counter-sum invariant"
+else
+  report_fail "WS9-M3: /health documents counter-sum invariant" "missing block"
+fi
+
+# Functional: simulate broken state, run the exact jq from SKILL prose,
+# expect FAIL.
+WS9_RUN=$(fresh_run ws9-m3-broken)
+# Set total=10 done=2 failed=1 pending=1 in_progress=1 (sum=5, broken).
+bash "$STATE_SH" set "$WS9_RUN" .counters.topics_total 10 >/dev/null
+bash "$STATE_SH" set "$WS9_RUN" .counters.topics_done 2 >/dev/null
+bash "$STATE_SH" set "$WS9_RUN" .counters.topics_failed 1 >/dev/null
+bash "$STATE_SH" set "$WS9_RUN" .counters.topics_pending 1 >/dev/null
+bash "$STATE_SH" set "$WS9_RUN" .counters.topics_in_progress 1 >/dev/null
+inv=$(jq -r '
+  .counters as $c
+  | ($c.topics_total == ($c.topics_done + $c.topics_failed
+                         + $c.topics_pending + $c.topics_in_progress))
+  | tostring
+' "$WS9_RUN/state.json")
+if [[ "$inv" == "false" ]]; then
+  report_pass "WS9-M3: invariant correctly reports broken state"
+else
+  report_fail "WS9-M3: invariant correctly reports broken state" "got inv=$inv"
+fi
+
+# Same jq on fresh run must report true.
+WS9_RUN=$(fresh_run ws9-m3-clean)
+inv=$(jq -r '
+  .counters as $c
+  | ($c.topics_total == ($c.topics_done + $c.topics_failed
+                         + $c.topics_pending + $c.topics_in_progress))
+  | tostring
+' "$WS9_RUN/state.json")
+if [[ "$inv" == "true" ]]; then
+  report_pass "WS9-M3: invariant holds on freshly-init state"
+else
+  report_fail "WS9-M3: invariant holds on freshly-init state" "got inv=$inv"
+fi
+
 # ------------------------------------------------------------------ WS-9 AC M-2
 # sqlite connector pins ?mode=ro and grep-refuses write/DDL SQL.
 SQLITE_TPL="$PLUGIN_DIR/templates/connectors/sqlite.md"

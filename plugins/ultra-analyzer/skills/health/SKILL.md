@@ -52,6 +52,33 @@ health surfaces it as a check + reports it.
 - Does `counters.findings_passed` match `ls validation/findings/*.json | jq 'select(.verdict=="PASS")' | wc -l`?
 - If drift detected: SEVERITY=WARN, REPAIR="rebuild counters from filesystem ground truth".
 
+### Check 4b: Counter-sum invariant (closes M-3)
+
+Run this assertion on EVERY `/ultra-analyzer:health` invocation. Failure
+exits the health check non-zero so a CI pipeline or operator script
+notices.
+
+```bash
+# topics_total must equal done + failed + pending + in_progress.
+inv=$(jq -r '
+  .counters as $c
+  | ($c.topics_total == ($c.topics_done + $c.topics_failed
+                         + $c.topics_pending + $c.topics_in_progress))
+  | tostring
+' "$RUN_PATH/state.json")
+if [[ "$inv" != "true" ]]; then
+  echo "[health] CRITICAL: counter-sum invariant broken" >&2
+  jq '.counters' "$RUN_PATH/state.json" >&2
+  exit 12
+fi
+```
+
+This is the WS-2 invariant tested in `plugins/ultra-analyzer/tests/run.sh`
+(the AC1.* assertions). Health invokes the same check at runtime against
+live state — if a bug, a manual edit, or a future skill breaks it, the
+operator finds out immediately instead of after synthesis produces nonsense
+counters.
+
 ### Check 5: Missing adapter outputs
 - Topics exist but `state/schemas.json` missing? discover-topics didn't finish cleanly.
 - SEVERITY=CRITICAL, REPAIR="re-run /ultra-analyzer:discover-topics or rollback to init".

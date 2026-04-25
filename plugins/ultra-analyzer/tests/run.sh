@@ -18,6 +18,14 @@ CLAIM_SH="$BIN_DIR/claim.sh"
 RELEASE_SH="$BIN_DIR/release.sh"
 REQUEUE_SH="$BIN_DIR/requeue.sh"
 LAUNCH_SH="$BIN_DIR/launch-terminal.sh"
+DISCOVER_SKILL="$PLUGIN_DIR/skills/discover-topics/SKILL.md"
+ANALYZE_SKILL="$PLUGIN_DIR/skills/analyze-unit/SKILL.md"
+VALIDATE_SKILL="$PLUGIN_DIR/skills/validate-finding/SKILL.md"
+SYNTHESIZE_SKILL="$PLUGIN_DIR/skills/synthesize-report/SKILL.md"
+RESUME_SKILL="$PLUGIN_DIR/skills/resume/SKILL.md"
+HEALTH_SKILL="$PLUGIN_DIR/skills/health/SKILL.md"
+SQLITE_TPL="$PLUGIN_DIR/templates/connectors/sqlite.md"
+BROWSER_TPL="$PLUGIN_DIR/templates/connectors/browser.md"
 
 SANDBOX=$(mktemp -d -t ultra-analyzer-tests-XXXXXX)
 trap 'rm -rf "$SANDBOX"' EXIT
@@ -156,6 +164,106 @@ else
 fi
 rm -rf "$H4_PATHDIR"
 
+# ------------------------------------------------------------------ WS-9 AC M-5
+# Validator + synthesize-report refuse empty `## Contradictions` sections.
+if grep -q 'empty-contradictions' "$VALIDATE_SKILL" \
+   && grep -q 'Step 3a' "$VALIDATE_SKILL"; then
+  report_pass "WS9-M5: validator refuses empty contradictions"
+else
+  report_fail "WS9-M5: validator refuses empty contradictions" "missing Step 3a"
+fi
+SYNTHESIZE_SKILL="$PLUGIN_DIR/skills/synthesize-report/SKILL.md"
+if grep -q 'empty-contradictions' "$SYNTHESIZE_SKILL"; then
+  report_pass "WS9-M5: synthesize-report re-checks contradictions at compose"
+else
+  report_fail "WS9-M5: synthesize-report re-checks contradictions" "missing rule"
+fi
+
+# Functional: simulate a finding with empty contradictions, run the awk +
+# placeholder check, expect a failing classification.
+WS9_RUN=$(fresh_run ws9-m5-empty-contradictions)
+mkdir -p "$WS9_RUN/findings"
+cat > "$WS9_RUN/findings/T001.md" <<'EOF'
+# T001 — Findings
+## Topic
+H1
+## Queries executed
+- one
+## Answer
+42
+## Top 3 quotes
+1. "x"
+## Contradictions with hypothesis
+
+## Confidence
+0.5
+## Metadata
+- agent: test
+EOF
+extract() {
+  awk '
+    /^## Contradictions with hypothesis/ {grab=1; next}
+    /^## / && grab {grab=0}
+    grab {print}
+  ' "$1"
+}
+stripped=$(extract "$WS9_RUN/findings/T001.md" | tr -d '[:space:]')
+if [[ ${#stripped} -lt 20 ]]; then
+  report_pass "WS9-M5: empty contradictions detected as <20 chars"
+else
+  report_fail "WS9-M5: empty contradictions detected" "stripped='$stripped'"
+fi
+
+# Placeholder text "None"
+cat > "$WS9_RUN/findings/T002.md" <<'EOF'
+# T002 — Findings
+## Topic
+H2
+## Queries executed
+- one
+## Answer
+42
+## Top 3 quotes
+1. "x"
+## Contradictions with hypothesis
+None
+## Confidence
+0.5
+## Metadata
+- agent: test
+EOF
+stripped=$(extract "$WS9_RUN/findings/T002.md" | tr -d '[:space:]' | tr 'A-Z' 'a-z')
+if [[ "$stripped" == "none" ]]; then
+  report_pass "WS9-M5: bare 'None' detected as placeholder"
+else
+  report_fail "WS9-M5: bare 'None' detected" "stripped='$stripped'"
+fi
+
+# Honest no-contradiction form (>=20 chars) — must NOT trigger.
+cat > "$WS9_RUN/findings/T003.md" <<'EOF'
+# T003 — Findings
+## Topic
+H3
+## Queries executed
+- one
+## Answer
+42
+## Top 3 quotes
+1. "x"
+## Contradictions with hypothesis
+None — hypothesis supported by evidence across all redundancy pairs.
+## Confidence
+0.5
+## Metadata
+- agent: test
+EOF
+stripped=$(extract "$WS9_RUN/findings/T003.md" | tr -d '[:space:]')
+if [[ ${#stripped} -ge 20 ]]; then
+  report_pass "WS9-M5: honest no-contradiction form (>=20 chars) accepted"
+else
+  report_fail "WS9-M5: honest no-contradiction form accepted" "stripped='$stripped'"
+fi
+
 # ------------------------------------------------------------------ WS-9 AC M-4
 # discover-topics honors profile.topic_target band (XL = 70-120, not capped 70).
 DISCOVER_SKILL="$PLUGIN_DIR/skills/discover-topics/SKILL.md"
@@ -270,6 +378,7 @@ fi
 # documents the delimiter strip.
 DISCOVER_SKILL="$PLUGIN_DIR/skills/discover-topics/SKILL.md"
 ANALYZE_SKILL="$PLUGIN_DIR/skills/analyze-unit/SKILL.md"
+VALIDATE_SKILL="$PLUGIN_DIR/skills/validate-finding/SKILL.md"
 if grep -q '\^\[A-Za-z0-9_.\-\]+\$' "$DISCOVER_SKILL" \
    && grep -q 'M-1' "$DISCOVER_SKILL"; then
   report_pass "WS9-M1: discover-topics documents slug allowlist"

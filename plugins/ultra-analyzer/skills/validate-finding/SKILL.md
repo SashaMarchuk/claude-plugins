@@ -32,6 +32,50 @@ Topic, Queries executed, Answer, Top 3 quotes, Contradictions with hypothesis, C
 
 Missing or out-of-order section → check FAILED with reason `schema-violation: <section>`.
 
+### Step 3a — Non-empty `## Contradictions` (closes M-5)
+
+Section presence is necessary but NOT sufficient. The `## Contradictions
+with hypothesis` section MUST contain non-trivial body text. Refuse the
+finding with `schema-violation: empty-contradictions` if any of the
+following holds:
+
+1. The body between `## Contradictions with hypothesis` and the next `##`
+   heading is whitespace-only (zero non-blank lines).
+2. The body is exactly one of the placeholder strings: `(none)`, `none`,
+   `N/A`, `n/a`, `TBD`, `tbd`, `pending`, `-`.
+3. The body is shorter than 20 characters of stripped, non-whitespace
+   content.
+
+The honest "no contradiction" form `None — hypothesis supported by
+evidence` is permitted because it (a) exceeds 20 chars, (b) is not a bare
+placeholder, (c) explicitly attests that the worker considered the
+question. Workers may still write a multi-sentence contradiction
+discussion; the floor is "≥20 chars and not a placeholder".
+
+```bash
+# Reference extractor:
+contradictions=$(awk '
+  /^## Contradictions with hypothesis/ {grab=1; next}
+  /^## / && grab {grab=0}
+  grab {print}
+' "$FINDING_PATH" | sed 's/^[[:space:]]*$//' | grep -v '^$' || true)
+stripped=$(printf '%s' "$contradictions" | tr -d '[:space:]')
+case "$(printf '%s' "$stripped" | tr 'A-Z' 'a-z')" in
+  ''|'none'|'(none)'|'n/a'|'tbd'|'pending'|'-')
+    echo "FAIL: schema-violation: empty-contradictions" >&2
+    exit_with_fail "schema-violation: empty-contradictions"
+    ;;
+esac
+if [[ ${#stripped} -lt 20 ]]; then
+  exit_with_fail "schema-violation: empty-contradictions"
+fi
+```
+
+This check runs BEFORE Step 6 (contradiction-honesty heuristic). An empty
+or placeholder section short-circuits the verdict to FAIL — the report
+writer cannot mark a finding PASS without a substantive contradiction
+discussion.
+
 ## Step 4: Anti-hallucination check
 Read `<RUN_PATH>/state/schemas.json` (written by discover-topics).
 

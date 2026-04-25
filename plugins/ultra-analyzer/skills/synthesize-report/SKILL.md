@@ -103,6 +103,13 @@ _Generated YYYY-MM-DD, N findings included, M excluded as FAIL, K divergent pair
 
 # Hard rules
 - NEVER cite a finding with verdict=FAIL.
+- NEVER mark a report PASS if any included finding has an empty / placeholder
+  `## Contradictions with hypothesis` section (closes M-5). The validator's
+  Step 3a refuses such findings at verdict time, but synthesize-report MUST
+  re-check at compose time as defense-in-depth: any included finding whose
+  contradictions body is whitespace-only or matches a placeholder
+  (none / n/a / tbd / pending / `-`) FAILs the report compose with reason
+  `empty-contradictions in TNNN`. Re-run validator on those topics first.
 - NEVER introduce conclusions not supported by at least one PASS finding.
 - NEVER hide a divergent pair by averaging — always flag explicitly.
 - EVERY numeric claim in REPORT carries [DATA:...] or [AGENT:TNNN] anchor.

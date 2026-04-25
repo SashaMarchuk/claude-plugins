@@ -81,6 +81,71 @@ Reasons:
 
 If the user says "my time" without specifying, use `defaults.timezone` from `~/.claude/gevent/config.json`.
 
+### DST resolution — spring-forward (non-existent) AND fall-back (ambiguous)
+
+When the user supplies a wall-clock time + IANA zone, detect BOTH non-existent times (spring-forward gap) AND ambiguous times (fall-back overlap) BEFORE building the JSON envelope. Surface an `AskUserQuestion` rather than silently snapping — the user MUST confirm which side of the DST boundary they meant. This guard runs in interactive mode AND in `--auto` (where it refuses with a one-line reason rather than asking — see "Hard stops" below).
+
+```python
+import datetime, zoneinfo
+
+def resolve_dst(local_naive: datetime.datetime, tzname: str):
+    """
+    Returns ("ok", aware_dt) for unambiguous times.
+    Returns ("nonexistent", None) for spring-forward gap (e.g. 02:30 on 2026-03-08 America/New_York).
+    Returns ("ambiguous", (early_aware, late_aware)) for fall-back overlap.
+    """
+    tz = zoneinfo.ZoneInfo(tzname)
+    early = local_naive.replace(tzinfo=tz, fold=0)
+    late  = local_naive.replace(tzinfo=tz, fold=1)
+    # Round-trip through UTC to detect non-existence: if the wall-clock the
+    # OS resolves back differs from what the user typed, the time was skipped.
+    early_utc = early.astimezone(datetime.timezone.utc)
+    roundtrip = early_utc.astimezone(tz).replace(tzinfo=None)
+    if roundtrip != local_naive:
+        return ("nonexistent", None)
+    if early.utcoffset() != late.utcoffset():
+        # fall-back overlap: same wall-clock maps to two distinct UTC instants.
+        return ("ambiguous", (early, late))
+    return ("ok", early)
+```
+
+#### Spring-forward (non-existent) — example
+
+User typed "2:30am on 2026-03-08 in America/New_York". The 02:00→03:00 jump means 02:30 does not exist. The skill MUST `AskUserQuestion`:
+
+```
+"02:30 on 2026-03-08 (America/New_York) does not exist —
+clocks spring forward from 02:00 directly to 03:00.
+Which did you mean?"
+  [01:30 (before the jump, EST -05:00)]
+  [03:30 (after the jump, EDT -04:00)]
+  [Different time / cancel]
+```
+
+Under `--auto`: refuse with `"02:30 2026-03-08 America/New_York does not exist (spring-forward). Re-run interactively or pick a different time."` Never silently snap to 03:30 — the user might genuinely have meant 01:30, and a silent shift produces an invite at the wrong hour.
+
+#### Fall-back (ambiguous) — example
+
+User typed "1:30am on 2026-11-01 in America/New_York". 01:30 occurs twice — once at EDT (-04:00, before the fall-back) and once at EST (-05:00, after). Surface `AskUserQuestion`:
+
+```
+"01:30 on 2026-11-01 (America/New_York) is ambiguous —
+clocks fall back from 02:00 to 01:00, so 01:30 happens twice.
+Which did you mean?"
+  [01:30 EDT (first occurrence, before the fall-back)]
+  [01:30 EST (second occurrence, after the fall-back)]
+```
+
+Under `--auto`: refuse with `"01:30 2026-11-01 America/New_York is ambiguous (fall-back DST). Re-run interactively or pick a different time."`
+
+#### Why not silent fold=0?
+
+A silent `fold=0` snap (the default Python behavior) is hostile under either DST direction:
+- Spring-forward: `fold=0` for a non-existent time silently shifts forward (02:30 → 03:30) — the invite lands an hour off the user's intent.
+- Fall-back: `fold=0` always picks the earlier (EDT) occurrence, but the user might have meant the EST one (e.g. "the 1:30 call AFTER the clocks change tonight").
+
+The `AskUserQuestion` prompt costs one round-trip and removes the silent-shift class of bugs entirely. This rule applies to ALL date-time parsing, including the past-time guard, the conflict-detection time window, and the request-ID timestamp derivation.
+
 ---
 
 ## Attendee rules

@@ -110,6 +110,28 @@ assert_eq "AC1.after-requeue-from-done: invariant holds" "true" "$invariant"
 counters_line=$(jq -r '.counters | "\(.topics_total) \(.topics_done) \(.topics_failed) \(.topics_pending) \(.topics_in_progress)"' "$RUN/state.json")
 assert_eq "AC1.after-requeue-from-done: counters match" "3 0 1 2 0" "$counters_line"
 
+# ------------------------------------------------------------------ WS-9 AC H-1
+# claim.sh refuses to claim from a symlinked pending/ dir (exit 5).
+WS9_RUN=$(fresh_run ws9-h1-symlink-dir)
+# Replace pending dir with a symlink. mv first so the original mkdir layout
+# isn't lost, then point pending -> a benign decoy dir.
+DECOY_DIR=$(mktemp -d -t ultra-analyzer-decoy-XXXXXX)
+echo "T" > "$DECOY_DIR/T999__p1__decoy.md"
+rm -rf "$WS9_RUN/topics/pending"
+ln -s "$DECOY_DIR" "$WS9_RUN/topics/pending"
+assert_exit_code "WS9-H1: symlinked pending/ refused exit 5" 5 \
+  bash "$CLAIM_SH" "$WS9_RUN"
+rm -rf "$DECOY_DIR"
+
+# Symlinked individual topic file is also refused (exit 5).
+WS9_RUN=$(fresh_run ws9-h1-symlink-file)
+DECOY_FILE=$(mktemp -t ultra-analyzer-decoy-XXXXXX)
+echo "T" > "$DECOY_FILE"
+ln -s "$DECOY_FILE" "$WS9_RUN/topics/pending/T001__p1__symfile.md"
+assert_exit_code "WS9-H1: symlinked topic file refused exit 5" 5 \
+  bash "$CLAIM_SH" "$WS9_RUN"
+rm -f "$DECOY_FILE"
+
 # ------------------------------------------------------------------ AC 2
 # Run-name sanitization rejects ../../tmp/evil with exit 6.
 (

@@ -16,6 +16,12 @@ in_progress="$run_path/topics/in-progress"
 lockdir="$run_path/topics/.claim.lock.d"
 
 [[ -d "$pending" ]] || { echo "ERROR: no pending/ dir at $pending" >&2; exit 2; }
+# Symlink-attack defense (H-1). A symlinked pending/ would let a hostile local
+# user point our atomic-mv at attacker-controlled content. Refuse loudly.
+if [[ -L "$pending" ]]; then
+  echo "ERROR: $pending is a symlink — refusing to claim (H-1)" >&2
+  exit 5
+fi
 mkdir -p "$in_progress"
 
 # Acquire exclusive lock via mkdir (atomic: fails if dir exists).
@@ -31,10 +37,20 @@ done
 trap 'rmdir "$lockdir" 2>/dev/null || true' EXIT
 
 # Pick the first pending topic. Sort deterministically (priority prefix in filename).
-topic=$(find "$pending" -maxdepth 1 -name "T*.md" -type f 2>/dev/null | sort | head -1)
+# `-P` makes find treat each candidate as the symlink itself (not the target).
+# We deliberately DO NOT add `-type f` here — we want symlinks to surface so
+# we can refuse them loudly at the explicit `[ -L ]` check below (closes H-1
+# at the per-file level). Silently skipping them would be a confusing UX.
+topic=$(find -P "$pending" -maxdepth 1 -name "T*.md" \( -type f -o -type l \) 2>/dev/null | sort | head -1)
 
 if [[ -z "$topic" ]]; then
   exit 1  # no work
+fi
+
+# Defense-in-depth — the candidate file itself must not be a symlink.
+if [[ -L "$topic" ]]; then
+  echo "ERROR: $topic is a symlink — refusing to claim (H-1)" >&2
+  exit 5
 fi
 
 base=$(basename "$topic")

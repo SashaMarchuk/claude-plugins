@@ -68,6 +68,26 @@ Cell legend: `pause` = orchestrator MUST call AskUserQuestion before proceeding;
 - If --mode is specified, use it instead of auto-detection
 - Scope analysis must complete before ANY agents launch
 
+**Task-type detection verdict surfacing (MED-12, MANDATORY)**:
+
+Auto-detection of task type (research / build / review / create / validate) drives whether Phase 4 (Execution) runs at all — a `build` task with researchers but no execution silently produces no code. To prevent silent misclassification, the orchestrator MUST treat detection confidence as a first-class signal:
+
+1. **If `--mode=<type>` is explicitly set**: the user's choice ALWAYS wins. Skip detection; do NOT surface anything; record `task_type_source = "user_override"` in state.json. Explicit override is the highest-precedence signal.
+
+2. **If detection confidence is HIGH (single type matches, no competing signals)**: proceed silently with the detected type. Record `task_type_source = "auto_high_confidence"`.
+
+3. **If detection is AMBIGUOUS (≥ 2 plausible types, e.g. a task that could be `research` OR `build`, OR signals split between `review` and `validate`)**: the orchestrator MUST NOT pick silently. It MUST either:
+   - (a) Surface the ambiguity to the user via `AskUserQuestion`, presenting the candidate types and asking which to use. Pause until the user picks one. Record `task_type_source = "user_disambiguated"`. OR
+   - (b) If the launcher is in a headless environment (MED-8), `AskUserQuestion` is disabled — in that case the orchestrator MUST REFUSE to proceed silently. Emit on the user-visible channel:
+
+     ```
+     [/ultra phase 1] REFUSED: task-type auto-detection is AMBIGUOUS (candidates: <list>). In headless mode AskUserQuestion is disabled — re-run with explicit `--mode=<type>` to pick one. (MED-12)
+     ```
+
+   Silent picking of a single type when detection is ambiguous is FORBIDDEN. The orchestrator MUST NOT default to "research" or "build" without a signal.
+
+4. **State record (MANDATORY)**: every Phase 1 completion MUST include the resolved `task_type` AND its `task_type_source` (`user_override` / `auto_high_confidence` / `user_disambiguated`) in the Phase 1 receipt under `phases_done[]` (MED-1 schema). Phase 8 audits this field; missing or `auto_silent` is itself a slop flag.
+
 ## Phase 2: Parallel Research / Exploration
 
 **Purpose**: Multiple independent agents explore the problem space simultaneously.

@@ -8,6 +8,11 @@
 # Claims topics one at a time, invokes analyze-unit via `claude --print`,
 # exits when no pending topics remain.
 
+# L-2: deliberately `set -uo pipefail` (NOT `set -e`). The retry loop below
+# reads `$rc` after every claude invocation — `set -e` would cause the loop
+# to abort on the first non-zero exit, defeating the whole point of the
+# 3-attempt retry. This is intentional, audited, and documented here so a
+# future cleanup pass doesn't blindly add `-e` and break retries.
 set -uo pipefail
 
 run_path="${1:?run-path required}"

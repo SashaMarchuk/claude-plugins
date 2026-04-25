@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path' | awk '/\\/findings\\/T[0-9]+\\.md$/ {print}' | while read -r f; do [ -n \"$f\" ] && echo \"[hook] findings written: $f (validator will be invoked by the worker)\"; done"
+            "//": "L-1 hardening: jq -r returns 'null' on absence; awk filters strict basename pattern; while read -r preserves whitespace; printf %q quotes any shell-meta on display. Hook is decorative — never invokes external tools — but defensive against malformed inputs.",
+            "command": "jq -r '(.tool_input.file_path // \"\")' | awk '/\\/findings\\/T[0-9]+\\.md$/ && !/[`$;&|<>(){}*?~!]/ {print}' | while IFS= read -r f; do [ -n \"$f\" ] && printf '[hook] findings written: %q (validator will be invoked by the worker)\\n' \"$f\"; done"
           }
         ]
       }

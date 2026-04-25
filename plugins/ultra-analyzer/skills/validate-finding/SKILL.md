@@ -26,6 +26,41 @@ Unanchored numeric claim → check FAILED with reason `ungrounded-number`.
 
 For quotes: require a citation anchor adjacent to each quote.
 
+### Step 2a — Anchor cross-verify (closes L-3)
+
+Format-only checks let a worker fabricate a syntactically-valid anchor
+(e.g. `[DOC:users._id=deadbeef]`) that resolves to nothing. The validator
+MUST cross-verify each anchor by calling the connector's
+`citation_anchor` op (or its inverse — see below) and refusing the finding
+if the anchor does not resolve.
+
+For each anchor in the findings file:
+- `[DOC:<unit>._id=<hex>]` — the unit must appear in
+  `<RUN_PATH>/state/schemas.json`'s enumerate list AND the `<hex>` must be
+  resolvable. Connector defines the resolver:
+  ```bash
+  bash ${CLAUDE_PLUGIN_ROOT}/bin/adapter.sh <RUN_PATH> resolve_refs '{"anchor": "<the-anchor>"}'
+  ```
+  Empty result OR error → FAIL with `fabricated-anchor: <anchor>`.
+- `[FILE:<path>:<line>]` — `path` must exist within the run's allowed
+  source roots; `line` must be ≤ `wc -l <path>`. Path traversal outside
+  the source root → FAIL.
+- `[URL:<full-url>]` — URL must appear in the connector's enumerate
+  output (or have been fetched as a `resolve_refs` follow). Workers
+  cannot invent URLs not visited.
+- `[PAGE:<doc>:<n>]` — `doc` enumerated; `n` ≤ doc's page_count from
+  schema sample.
+- `[ROW:<table>:<key>]` — table enumerated; key resolvable.
+- `[DATA:<query-N> returned <M> rows]` — `query-N` references one of the
+  Queries-executed entries in the same finding; `<M>` ≤ adapter's reported
+  row_count.
+- `[AGENT:T<NNN>]` — TNNN must be a topic in the run's manifest
+  (`state/manifest.json`).
+
+A fabricated anchor → FAIL with reason `fabricated-anchor: <full-anchor-text>`.
+The verdict reason is sufficient to pinpoint the offending anchor for
+human review or auto-requeue.
+
 ## Step 3: Schema check
 Required sections in order:
 Topic, Queries executed, Answer, Top 3 quotes, Contradictions with hypothesis, Confidence, Metadata.

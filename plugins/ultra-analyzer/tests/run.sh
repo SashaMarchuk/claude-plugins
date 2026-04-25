@@ -164,6 +164,56 @@ else
 fi
 rm -rf "$H4_PATHDIR"
 
+# ------------------------------------------------------------------ WS-9 AC L-1
+# hooks.json: hook is decorative, hardened against malformed file_path.
+HOOKS_JSON="$PLUGIN_DIR/hooks/hooks.json"
+if grep -q 'L-1 hardening' "$HOOKS_JSON" \
+   && grep -q '!/\[\`\$' "$HOOKS_JSON"; then
+  report_pass "WS9-L1: hooks.json documents L-1 hardening + filters shell-meta"
+else
+  report_fail "WS9-L1: hooks.json L-1 hardening" "missing"
+fi
+# Functional: pipe a malformed payload through the hook command and confirm
+# it produces no output for shell-meta paths (still safe, no side effects).
+HOOK_CMD=$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$HOOKS_JSON")
+out=$(printf '{"tool_input":{"file_path":"/run/findings/T001.md"}}' | bash -c "$HOOK_CMD")
+if [[ "$out" == *"T001.md"* ]]; then
+  report_pass "WS9-L1: hook accepts well-formed findings path"
+else
+  report_fail "WS9-L1: hook accepts well-formed findings path" "out=$out"
+fi
+out=$(printf '{"tool_input":{"file_path":"/run/findings/T001.md; rm -rf /"}}' | bash -c "$HOOK_CMD")
+if [[ -z "$out" ]]; then
+  report_pass "WS9-L1: hook rejects shell-meta in path"
+else
+  report_fail "WS9-L1: hook rejects shell-meta in path" "out=$out"
+fi
+
+# ------------------------------------------------------------------ WS-9 AC L-2
+# launch-terminal.sh documents the intentional set -uo pipefail (not -e).
+if grep -q 'L-2:' "$LAUNCH_SH" \
+   && grep -q 'set -uo pipefail' "$LAUNCH_SH"; then
+  report_pass "WS9-L2: launch-terminal.sh documents intentional set -uo"
+else
+  report_fail "WS9-L2: launch-terminal.sh documents intentional set -uo" "missing"
+fi
+
+# ------------------------------------------------------------------ WS-9 AC L-3
+# Validator cross-verifies anchors against connector enumeration.
+if grep -q 'Anchor cross-verify' "$VALIDATE_SKILL" \
+   && grep -q 'fabricated-anchor' "$VALIDATE_SKILL" \
+   && grep -q 'Step 2a' "$VALIDATE_SKILL"; then
+  report_pass "WS9-L3: validator documents anchor cross-verify"
+else
+  report_fail "WS9-L3: validator documents anchor cross-verify" "missing"
+fi
+# Spec-level: the canonical fabricated-anchor example is on file.
+if grep -q 'deadbeef' "$VALIDATE_SKILL"; then
+  report_pass "WS9-L3: canonical fabricated-anchor example documented"
+else
+  report_fail "WS9-L3: canonical fabricated-anchor example documented" "missing"
+fi
+
 # ------------------------------------------------------------------ WS-9 AC M-7
 # Browser connector strips cookies / tokens / storage from extracted text.
 if grep -q 'Mandatory cookie / token / storage strip' "$BROWSER_TPL" \

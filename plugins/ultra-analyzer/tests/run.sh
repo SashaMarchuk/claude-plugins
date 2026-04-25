@@ -164,6 +164,46 @@ else
 fi
 rm -rf "$H4_PATHDIR"
 
+# ------------------------------------------------------------------ WS-9 AC M-7
+# Browser connector strips cookies / tokens / storage from extracted text.
+if grep -q 'Mandatory cookie / token / storage strip' "$BROWSER_TPL" \
+   && grep -q 'strip_secrets' "$BROWSER_TPL" \
+   && grep -q 'document\.cookie' "$BROWSER_TPL"; then
+  report_pass "WS9-M7: browser template documents secret-strip"
+else
+  report_fail "WS9-M7: browser template documents secret-strip" "missing"
+fi
+
+# Functional: extract strip_secrets and run on adversarial inputs.
+if command -v perl >/dev/null 2>&1; then
+  STRIP_FN=$(awk '/^strip_secrets\(\) \{/,/^\}$/' "$BROWSER_TPL")
+  if [[ -n "$STRIP_FN" ]]; then
+    set +e
+    eval "$STRIP_FN"
+    out=$(echo '<script>document.cookie="session=xyz123; HttpOnly"</script>' | strip_secrets)
+    if [[ "$out" == *'[REDACTED:cookie]'* && "$out" != *xyz123* ]]; then
+      report_pass "WS9-M7: document.cookie='session=xyz' redacted"
+    else
+      report_fail "WS9-M7: document.cookie redacted" "out=$out"
+    fi
+    out=$(echo "Authorization: Bearer eyJhbGciOi.dGVzdA.signature" | strip_secrets)
+    if [[ "$out" != *eyJhbGciOi* && "$out" != *signature* ]]; then
+      report_pass "WS9-M7: Authorization Bearer + JWT redacted"
+    else
+      report_fail "WS9-M7: Authorization+JWT redacted" "out=$out"
+    fi
+    out=$(echo 'localStorage.setItem("auth_token", "secret123")' | strip_secrets)
+    if [[ "$out" == *'[REDACTED:storage]'* && "$out" != *secret123* ]]; then
+      report_pass "WS9-M7: localStorage.setItem redacted"
+    else
+      report_fail "WS9-M7: localStorage redacted" "out=$out"
+    fi
+    set -e
+  else
+    report_fail "WS9-M7: strip_secrets extractable" "awk failed"
+  fi
+fi
+
 # ------------------------------------------------------------------ WS-9 AC M-6
 # Validator + connector pin deterministic late-schema rescue.
 CONNECTOR_SKILL="$PLUGIN_DIR/skills/connector/SKILL.md"

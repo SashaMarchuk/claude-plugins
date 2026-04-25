@@ -48,6 +48,55 @@ Static list from config.yaml:
 - Third-party ad/tracking pixel payloads.
 Return: patterns to redact in extracted text (e.g. credit card numbers, SSN format, email addresses if PII-sensitive).
 
+### Mandatory cookie / token / storage strip (closes M-7)
+
+EVERY extract / extract_text / DOM-snapshot path MUST run a redaction pass
+BEFORE writing the result. The pass strips ALL of the following from any
+captured text or attribute:
+
+1. **Document cookies.** Any literal occurrence of `document.cookie =`,
+   `document.cookie=`, `Cookie:`, `Set-Cookie:`, or `cookie=<value>;` in
+   inline scripts, headers, or rendered text → replaced with
+   `[REDACTED:cookie]`. Example INPUT:
+   `<script>document.cookie="session=xyz123; HttpOnly"</script>`
+   Example OUTPUT (stored): `<script>[REDACTED:cookie]</script>`.
+2. **localStorage / sessionStorage.** Any `localStorage.setItem(...)`,
+   `sessionStorage.setItem(...)`, `localStorage.<key> =`,
+   `sessionStorage.<key> =` → replaced with `[REDACTED:storage]`.
+3. **JWT / Bearer tokens.** Regex
+   `eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+` (JWT shape) and
+   `Bearer\s+[A-Za-z0-9._-]+` → `[REDACTED:token]`.
+4. **CSRF / API keys in hidden fields.** Any `<input type="hidden"
+   name="(csrf|_token|authenticity_token|api_key|apikey)" value="...">`
+   → strip the `value` attribute.
+5. **Authorization headers.** In captured network requests / response
+   metadata, any `Authorization:` header → `[REDACTED:authz]`.
+
+Implementation reference (sed-style; the connector's actual implementation
+may use a more robust DOM walker, but the SAME six categories above must
+be stripped):
+
+```bash
+strip_secrets() {
+  # Use `#` as the s/// delimiter so embedded `|` inside character
+  # alternations does not terminate the pattern.
+  perl -pe '
+    s#document\.cookie\s*=\s*"[^"]*"#[REDACTED:cookie]#g;
+    s#document\.cookie\s*=\s*'\''[^'\'']*'\''#[REDACTED:cookie]#g;
+    s#(?:localStorage|sessionStorage)\.setItem\([^)]+\)#[REDACTED:storage]#g;
+    s#(?:localStorage|sessionStorage)\.\w+\s*=\s*[^;\n]+#[REDACTED:storage]#g;
+    s#eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+#[REDACTED:token]#g;
+    s#Bearer\s+[A-Za-z0-9._-]+#[REDACTED:token]#g;
+    s#Authorization:\s*[^\r\n]+#[REDACTED:authz]#g;
+    s#Set-Cookie:\s*[^\r\n]+#[REDACTED:cookie]#g;
+  '
+}
+```
+
+The strip MUST run AFTER extraction and BEFORE writing to findings or
+adapter return. A connector that returns raw HTML without running this
+pass is non-conformant and the run controller refuses its output.
+
 ## Budget constraints
 - Max pages per run: `config.source.max_pages` (default 200).
 - Per-page wait: 5s max for idle (`networkidle`) before extracting.

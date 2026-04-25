@@ -268,10 +268,11 @@ Written by `--onboard calendar`. Read on every invocation.
 - `behavior.confirm_before_create` — if `true`, always show the preview + confirm in interactive mode. Never honored under `--auto`.
 - `behavior.check_conflicts` — if `true`, run the conflict query before creating.
 - `behavior.past_time_check` — if `true`, guard against past-start times (interactive: ask; `--auto`: refuse).
-- `behavior.notes_bot_decided` — boolean. **Load-bearing for `onboarding_complete`.** Default `false` on fresh install. Set to `true` ONLY when the `--onboard calendar` wizard explicitly recorded a user decision (either "yes, use bot <email>" OR explicit "no bot"). Pre-flight step 3a (see `SKILL.md`) HALTs every invocation until this is `true`, regardless of other fields. **`always_include[]` semantics hinge on this flag**:
-  - `notes_bot_decided: true` + `always_include: [{…}]` → user opted in (use the listed bot).
-  - `notes_bot_decided: true` + `always_include: []` → user explicitly chose "no bot" (valid).
-  - `notes_bot_decided: false` (or missing) → NEITHER state is valid; the wizard has not recorded a decision yet.
+- `behavior.notes_bot_decided` — boolean (JSON `true` / `false` ONLY — strict type check, NOT a prose truthiness read). **Load-bearing for `onboarding_complete`.** Default `false` on fresh install. Set to `true` ONLY when the `--onboard calendar` wizard explicitly recorded a user decision (either "yes, use bot <email>" OR explicit "no bot"). Pre-flight step 3a (see `SKILL.md`) HALTs every invocation until `isinstance(notes_bot_decided, bool) and notes_bot_decided is True`. Stringified `"true"` (chezmoi/yadm/dotbot dotfile-sync re-encoding), integer `1`, float `1.0`, list, dict, or null all HALT — only the JSON literal `true` is accepted. **`always_include[]` semantics hinge on this flag, AND `always_include` itself MUST be a JSON array (`isinstance(value, list)`) — non-array values (object, string, null) HALT at pre-flight 3a even if the bool flag is correct**:
+  - `notes_bot_decided: true` (bool) + `always_include: [{…}]` (array) → user opted in (use the listed bot).
+  - `notes_bot_decided: true` (bool) + `always_include: []` (array) → user explicitly chose "no bot" (valid).
+  - `notes_bot_decided: false` / missing / wrong type → NEITHER state is valid; the wizard has not recorded a decision yet.
+  - `always_include` non-array (e.g. `"[]"` string, `{}`, `null`) → HALT regardless of `notes_bot_decided`.
 - `always_include[]` — array of attendee objects always prepended to the attendee array:
   - `email` — required.
   - `tag` — semantic tag (e.g., `"notes_bot"`) for human readability. Optional.

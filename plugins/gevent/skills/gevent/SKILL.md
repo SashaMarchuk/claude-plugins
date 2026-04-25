@@ -44,10 +44,21 @@ Invocation forms (sub-commands map directly to the mode flags below):
    - **In `--auto` mode**: HALT with "config missing — run `/gevent:onboard calendar` first".
    - In interactive mode: redirect to `--onboard calendar`; carry the seed.
 
-3a. **Notes-bot preference gate (MANDATORY).** After the config loads, check `behavior.notes_bot_decided`. If the field is missing or `!= true`, the onboarding is incomplete regardless of every other flag — the user has not yet made an explicit yes/no decision on the always-include notes-bot.
-   - **In `--auto` mode**: HALT with "notes-bot preference missing — run `/gevent:onboard calendar` first".
-   - In interactive mode: redirect to `--onboard calendar` (carry the seed). The wizard's notes-bot step (see `references/modes.md#onboard-calendar`) loops until the user picks one of three options and sets `behavior.notes_bot_decided: true`.
-   - `always_include: []` is a valid state ONLY when `behavior.notes_bot_decided == true` (user explicitly chose "no bot"). An empty array without the flag is NOT valid and triggers this gate.
+3a. **Notes-bot preference gate (MANDATORY — strict JSON-schema type check, NOT a prose `!= true` substring read).** After the config loads, evaluate `behavior.notes_bot_decided` and `always_include` with explicit Python-level type assertions, NOT natural-language truthiness. The check below is load-bearing: migration tools (chezmoi, yadm, dotbot) routinely re-encode booleans as strings during dotfile sync, so a stringified `"true"` would slip past a prose `!= true` evaluation — but it MUST HALT.
+   ```python
+   v = data.get("behavior", {}).get("notes_bot_decided")
+   if not (isinstance(v, bool) and v is True):
+       fail("notes_bot_decided type-mismatch — must be JSON boolean true, "
+            f"got {type(v).__name__}={v!r}; run `/gevent:onboard calendar`")
+   ai = data.get("always_include")
+   if not isinstance(ai, list):
+       fail("always_include type-mismatch — must be JSON array, "
+            f"got {type(ai).__name__}={ai!r}; run `/gevent:onboard calendar`")
+   ```
+   String `"true"`, integer `1`, float `1.0`, list `[true]`, or any other non-bool value HALTs with the type-mismatch message above. Likewise, a non-array `always_include` (object, string, null) HALTs even if `notes_bot_decided` is a valid bool.
+   - **In `--auto` mode**: HALT with "notes-bot preference missing or wrong type — run `/gevent:onboard calendar` first".
+   - In interactive mode: redirect to `--onboard calendar` (carry the seed). The wizard's notes-bot step (see `references/modes.md#onboard-calendar`) loops until the user picks one of three options and sets `behavior.notes_bot_decided: true` (JSON boolean, NOT string).
+   - `always_include: []` (empty JSON array) is a valid state ONLY when `behavior.notes_bot_decided` passes the bool-true check (user explicitly chose "no bot"). An empty array without the flag, or a stringified `"[]"`, is NOT valid and triggers this gate.
 
 4. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard. (Enforced in code by the helper — see `references/config-schema.md` → `SchemaVersionTooNew`.)
 

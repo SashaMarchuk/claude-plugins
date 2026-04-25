@@ -165,7 +165,11 @@ case "$cmd" in
     value="${3?value required}"
     state_file="$run_path/state.json"
     lockdir="$state_file.lock.d"
-    tmp=$(mktemp)
+    # tmp MUST live on the same filesystem as state_file so the final mv is
+    # rename(2)-atomic. Default mktemp puts files in $TMPDIR, which on macOS
+    # is on a different filesystem and degrades the mv to copy-then-delete —
+    # breaking the atomicity contract a concurrent reader relies on.
+    tmp=$(mktemp "$run_path/.state.set.XXXXXX")
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     # Validate path up front so we fail fast without taking the lock.
     # Caller-supplied text is never interpolated into the jq program string;
@@ -252,7 +256,8 @@ case "$cmd" in
     counter="${2:?counter field required (e.g. .counters.topics_done)}"
     state_file="$run_path/state.json"
     lockdir="$state_file.lock.d"
-    tmp=$(mktemp)
+    # Same-filesystem tmp so the final mv is rename(2)-atomic on macOS too.
+    tmp=$(mktemp "$run_path/.state.inc.XXXXXX")
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     # Validate+serialize path before acquiring the lock so we fail fast.
     path_arr=$(_path_to_json_array "$counter") || { rm -f "$tmp"; exit 9; }
@@ -284,7 +289,8 @@ case "$cmd" in
     counter="${2:?counter field required (e.g. .counters.topics_pending)}"
     state_file="$run_path/state.json"
     lockdir="$state_file.lock.d"
-    tmp=$(mktemp)
+    # Same-filesystem tmp so the final mv is rename(2)-atomic on macOS too.
+    tmp=$(mktemp "$run_path/.state.dec.XXXXXX")
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     path_arr=$(_path_to_json_array "$counter") || { rm -f "$tmp"; exit 9; }
     # Same mkdir-based lock discipline as `inc`.
@@ -313,7 +319,8 @@ case "$cmd" in
     now=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
     snap="$run_path/checkpoints/$now.json"
     cp "$state_file" "$snap"
-    tmp=$(mktemp)
+    # Same-filesystem tmp so the final mv is rename(2)-atomic on macOS too.
+    tmp=$(mktemp "$run_path/.state.checkpoint.XXXXXX")
     jq --arg cp "$snap" '.last_checkpoint = $cp' "$state_file" > "$tmp"
     mv "$tmp" "$state_file"
     echo "$snap"

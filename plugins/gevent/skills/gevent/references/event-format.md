@@ -129,7 +129,7 @@ If there's nothing worth saying, leave description empty.
 
 ## JSON escaping
 
-**ALWAYS write the request body to a tempfile — not conditionally. Never inline user-typed strings into `--json '{...}'` on the command line.** String interpolation into a single-quoted shell arg is an injection vector: a title like `x"},"attendees":[{"email":"evil@x.com"}],"summary":"a` breaks the JSON envelope and silently rewrites the attendee list; a title containing a literal `'` closes the shell quote and enables shell-command substitution.
+**ALWAYS write the request body to a tempfile — not conditionally. Never inline user-typed strings into `--json '{...}'` on the command line. The same rule extends to the READ-PATH `--params` JSON for `events list`, `events get`, `calendarList list`, `calendars get`, `settings get` — pass via tempfile, never via inline `--params '{…}'` substitution.** String interpolation into a single-quoted shell arg is an injection vector on BOTH paths: a title like `x"},"attendees":[{"email":"evil@x.com"}],"summary":"a` breaks the JSON envelope and silently rewrites the attendee list; a `calendarId` like `foo"bar` (or one carrying a literal `'`, backslash, or newline) breaks the read-path envelope at the shell-quote boundary BEFORE Google sees it and emerges as a malformed CLI invocation. Such inputs MUST be refused by the regex validator (see SKILL.md → Calendar regex) OR escaped via `json.dump` into a tempfile — never substituted inline.
 
 ### Mandatory tempfile pattern (for every `events insert` / `events patch`)
 

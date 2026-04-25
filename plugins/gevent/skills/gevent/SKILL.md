@@ -164,7 +164,25 @@ Default is `primary` (the user's own Google account). Override via `--calendar` 
 
 ### Conflict detection (before create)
 
-1. Query `npx @googleworkspace/cli calendar events list --params '{"calendarId":"<cal>","timeMin":"<start>","timeMax":"<end>","singleEvents":true,"orderBy":"startTime","maxResults":10}' 2>/dev/null` for the proposed window. Cap at `maxResults:10` — the decision is "does ANY conflict exist in this window," not "enumerate every event on a heavy-traffic calendar."
+1. Query `npx @googleworkspace/cli calendar events list` for the proposed window — Cap at `maxResults:10` — the decision is "does ANY conflict exist in this window," not "enumerate every event on a heavy-traffic calendar." **Read-path tempfile discipline (parallel to `events insert` / `events patch`)**: the `--params` payload MUST be built in Python and passed via `--params-file <tempfile>` (or, on CLI versions that lack `--params-file`, via `--params "$(cat <tempfile>)"`). NEVER inline-substitute `<cal>`, `<start>`, `<end>` into a single-quoted shell string — a `calendarId` containing a quote (`foo\"bar`), backslash, or newline breaks the JSON envelope at the shell-quote boundary BEFORE Google sees it, and a `timeMin` carrying ANSI control sequences would re-emerge as shell-visible metacharacters. Same threat surface as the write path: `json.dump` is the only trusted serializer.
+   ```python
+   import json, tempfile
+   params = {"calendarId": cal, "timeMin": start_iso, "timeMax": end_iso,
+             "singleEvents": True, "orderBy": "startTime", "maxResults": 10}
+   with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+       json.dump(params, f, ensure_ascii=False)  # auto-escapes quotes / backslashes / control chars
+       params_file = f.name
+   try:
+       # bash:
+       #   npx @googleworkspace/cli calendar events list \
+       #     --params "$(cat $params_file)" 2>/dev/null
+       ...
+   finally:
+       import os
+       try: os.remove(params_file)
+       except FileNotFoundError: pass
+   ```
+   This rule covers EVERY read path that takes `--params` JSON: `calendar events list`, `calendar events get`, `calendar calendarList list`, `calendar calendars get`, `calendar settings get`. A `calendarId` like `foo"bar` is REFUSED at the validation regex (see "Calendar" section below — M-4 regex catches it pre-flight); a value that the regex would somehow let through is still safely escaped by `json.dump`. Inline `--params '{"calendarId":"foo\"bar"}'` is FORBIDDEN — refused or escaped via tempfile, never substituted into a shell-quoted string.
 2. If any event overlaps, surface in the preview: "You have `<title>` at `<time>`. Create anyway?" For each existing event in the window, classify and compute `overlap_minutes` per the math below, then sum ALL overlaps and compare against `proposed_minutes`.
 3. **Overlap math (explicit, applied per-existing-event then summed).** Let `P_start`, `P_end` be the proposed event's resolved UTC datetimes; `proposed_minutes = max(0, (P_end - P_start).total_seconds() / 60)`. For each existing event `E` in the window:
    - **Timed event** (`E.start.dateTime` + `E.end.dateTime` present): `overlap_minutes_E = max(0, (min(P_end, E.end) - max(P_start, E.start)).total_seconds() / 60)`.

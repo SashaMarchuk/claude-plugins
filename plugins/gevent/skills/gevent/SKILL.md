@@ -162,6 +162,28 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/clic
 
 Default is `primary` (the user's own Google account). Override via `--calendar` switch or per-invocation "on the team calendar." Calendar list lives in `~/.claude/gevent/config.json` → `defaults.calendar` and the optional `calendars[]` registry.
 
+**`calendarId` validation regex (load-bearing — applied at pre-flight, BEFORE the value enters any `--params` JSON envelope, read-path or write-path).** Pin the regex:
+
+```python
+import re
+CALENDAR_ID_RE = re.compile(r"^[a-zA-Z0-9._\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$|^primary$|^[a-f0-9]{24,}@group\.calendar\.google\.com$")
+
+def validate_calendar_id(cal):
+    if not isinstance(cal, str) or not CALENDAR_ID_RE.match(cal):
+        raise SystemExit(
+            f"calendarId rejected at pre-flight: {cal!r} does not match "
+            r"^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$|^primary$|^[a-f0-9]{24,}@group\.calendar\.google\.com$. "
+            "Run `/gevent:calendar` to pick a valid calendar."
+        )
+```
+
+Hand-edited or untrusted values like `defaults.calendar: "../../etc/passwd"`, `defaults.calendar: "foo\"bar"`, `defaults.calendar: "$(rm -rf ~)"`, or `defaults.calendar: "; cat /etc/shadow #"` HALT at pre-flight with exit code 1 + the clear message above — the value never enters a JSON envelope, never reaches the CLI, never reaches Google. Accepted forms:
+- `primary` — user's own account.
+- `<email-format>@<domain>` — any RFC-shape calendar email.
+- `<24+-hex>@group.calendar.google.com` — Google's secondary-calendar IDs.
+
+The regex is intentionally narrower than the email-validation regex used for attendees (which accepts more punctuation) — calendar IDs come from Google and are well-shaped; permissive matching here is unnecessary and invites traversal-style payloads. The pre-flight check runs in `scripts/preflight.py` (see L-19) AND in SKILL.md step 3 prose at config-load time.
+
 ### Conflict detection (before create)
 
 1. Query `npx @googleworkspace/cli calendar events list` for the proposed window — Cap at `maxResults:10` — the decision is "does ANY conflict exist in this window," not "enumerate every event on a heavy-traffic calendar." **Read-path tempfile discipline (parallel to `events insert` / `events patch`)**: the `--params` payload MUST be built in Python and passed via `--params-file <tempfile>` (or, on CLI versions that lack `--params-file`, via `--params "$(cat <tempfile>)"`). NEVER inline-substitute `<cal>`, `<start>`, `<end>` into a single-quoted shell string — a `calendarId` containing a quote (`foo\"bar`), backslash, or newline breaks the JSON envelope at the shell-quote boundary BEFORE Google sees it, and a `timeMin` carrying ANSI control sequences would re-emerge as shell-visible metacharacters. Same threat surface as the write path: `json.dump` is the only trusted serializer.

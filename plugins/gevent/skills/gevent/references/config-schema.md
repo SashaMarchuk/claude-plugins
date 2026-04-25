@@ -262,7 +262,7 @@ Written by `--onboard calendar`. Read on every invocation.
 - `schemaVersionHistory[]` — append-only log of version transitions, each entry `{from: <int>, to: <int>, at: "<ISO8601>"}`. Preserved verbatim on round-trip.
 - `defaults.timezone` — IANA name. Never an offset like `-04:00`.
 - `defaults.duration_minutes` — integer. Used when the user doesn't specify a duration.
-- `defaults.calendar` — the active calendar ID (`primary` for the user's own Google calendar, or any other ID they have write access to).
+- `defaults.calendar` — the active calendar ID. **Validated at pre-flight against a pinned regex** (see `SKILL.md` → "Calendar" → `CALENDAR_ID_RE`): `^[a-zA-Z0-9._\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$|^primary$|^[a-f0-9]{24,}@group\.calendar\.google\.com$`. Hand-edited values like `"../../etc/passwd"` HALT at pre-flight with exit code 1 + clear message — the value never enters a JSON envelope. Accepted: `primary`, any email-shaped string, or a Google secondary-calendar ID `<24+-hex>@group.calendar.google.com`. Anything else is refused.
 - `defaults.send_updates` — `"all" | "externalOnly" | "none"`. Controls whether Google emails invitations.
 - `defaults.conference_type` — `"hangoutsMeet"` for Google Meet; no other values currently supported.
 - `behavior.confirm_before_create` — if `true`, always show the preview + confirm in interactive mode. Never honored under `--auto`.

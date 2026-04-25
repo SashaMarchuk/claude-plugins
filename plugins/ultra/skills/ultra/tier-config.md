@@ -44,7 +44,7 @@
   - 1 Judge (Opus) — J1
   - 1 Anti-Slop Auditor (Opus) — A1
   - 1 Synthesizer (Opus) — S1
-- **Anti-slop**: Full evidence audit + contradiction scan
+- **Anti-slop**: Full evidence audit + contradiction scan + cross-agent independence check (per anti-slop-rules.md "Tier-Specific Depth"; LOW-2 alignment — Large includes the cross-agent check at full coverage)
 - **Execution agents** (Phase 4, if applicable): Opus model
 
 ### --xl / --extralarge
@@ -64,7 +64,7 @@
   - 1 Scope Minimizer (Opus) — SM1 (argues for simpler solutions)
   - 1 External Observer (Opus) — EO1 (end-user perspective)
   - 1 Synthesizer (Opus) — S1
-- **Anti-slop**: Full protocol (evidence + contradiction + cross-agent independence check)
+- **Anti-slop**: Everything in Large + re-run any failed claims through a fresh agent to verify the auditor isn't itself producing slop (per anti-slop-rules.md "Tier-Specific Depth", XL row). Cross-agent independence check is NOT XL-only — it runs at Large too (LOW-2 alignment).
 - **Execution agents** (Phase 4, if applicable): Opus model
 
 ## Sub-Agent Opus Assertion (MED-11, MANDATORY at --xl)
@@ -102,10 +102,16 @@ At `--xl`, the orchestrator's tier prose says "All Opus" but the orchestrator (w
 When user specifies `--agents=N`:
 - N must be >= tier minimum (small:3, medium:6, large:10, xl:15)
 - If N < tier minimum, use tier minimum and warn
-- Extra agents are distributed proportionally across roles:
-  - 50% go to Researchers (more perspectives)
-  - 25% go to Validators (more independent checks)
-  - 25% go to Devil's Advocates (more attack angles)
+- The 50/25/25 split applies ONLY to the **research/validation/adversarial pool** (Researchers + Validators + Devil's Advocates). Fixed-slot roles are NOT redistributed: 1 Judge (J1), 1 Anti-Slop Auditor (A1), 1 Synthesizer (S1, large/xl only), 1 Contrarian (C1, xl only), 1 Scope Minimizer (SM1, xl only), 1 External Observer (EO1, xl only), and Phase 0 Pre-Researchers (xl only) are allocated per the tier block ABOVE the override math, then the leftover budget `N_pool = N − fixed_slots` is split.
+- Extra agents in `N_pool` are distributed proportionally across the three pool roles using floor-then-largest-remainder rounding (LOW-4):
+  - 50% of `N_pool` → Researchers (more perspectives)
+  - 25% of `N_pool` → Validators (more independent checks)
+  - 25% of `N_pool` → Devil's Advocates (more attack angles)
+- **Rounding rule (LOW-4, deterministic — two identical `--agents=N` calls produce identical role counts)**:
+  1. Compute the floor of each share: `R_floor = floor(0.50 * N_pool)`, `V_floor = floor(0.25 * N_pool)`, `D_floor = floor(0.25 * N_pool)`.
+  2. Compute the leftover `L = N_pool - (R_floor + V_floor + D_floor)`. `L ∈ {0, 1, 2}`.
+  3. Distribute `L` to the roles in fixed priority order **R, V, D** (largest-remainder + ties-broken-by-priority). Example: `N_pool=7` → floor split `(3, 1, 1)`, leftover `L=2`, assign 1 to R then 1 to V → final `(4, 2, 1)`. Worked example for `N_pool=11` → floors `(5, 2, 2)`, leftover `L=2`, assign to R and V → `(6, 3, 2)`.
+  4. The result is deterministic for any `N_pool`; non-divisible-by-4 inputs no longer produce non-deterministic role counts.
 
 ## Agent Naming Convention
 

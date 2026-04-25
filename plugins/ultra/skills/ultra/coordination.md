@@ -321,6 +321,14 @@ When `--resume` is used with `--task=<name>`:
 5. Trust previous findings (don't re-run completed phases)
 6. If multi-terminal and new findings from other terminals appeared since last run, incorporate them
 
+**Tier-flag-on-resume warning (LOW-3, MANDATORY user-visible notice)**: when `--resume` is present in `$ARGUMENTS`, ANY tier flag (`--small`, `--medium`, `--large`, `--xl`, `--extralarge`) on the resume command is **silently ignored** — the original tier from `state.json` always wins (Step 4 above). The launcher MUST emit a single user-visible notice when `--resume` is combined with a tier flag:
+
+```
+[/ultra --resume] NOTICE: tier flag <flag> on resume is ignored — original tier "<state.tier>" from state.json is preserved for consistency. To run a fresh tier, drop --resume. (LOW-3)
+```
+
+This makes the silent-ignore explicit at the user-visible channel rather than hidden in coordination.md prose. The `commands/resume.md` argument-hint cannot enforce this (it's a static hint), so the runtime notice is the user-facing fix.
+
 ## Incremental Improvement
 
 When running `/ultra --task=<name>` on the same task again (without --resume):

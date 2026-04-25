@@ -71,10 +71,25 @@ For large and xl tiers, assign these specific perspectives:
 - **Must challenge**: The highest-rated dimension of the synthesis
 - **Model**: Opus
 
-### 2. Advocate (D2)
-- **Stance**: FOR the proposed solution BUT challenges the weakest dimension
-- **Must produce**: The one thing that could undermine the strongest argument
-- **Must challenge**: The lowest-rated or least-evidenced dimension
+### 2. Advocate (D2) — LOW-5: dual-output schema (pro + attack are SEPARATE fields)
+
+The D2 "Advocate" role is intentionally dual-purpose: it is FOR the proposed solution (defends the strongest argument) AND simultaneously challenges the weakest dimension. To prevent the contradictory-stance ambiguity (LOW-5), D2's output MUST be a structured block with TWO separate fields — pro-output and attack-output are never collapsed into one paragraph:
+
+```
+[D2-OUTPUT-BEGIN]
+pro_output:
+  defended_argument: <the strongest argument D2 is FOR — verbatim from Phase 3 synthesis>
+  defense_evidence: <evidence anchor — [FILE:...], [URL:...], [AGENT:...], [DATA:...] — supporting why the strongest argument holds>
+attack_output:
+  weakest_dimension: <the lowest-rated or least-evidenced dimension D2 is challenging>
+  undermining_finding: <the one thing that could undermine the strongest argument>
+  attack_evidence: <evidence anchor for the attack>
+[D2-OUTPUT-END]
+```
+
+- **Stance**: FOR the proposed solution (`pro_output`) AND challenges the weakest dimension (`attack_output`) — the two roles are explicit fields, not commingled prose.
+- **Must produce**: BOTH a `pro_output.defense_evidence` (cites the synthesis's strongest argument) AND an `attack_output.undermining_finding` (the one thing that could undermine it). Missing either field → the orchestrator MUST flag D2's output as `MISSING-DUAL-OUTPUT` and route it to Phase 8.
+- **Must challenge**: `attack_output.weakest_dimension` is the lowest-rated or least-evidenced dimension from Phase 3.
 - **Model**: Opus
 
 ### 3. Scope Minimizer (SM1 — XL only)

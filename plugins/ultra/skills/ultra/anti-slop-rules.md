@@ -59,7 +59,7 @@ The auditor flags the following patterns as potential slop:
 
 ### Medium-Confidence Slop Flags
 - **Generic recommendations**: Advice that would apply to ANY project, not specifically this one
-- **Missing negatives**: Analysis that found zero downsides, risks, or trade-offs (unrealistic for any non-trivial decision)
+- **Missing negatives (LOW-6 carve-out)**: Analysis that found zero downsides, risks, or trade-offs is suspicious for any non-trivial *decision* but NOT for genuinely one-sided correct answers (e.g. "is this code correct?", "does this regex match `^foo$`?", "what is `2 + 2`?", definitive factual lookups). The auditor MUST suppress this flag when ALL THREE of the following hold: (i) the task type is `validate` or `review` AND the verdict is binary correct/incorrect; (ii) the agent explicitly stated "no trade-offs found because the question is binary/factual" or similar acknowledgment; (iii) Phase 6 Devil's Advocate produced the canonical no-forced-dissent phrase (MED-5). Otherwise the flag fires as before.
 - **Premature convergence**: All researchers agreed in Phase 2 without exploring meaningfully different approaches
 
 ### Investigation Required

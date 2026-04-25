@@ -204,6 +204,14 @@ Equivalent acceptable implementation: open with `O_NOFOLLOW` (POSIX) or `O_NOFOL
 /ultra --small 'best way to implement this feature'
 /ultra --xl --task=migration --terminal=1 'plan database migration strategy'
 /ultra --large --focus=security 'review this authentication module'
-/ultra --large /deep-research 'evaluate monitoring solutions'
+/ultra --large /<wrapped-skill-name> 'evaluate monitoring solutions'
 /ultra --resume --task=migration
 ```
+
+**Wrapped-skill existence check (LOW-1, MANDATORY)**: when `$ARGUMENTS` contains a `/skill-name` token (wrapped skill), the launcher MUST verify the named skill is installed BEFORE Step 5 spawn. If the skill is not in the available-skills list (i.e. not present in `~/.claude/skills/<name>/SKILL.md`, `${CLAUDE_PLUGIN_ROOT}/<plugin>/skills/<name>/SKILL.md`, or any other Claude-discoverable skill path), the launcher MUST emit:
+
+```
+[/ultra] REFUSED: wrapped skill /<name> not installed. Install it first or drop the wrapped-skill prefix to run /ultra without wrapping. (LOW-1)
+```
+
+The Quick Reference example above uses `/<wrapped-skill-name>` rather than a hard-coded `/deep-research` to avoid implying that any specific external skill ships with this plugin.

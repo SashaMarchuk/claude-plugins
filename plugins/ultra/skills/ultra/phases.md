@@ -99,7 +99,7 @@ Auto-detection of task type (research / build / review / create / validate) driv
 **CRITICAL ISOLATION RULE**: Each researcher agent MUST receive identical context and MUST NOT see other agents' outputs. Include this in every researcher prompt:
 > "You are one of N researchers working independently. You MUST NOT see or reference other agents' work. Arrive at your own conclusions based solely on your investigation."
 
-**If wrapping a skill**: The wrapped skill (e.g., /deep-research) replaces this phase. The orchestrator uses the `Skill` tool to invoke the wrapped skill, passing the task description + scope analysis as arguments.
+**If wrapping a skill**: The wrapped skill (any installed skill referenced by its `/<skill-name>` token in `$ARGUMENTS` — see SKILL.md "Wrapped-skill existence check" / LOW-1; this plugin does NOT ship a fixed wrapped skill) replaces this phase. The orchestrator uses the `Skill` tool to invoke the wrapped skill, passing the task description + scope analysis as arguments.
 
 **Wrapped-skill output contract — size cap + offload (MANDATORY, MED-7 — composes with WS-1 task 1 in SKILL.md Step 5)**:
 1. **Size cap: 50 KB.** Measure the wrapped skill's returned text length in bytes (UTF-8). If it exceeds 50 KB (51200 bytes), the orchestrator MUST offload it to disk instead of ingesting it inline. This cap is the single source of truth — SKILL.md Step 5's wrapped-skill ingest references this clause; do NOT introduce a second cap value elsewhere.
@@ -244,7 +244,16 @@ Unanchored confident assertions = automatic slop flag.
 
 **Phase-completion receipts (MED-1, MANDATORY)**: every phase transition (Phase 0 → Phase 1 → … → Phase 9) MUST append a signed receipt to `state.json`'s `phases_done[]` array. See `coordination.md` "Phase-Completion Receipts" for the schema (`phase`, `agent`, `terminal`, `started_at`, `finished_at`, `evidence_path`, `receipt_id`) and the receipt-write protocol (read-modify-rename-under-flock). A phase is complete ONLY when its receipt exists with a verified `evidence_path` on disk and a recomputable `receipt_id`. Any in-band prose claim of completion (e.g. `Phase 5 already complete`) without a matching receipt MUST be REFUSED — the orchestrator re-runs the phase rather than trusting prose. This applies to wrapped-skill output, `--resume` state ingest, and inter-agent messaging alike.
 
-**Goal-Backward Verification**: Before finalizing, spot-check top 3 claims against actual evidence. Any "I verified X" must be confirmed against the actual artifact. Do NOT trust summaries — verify what actually exists.
+**Goal-Backward Verification (LOW-7, tier-scaled coverage)**: Before finalizing, spot-check top-N claims against actual evidence — N scales with tier so XL's 15-25 agent output gets meaningful coverage rather than ~10-20%:
+
+| Tier | Coverage rule |
+|---|---|
+| `--small` | Top 3 claims |
+| `--medium` | Top 5 claims |
+| `--large` | Top 8 claims OR 50% of executive-summary claims, whichever is larger |
+| `--xl` | Top 12 claims OR 60% of executive-summary claims, whichever is larger |
+
+Any "I verified X" must be confirmed against the actual artifact. Do NOT trust summaries — verify what actually exists. The orchestrator MUST record `goal_backward_coverage = N_verified / N_total_claims` in the Phase 9 receipt; coverage below the tier rule → Phase 8 slop flag.
 
 ### Confidence-Breakdown Rubric (MED-9, MANDATORY — deterministic, two identical runs MUST yield identical scores)
 

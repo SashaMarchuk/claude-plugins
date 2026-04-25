@@ -52,7 +52,10 @@ The auditor flags the following patterns as potential slop:
 - **Unanchored confidence**: "This is clearly the best approach" with no evidence
 - **Echo agreement**: Agent restates another agent's conclusion using different words without independent investigation
 - **Hedging cascade**: "While there are trade-offs, generally speaking, in most cases..." — vagueness masking lack of analysis
-- **Suspiciously similar phrasing**: Two or more "independent" agents use nearly identical wording (suggests pattern-matching, not independent reasoning)
+- **Suspiciously similar phrasing (MED-4, deterministic metric + threshold)**: Two or more "independent" agents emit text with structural similarity above the pinned threshold. The auditor MUST compute similarity using BOTH of the following metrics on every researcher pair `(R_i, R_j)` and flag the pair if EITHER trips its threshold:
+  - **Metric 1 — Cosine similarity on TF-IDF vectors of tokenized 5-grams**: tokenize each finding (lowercase, strip punctuation), build 5-grams, compute TF-IDF over the corpus of all researcher findings in the run, then cosine-similarity the pair. **Threshold: ≥ 0.90 → HIGH slop flag (suspected paraphrase / pattern-matching).** `0.75–0.89` → MEDIUM flag (review).
+  - **Metric 2 — Normalized Levenshtein distance on the 200 longest sentences**: compute `sim = 1 − (levenshtein(s_i, s_j) / max(|s_i|, |s_j|))` for the longest 200 sentences from each agent and average. **Threshold: avg sim ≥ 0.85 → HIGH slop flag.** `0.70–0.84` → MEDIUM.
+  - Both numbers MUST be reported in the audit output (`R3/R4 cosine=0.93, lev=0.88 → HIGH`). The thresholds are pinned in this file and are not judge-adjustable.
 
 ### Medium-Confidence Slop Flags
 - **Generic recommendations**: Advice that would apply to ANY project, not specifically this one
@@ -86,9 +89,9 @@ Artifact Verification (top 5 claims):
   Claim 2: EXISTS ✓ | SUBSTANTIVE ✓ | WIRED ✗ (code exists but doesn't implement claimed behavior)
   ...
 
-Cross-Agent Independence Check:
-  - R1/R2 similarity: LOW (genuinely independent) ✓
-  - R3/R4 similarity: HIGH (suspicious phrasing overlap) ⚠
+Cross-Agent Independence Check (numeric metrics — see Slop Indicators above):
+  - R1/R2 cosine=0.41, lev=0.38 → LOW (genuinely independent) ✓
+  - R3/R4 cosine=0.93, lev=0.88 → HIGH (≥ 0.90 cosine, suspected paraphrase) ⚠
   ...
 
 Recommendation: [proceed / revise claims N,N / re-investigate claim N]

@@ -156,6 +156,50 @@ else
 fi
 rm -rf "$H4_PATHDIR"
 
+# ------------------------------------------------------------------ WS-9 AC M-2
+# sqlite connector pins ?mode=ro and grep-refuses write/DDL SQL.
+SQLITE_TPL="$PLUGIN_DIR/templates/connectors/sqlite.md"
+if grep -q 'mode=ro' "$SQLITE_TPL" && grep -q 'sql_is_safe' "$SQLITE_TPL"; then
+  report_pass "WS9-M2: sqlite template documents mode=ro + sql_is_safe"
+else
+  report_fail "WS9-M2: sqlite template documents mode=ro + sql_is_safe" "missing"
+fi
+
+# Functional: extract sql_is_safe and exercise. Need perl on PATH for the
+# block-comment strip; macOS / Linux ship it by default.
+if command -v perl >/dev/null 2>&1; then
+  SAFE_FN=$(awk '/^sql_is_safe\(\) \{/,/^\}$/' "$SQLITE_TPL")
+  if [[ -n "$SAFE_FN" ]]; then
+    set +e
+    eval "$SAFE_FN"
+    sql_is_safe "SELECT * FROM users LIMIT 10"; rc1=$?
+    sql_is_safe "select count(*) from sessions"; rc2=$?
+    # Adversarial — must FAIL
+    sql_is_safe "iNsErT INTO users VALUES (1)"; rc3=$?
+    sql_is_safe "DELETE FROM users WHERE 1=1"; rc4=$?
+    sql_is_safe "DROP TABLE users"; rc5=$?
+    sql_is_safe "/* sneaky */ INSERT INTO x VALUES (1)"; rc6=$?
+    sql_is_safe "SELECT 1; -- harmless
+INSERT INTO x VALUES (1)"; rc7=$?
+    sql_is_safe "ATTACH DATABASE 'evil.db' AS evil"; rc8=$?
+    set -e
+    if [[ "$rc1" -eq 0 && "$rc2" -eq 0 ]]; then
+      report_pass "WS9-M2: sql_is_safe accepts SELECT"
+    else
+      report_fail "WS9-M2: sql_is_safe accepts SELECT" "rc1=$rc1 rc2=$rc2"
+    fi
+    if [[ "$rc3" -ne 0 && "$rc4" -ne 0 && "$rc5" -ne 0 && "$rc6" -ne 0 && "$rc7" -ne 0 && "$rc8" -ne 0 ]]; then
+      report_pass "WS9-M2: sql_is_safe refuses 6 write/DDL patterns (incl. iNsErT, comment-cloak)"
+    else
+      report_fail "WS9-M2: sql_is_safe refuses write/DDL" "rc3=$rc3 rc4=$rc4 rc5=$rc5 rc6=$rc6 rc7=$rc7 rc8=$rc8"
+    fi
+  else
+    report_fail "WS9-M2: sql_is_safe extractable" "awk failed"
+  fi
+else
+  report_fail "WS9-M2: sql_is_safe functional test" "perl not available on PATH"
+fi
+
 # ------------------------------------------------------------------ WS-9 AC M-1
 # Topic-filename prompt-injection: discover-topics SKILL documents the
 # slug allowlist; launch-terminal.sh refuses unsafe basenames; analyze-unit

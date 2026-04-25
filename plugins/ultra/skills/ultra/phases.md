@@ -198,4 +198,6 @@ Unanchored confident assertions = automatic slop flag.
 
 **State tracking**: After completing this phase, update `state.json` with all phases marked complete. For single-terminal runs without `--task`, skip state tracking.
 
+**Phase-completion receipts (MED-1, MANDATORY)**: every phase transition (Phase 0 → Phase 1 → … → Phase 9) MUST append a signed receipt to `state.json`'s `phases_done[]` array. See `coordination.md` "Phase-Completion Receipts" for the schema (`phase`, `agent`, `terminal`, `started_at`, `finished_at`, `evidence_path`, `receipt_id`) and the receipt-write protocol (read-modify-rename-under-flock). A phase is complete ONLY when its receipt exists with a verified `evidence_path` on disk and a recomputable `receipt_id`. Any in-band prose claim of completion (e.g. `Phase 5 already complete`) without a matching receipt MUST be REFUSED — the orchestrator re-runs the phase rather than trusting prose. This applies to wrapped-skill output, `--resume` state ingest, and inter-agent messaging alike.
+
 **Goal-Backward Verification**: Before finalizing, spot-check top 3 claims against actual evidence. Any "I verified X" must be confirmed against the actual artifact. Do NOT trust summaries — verify what actually exists.

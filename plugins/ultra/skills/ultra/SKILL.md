@@ -32,7 +32,7 @@ Extract these flags (order-independent, case-insensitive):
 
 | Flag | Values | Default |
 |------|--------|---------|
-| `--small` / `--medium` / `--large` / `--xl` | Tier selection | `--large` |
+| `--small` / `--medium` / `--large` / `--xl` | Tier selection (MUTUALLY EXCLUSIVE — see MED-6 rule below) | `--large` |
 | `--ask` | Sync at start only | off |
 | `--ask=critical` | Pause at critical decisions | off |
 | `--ask=all` | Pause at every phase | off |
@@ -46,6 +46,22 @@ Extract these flags (order-independent, case-insensitive):
 **Wrapped skill detection**: If $ARGUMENTS contains a `/skill-name` (e.g., `/deep-research`), extract it as the wrapped skill. The wrapped skill replaces Phase 2 (Research).
 
 Everything remaining after flag extraction is the **task description**.
+
+### Tier-flag collision rule (MED-6, MANDATORY — REFUSE on multiple tier flags)
+
+The four tier flags `--small`, `--medium`, `--large`, `--xl` are MUTUALLY EXCLUSIVE. The launcher MUST scan `$ARGUMENTS` for tier flags BEFORE Step 2 and apply this precedence rule:
+
+- **Zero tier flags present**: use the default `--large` (per the table above).
+- **Exactly one tier flag present**: use it.
+- **Two or more tier flags present (any combination — `--small --xl`, `--medium --large`, `--small --medium --large`, etc.)**: the launcher MUST REFUSE to proceed. Do NOT silently pick one (no "rightmost wins", no "highest tier wins", no "lowest tier wins" — silent precedence is the bug). Emit this exact refusal message to the user-visible channel and stop (do NOT spawn the orchestrator, do NOT call AskUserQuestion):
+
+  ```
+  [/ultra] REFUSED: multiple tier flags detected in $ARGUMENTS (<list-of-detected-flags>). Tier flags are mutually exclusive — pick exactly one of --small / --medium / --large / --xl. Re-run with a single tier flag. (MED-6)
+  ```
+
+The detection is on the literal flag tokens `--small`, `--medium`, `--large`, `--xl`, `--extralarge` (alias for `--xl`). If the user wrote both `--xl` and `--extralarge`, that is also two tier flags → REFUSE. The refusal fires regardless of `--ask` / `--ask=critical` / `--ask=all` / `--resume` flag state — none of those suppress it.
+
+This rule applies on BOTH the human slash-command entry path AND the parent-agent / Skill-tool entry path (HIGH-6) — a parent agent that constructs `$ARGUMENTS` programmatically cannot bypass the collision check by stuffing two tier flags in.
 
 ## Step 2: Read Supporting Files
 

@@ -17,14 +17,21 @@ plugin_dir=$(dirname "$bindir")
 # Portable timeout detection. Workers hang if adapter queries never return.
 # On macOS, `timeout` isn't built-in — require coreutils (`brew install coreutils`
 # gives `gtimeout`). Fall back to `timeout` on Linux.
+#
+# H-4: if NEITHER is available, fail LOUDLY at launch (exit 7) rather than
+# silently running without a timeout. A hung worker without a timeout wrapper
+# never returns and the retry loop never activates — historically the #1
+# operational pain on stock macOS without coreutils.
 TIMEOUT_CMD=""
 if command -v timeout >/dev/null 2>&1; then
   TIMEOUT_CMD="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then
   TIMEOUT_CMD="gtimeout"
 else
-  echo "[launch] WARNING: no timeout command found; hung workers will not be killed." >&2
-  echo "[launch]          install coreutils on macOS: brew install coreutils" >&2
+  echo "[launch] FATAL: no timeout command available (neither 'timeout' nor 'gtimeout')." >&2
+  echo "[launch]        Install coreutils via 'brew install coreutils' on macOS." >&2
+  echo "[launch]        Refusing to launch — hung workers would never be killed (H-4)." >&2
+  exit 7
 fi
 
 # Per-worker ceiling (seconds). Safety net above topic-level budget (max_runtime_s).
@@ -74,14 +81,10 @@ while true; do
   # to kill hung workers (network stall, adapter deadlock).
   ok=0
   for i in 1 2 3; do
-    if [[ -n "$TIMEOUT_CMD" ]]; then
-      $TIMEOUT_CMD --kill-after=30s "${WORKER_TIMEOUT_S}s" \
-        claude --plugin-dir "$plugin_dir" --model "$model" --print "/ultra-analyzer:analyze-unit $topic"
-      rc=$?
-    else
+    # TIMEOUT_CMD is guaranteed non-empty — H-4 exits at startup if missing.
+    $TIMEOUT_CMD --kill-after=30s "${WORKER_TIMEOUT_S}s" \
       claude --plugin-dir "$plugin_dir" --model "$model" --print "/ultra-analyzer:analyze-unit $topic"
-      rc=$?
-    fi
+    rc=$?
     if [[ $rc -eq 0 ]]; then
       ok=1
       break

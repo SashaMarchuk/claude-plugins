@@ -17,6 +17,7 @@ STATE_SH="$BIN_DIR/state.sh"
 CLAIM_SH="$BIN_DIR/claim.sh"
 RELEASE_SH="$BIN_DIR/release.sh"
 REQUEUE_SH="$BIN_DIR/requeue.sh"
+LAUNCH_SH="$BIN_DIR/launch-terminal.sh"
 
 SANDBOX=$(mktemp -d -t ultra-analyzer-tests-XXXXXX)
 trap 'rm -rf "$SANDBOX"' EXIT
@@ -131,6 +132,29 @@ ln -s "$DECOY_FILE" "$WS9_RUN/topics/pending/T001__p1__symfile.md"
 assert_exit_code "WS9-H1: symlinked topic file refused exit 5" 5 \
   bash "$CLAIM_SH" "$WS9_RUN"
 rm -f "$DECOY_FILE"
+
+# ------------------------------------------------------------------ WS-9 AC H-4
+# launch-terminal.sh exits 7 at startup when neither timeout nor gtimeout is
+# available. Simulate the missing-binaries condition by running with a PATH
+# that contains only essentials and stubs that hide both binaries.
+WS9_RUN=$(fresh_run ws9-h4-no-timeout)
+H4_PATHDIR=$(mktemp -d -t ultra-analyzer-h4-XXXXXX)
+# Stub `command` to lie about presence — bash's `command -v` checks PATH,
+# so the cleanest simulation is a PATH that excludes any timeout binaries.
+# `bash` itself is needed; symlink it explicitly into the stub PATH.
+ln -s "$(command -v bash)" "$H4_PATHDIR/bash"
+ln -s "$(command -v jq)" "$H4_PATHDIR/jq"
+# Run launch-terminal with the restricted PATH; expect exit 7.
+set +e
+PATH="$H4_PATHDIR" bash "$LAUNCH_SH" "$WS9_RUN" >/dev/null 2>&1
+rc=$?
+set -e
+if [[ "$rc" -eq 7 ]]; then
+  report_pass "WS9-H4: no-timeout available exits 7 at launch"
+else
+  report_fail "WS9-H4: no-timeout available exits 7 at launch" "got exit $rc"
+fi
+rm -rf "$H4_PATHDIR"
 
 # ------------------------------------------------------------------ AC 2
 # Run-name sanitization rejects ../../tmp/evil with exit 6.

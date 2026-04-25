@@ -32,7 +32,7 @@ These apply to BOTH JSON files, whenever the skill writes them:
 
 1. **Atomic write** — write to `<file>.tmp` in the same dir, `fsync`, then `os.replace(tmp, file)`. Never edit in place.
 2. **`fcntl.flock`** — take an exclusive lock on a sibling sentinel file (`<file>.lock` — NO leading dot on the sibling; e.g. `identity.json` → `identity.json.lock`). For the SHARED `identity.json` file the canonical cross-plugin lock path is **`~/.claude/shared/identity.json.lock`** (matches `/clickup`'s helper exactly — deviation breaks mutual exclusion). Hold the lock for the entire read-modify-write. The kernel releases the lock when the process dies, so stale locks are impossible.
-3. **Preserve unknown keys** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/clickup` may have added fields to a teammate record that this version of `/gevent` does not know about; they must survive a rewrite.
+3. **Preserve unknown keys (mechanical, not aspirational)** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/clickup` may have added fields to a teammate record that this version of `/gevent` does not know about; they must survive a rewrite. **The `atomic_update` helper enforces this with a key-set diff inside the flocked block**: snapshot recursive key-set BEFORE the closure runs; compare AFTER. Any key present in pre-read but missing in post-write triggers refusal to commit the tempfile-rename — UNLESS the closure declared the deletion via `mutate.__explicit_deletes__ = {"some.key.path"}`. This makes "preserve unknown keys" a runtime guarantee, not an emergent property of closure discipline. A `future_field` written by a newer plugin will survive every round-trip through this helper; a closure that wholesale-replaces a sub-object and accidentally drops a key will fail-loud rather than silent-stripping the field.
 4. **`schemaVersion: 2`** — integer at the top of every file. Writers ALWAYS emit the current version (`CURRENT_SCHEMA_VERSION = 2`). Readers accept both v1 and v2 during the 90-day back-compat window (2026-04-24 → 2026-07-23 — see `SCHEMA_VERSION_DEPRECATION_DAYS`). On read: if `schemaVersion == 1`, fill in v2 defaults silently (migration-on-next-mutation — no eager write). On write: upgrade in place to v2 atomically (single `atomic_update` pass). Quarantine if `"schemaVersion" not in data` OR `not isinstance(data["schemaVersion"], int)`. If the reader sees a HIGHER version it does not understand, refuse to write (read-only fallback) rather than downgrade.
 4a. **`schemaVersion_bumped_at`** — ISO8601 timestamp next to `schemaVersion`. Set once by the writer that performs the N-1 → N upgrade; never overwritten on later writes at the same N.
 4b. **`schemaVersionHistory[]`** — append-only log of version transitions: `[{from: 1, to: 2, at: "<ISO>"}, …]`. Added by the writer on every version bump. Preserved by both plugins on round-trip (unknown-keys rule applies).
@@ -92,7 +92,41 @@ def atomic_update(path, mutate):
                 f"{path} has schemaVersion={on_disk_version}, this helper supports {CURRENT_SCHEMA_VERSION}. "
                 "Update the plugin and retry."
             )
+        # ---- Unknown-key preservation diff (load-bearing for forward-compat).
+        # Snapshot the recursive key-set BEFORE mutate; compare AFTER. If any
+        # key present pre-mutate is missing post-mutate AND the closure did not
+        # explicitly delete it (signal: closure's __explicit_deletes__ list
+        # — empty by default), refuse to commit the write. Forward-compat
+        # depends on every closure being careful; this diff makes that mechanical.
+        def collect_keys(obj, prefix=""):
+            keys = set()
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    p = f"{prefix}.{k}" if prefix else k
+                    keys.add(p)
+                    keys |= collect_keys(v, p)
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    keys |= collect_keys(v, f"{prefix}[{i}]")
+            return keys
+        pre_keys = collect_keys(data)
+        explicit_deletes = getattr(mutate, "__explicit_deletes__", set())
         mutate(data)  # caller supplies closure
+        post_keys = collect_keys(data)
+        # A pre-key is "lost" iff it's not in post-keys AND not in explicit deletes
+        # AND not under a list index that the closure legitimately re-shaped
+        # (lists are positional — only top-level/dict-keyed losses raise).
+        def dict_only(keys):
+            return {k for k in keys if "[" not in k}
+        lost = dict_only(pre_keys) - dict_only(post_keys) - explicit_deletes
+        if lost:
+            raise SystemExit(
+                f"atomic_update unknown-key preservation violated: "
+                f"closure dropped {sorted(lost)} without listing them in "
+                f"`mutate.__explicit_deletes__`. Refusing to commit the write — "
+                f"a previously-present key (likely owned by the OTHER plugin or "
+                f"a future schema field like `future_field`) would have been lost."
+            )
         with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False) as tmp:
             json.dump(data, tmp, indent=2, ensure_ascii=False, sort_keys=False)
             tmp.flush()

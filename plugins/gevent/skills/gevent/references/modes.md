@@ -483,9 +483,56 @@ Leave a right-side blank to skip that teammate (keeps first_name).
 
 Re-running `--onboard identity` diffs EACH teammate's current `latin_alias` against `propose_alias(..., legacy={})` (the "auto baseline" without legacy lookup). If they match, the user hasn't customized it yet — eligible for the card. If they differ, user already picked something — skip silently, preserve.
 
-#### Step 8 — Write identity.json atomically
+#### Step 8 — Write identity.json atomically (stale-read guard around long-running prompt-cycles)
 
-Via the `atomic_update` helper (see `config-schema.md` → "Reference write helper"). `fcntl.flock` on `~/.claude/shared/identity.json.lock` for the entire read-modify-write. Set `schemaVersion: 2`, `onboarding_complete: true`, `updated_at: <now>`.
+Via the `atomic_update` helper (see `config-schema.md` → "Reference write helper"). `fcntl.flock` on `~/.claude/shared/identity.json.lock` is held for the **ENTIRE read-modify-write** — NOT just for the final tempfile-rename. Set `schemaVersion: 2`, `onboarding_complete: true`, `updated_at: <now>`.
+
+**Stale-read guard (M-5 — protects against concurrent /clickup or /gevent writers).** Steps 5/7/7b above run AskUserQuestion review cards based on a pre-lock snapshot. If a concurrent `/clickup` or `/gevent` invocation in another terminal mutates `identity.json` while the user is mid-prompt (a slow review-card cycle can take minutes — e.g. confirming Cyrillic aliases for 30 teammates), naively committing the user's accept/reject decisions on the stale snapshot would silently overwrite the other plugin's fresh mutation. The Step 8 commit therefore re-reads inside the flock and compares a stable hash of MATERIAL fields against the snapshot hash captured at the start of the prompt-cycle:
+
+```python
+import hashlib, json
+MATERIAL_FIELDS = ("user.name", "user.email", "defaults.calendar",
+                   "defaults.send_updates", "behavior.notes_bot_decided")
+
+def material_hash(data):
+    blob = []
+    for path in MATERIAL_FIELDS:
+        cur = data
+        for seg in path.split("."):
+            cur = (cur or {}).get(seg) if isinstance(cur, dict) else None
+        blob.append((path, cur))
+    return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()
+
+def step_8_commit(identity_path, prompt_cycle_snapshot, user_decisions):
+    def mutate(data):
+        # Re-read happens automatically — atomic_update opens the file inside the lock.
+        # Compare material-field hash from the pre-prompt snapshot vs the freshly-read data.
+        if material_hash(data) != material_hash(prompt_cycle_snapshot):
+            # A concurrent /clickup or /gevent write changed a material field
+            # (e.g. user.email) while the AskUserQuestion review card was open.
+            # Refuse the silent overwrite. In interactive mode: re-prompt the user
+            # with a "config drifted while you were reviewing — re-confirm?" card.
+            # In --auto / non-interactive paths: abort the commit and surface
+            # a one-line reason ("identity.json drifted under flock during onboarding;
+            # re-run /gevent:onboard identity").
+            raise SystemExit(
+                "identity.json material fields drifted during onboarding "
+                "(concurrent /clickup or /gevent write detected on flock re-acquire). "
+                "Re-prompt or re-run `/gevent:onboard identity` — refusing silent overwrite."
+            )
+        # Hash matched: apply the user's decisions onto the freshly-read data
+        # (NOT onto the stale snapshot — last-writer-wins on UNKNOWN fields,
+        # but the user's decisions land on the latest material state).
+        apply_user_decisions(data, user_decisions)
+    atomic_update(identity_path, mutate)
+```
+
+Concurrent-write semantics:
+- **Material-field drift** (user.email changed by `/clickup --onboard identity` mid-prompt) → re-prompt + re-confirm (interactive) OR abort with one-line message (`--auto`). NEVER silent-overwrite the other plugin's mutation.
+- **Non-material drift** (a teammate `last_validated_at` bumped, a new teammate added by `/clickup` workspace sync) → silent merge via UNION on `sources[]` and last-writer-wins on known scalar fields; the user's decisions still apply on top of the fresh roster.
+- **Unknown-key drift** (a `future_field` written by a newer plugin) → preserved by the closure-key-set-diff guard in `atomic_update` (see config-schema.md M-6 contract). The flock + diff together close the race.
+
+The lock release happens at the `with open(lock_path, "w") as lk:` context exit AFTER the tempfile rename + parent-dir fsync. A second `/clickup` writer waiting on the flock therefore sees the merged Step-8 state when it acquires; its own `atomic_update` repeats the same re-read + material-hash protocol.
 
 #### Step 9 — Preserve unknown keys (always)
 

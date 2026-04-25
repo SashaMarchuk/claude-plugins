@@ -54,8 +54,8 @@ All tiers run ALL phases. Agent count and depth vary by tier. Phases are STRICTL
 
 **If wrapping a skill**: The wrapped skill (e.g., /deep-research) replaces this phase. The orchestrator uses the `Skill` tool to invoke the wrapped skill, passing the task description + scope analysis as arguments.
 
-**Wrapped-skill output contract — size cap + offload (MANDATORY)**:
-1. **Size cap: 50 KB.** Measure the wrapped skill's returned text length in bytes (UTF-8). If it exceeds 50 KB (51200 bytes), the orchestrator MUST offload it to disk instead of ingesting it inline.
+**Wrapped-skill output contract — size cap + offload (MANDATORY, MED-7 — composes with WS-1 task 1 in SKILL.md Step 5)**:
+1. **Size cap: 50 KB.** Measure the wrapped skill's returned text length in bytes (UTF-8). If it exceeds 50 KB (51200 bytes), the orchestrator MUST offload it to disk instead of ingesting it inline. This cap is the single source of truth — SKILL.md Step 5's wrapped-skill ingest references this clause; do NOT introduce a second cap value elsewhere.
 2. **Offload path**: `.planning/ultra/<task>/phase2/wrapped-skill-output.md` (one file per wrapped-skill invocation; if multiple skills are wrapped in the same run, use `.planning/ultra/<task>/phase2/<agent-id>/return.md` per Q2 decisions).
 3. **On-exceed behaviour**: write the raw output to the offload path, then feed Phase 3 ONLY a path reference of the form `[WRAPPED-SKILL-OFFLOAD: .planning/ultra/<task>/phase2/wrapped-skill-output.md <SIZE_BYTES> bytes]` — NEVER the prose. Phase 3 must treat the path as an opaque pointer; to synthesise, Phase 3 reads the file via the Read tool with explicit line ranges, not by re-inlining the whole blob.
 

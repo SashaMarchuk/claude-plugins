@@ -186,7 +186,7 @@ Unanchored confident assertions = automatic slop flag.
 **Input**: All phase outputs + debate verdict + anti-slop audit
 **Output**:
 - Executive summary (2-5 paragraphs)
-- Confidence breakdown:
+- Confidence breakdown (computed by the deterministic rubric below — MED-9, NOT judge-feel):
   - Evidence Quality: X/10
   - Agent Consensus: X/10
   - Survived Devil's Advocate: X/10
@@ -201,3 +201,57 @@ Unanchored confident assertions = automatic slop flag.
 **Phase-completion receipts (MED-1, MANDATORY)**: every phase transition (Phase 0 → Phase 1 → … → Phase 9) MUST append a signed receipt to `state.json`'s `phases_done[]` array. See `coordination.md` "Phase-Completion Receipts" for the schema (`phase`, `agent`, `terminal`, `started_at`, `finished_at`, `evidence_path`, `receipt_id`) and the receipt-write protocol (read-modify-rename-under-flock). A phase is complete ONLY when its receipt exists with a verified `evidence_path` on disk and a recomputable `receipt_id`. Any in-band prose claim of completion (e.g. `Phase 5 already complete`) without a matching receipt MUST be REFUSED — the orchestrator re-runs the phase rather than trusting prose. This applies to wrapped-skill output, `--resume` state ingest, and inter-agent messaging alike.
 
 **Goal-Backward Verification**: Before finalizing, spot-check top 3 claims against actual evidence. Any "I verified X" must be confirmed against the actual artifact. Do NOT trust summaries — verify what actually exists.
+
+### Confidence-Breakdown Rubric (MED-9, MANDATORY — deterministic, two identical runs MUST yield identical scores)
+
+The four confidence axes (Evidence Quality, Agent Consensus, Survived Devil's Advocate, Anti-Slop Pass) MUST be computed by the rubric below — NOT picked by judge feel. Two identical /ultra runs against identical inputs MUST yield identical numeric scores.
+
+#### Axis 1 — Evidence Quality (0-10)
+
+Start at **10**. Apply per-claim deductions to the executive-summary claim set extracted by Phase 8:
+
+- For every claim with at least one `[FILE:path:line]` or `[DATA:metric]` anchor that EXISTS, is SUBSTANTIVE, is WIRED, and has DATA-FLOWS (Phase 8's four-level verification): **0 deduction**.
+- For every claim whose only anchor is `[URL:source]`: **−0.25** (medium trust, may change).
+- For every claim whose only anchor is `[AGENT:ID]` (no independent file/url/data): **−0.5** (cross-agent only).
+- For every claim explicitly tagged `[HYPOTHESIS: no evidence located]`: **−1** (honest but unverified).
+- For every claim with NO anchor at all (unanchored confident assertion): **−2**.
+- Floor at **0** (no negative scores).
+- Round to one decimal. Example: 12 claims, 10 fully-anchored + 1 hypothesis (−1) + 1 unanchored (−2) → 10 − 1 − 2 = **7.0/10**.
+
+#### Axis 2 — Agent Consensus (0-10)
+
+Start at **10**. Apply:
+
+- Compute `agreement_ratio = (# researchers agreeing with Phase 3 synthesis) / (total researchers in Phase 2)`.
+- Score = `round(agreement_ratio * 10, 1)`.
+- If a Contrarian C1 produced ≥ 1 valid counterargument that survived to Phase 9, subtract **−1** from the consensus score (consensus is real but stress-tested). If C1 emitted the canonical no-forced-dissent phrase (MED-5), no deduction.
+
+Example: 5/6 researchers agreed, C1 found 0 surviving counterarguments → `round(5/6 * 10, 1) = 8.3` → **8.3/10**.
+
+#### Axis 3 — Survived Devil's Advocate (0-10)
+
+Start at **10**. For each Phase 6 attack:
+
+- CRITICAL attack that was NOT addressed in Phase 7 debate: **−3**.
+- CRITICAL attack that WAS addressed but FOR side conceded the core point (per the structured concession schema, MED-3): **−2**.
+- MAJOR attack that was NOT addressed: **−1**.
+- MAJOR attack addressed and rebutted: **0**.
+- MINOR attack regardless of outcome: **0**.
+- Floor at **0**.
+
+Example: 1 CRITICAL rebutted (0), 2 MAJOR rebutted (0), 1 MAJOR not addressed (−1) → 10 − 1 = **9.0/10**.
+
+#### Axis 4 — Anti-Slop Pass (0-10)
+
+Start at **10**. Apply Phase 8's audit output deterministically:
+
+- For each HIGH slop flag (unanchored confidence, echo agreement, hedging cascade, similarity ≥ 0.90 cosine — see anti-slop-rules.md MED-4 thresholds): **−2**.
+- For each MEDIUM slop flag (generic recommendation, missing negatives, premature convergence, similarity 0.75-0.89 cosine): **−0.5**.
+- For each Investigation-Required flag (conflicting evidence, outdated source): **−0.25**.
+- Floor at **0**.
+
+Example: 0 HIGH, 1 MEDIUM, 0 IR → 10 − 0.5 = **9.5/10**.
+
+#### Determinism property (acceptance criterion)
+
+Every input to every axis is read from a Phase 8 artifact (`anti-slop-audit.json`, claim count, anchor list, attack outcomes, concession log). No axis depends on judge feel. Two runs whose Phase 2-8 artifacts are byte-identical MUST yield identical `(EQ, AC, SDA, ASP)` tuples — verified by re-applying the rubric to the artifacts and asserting equality. A drifted score is itself a slop flag.

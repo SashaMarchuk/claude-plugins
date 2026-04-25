@@ -57,9 +57,9 @@ Devil's advocates NOW see the Phase 3 synthesis AND validator findings. Their jo
 > - An alternative conclusion the evidence supports
 > - Severity: CRITICAL (invalidates core conclusion) / MAJOR (weakens conclusion) / MINOR (edge case)
 >
-> HONESTY CLAUSE: If you genuinely cannot find significant flaws after thorough investigation, say so explicitly:
-> 'I attempted to find flaws in [X] but the evidence strongly supports the synthesis. No forced dissent.'
-> Forced contrarianism is itself a form of slop."
+> HONESTY CLAUSE (MED-5, canonical phrase — IDENTICAL across devil-advocate.md and debate-protocol.md): If, after thorough investigation, you cannot produce a genuine counter-position, you MUST emit the canonical honesty escape-valve phrase verbatim:
+> 'No forced dissent — evidence does not support a contrarian position on [X].'
+> Substitute `[X]` with the specific finding/synthesis/conclusion. Do NOT paraphrase the phrase itself; the orchestrator parses on the literal prefix `No forced dissent — evidence does not support a contrarian position on`. Forced contrarianism is itself a form of slop."
 
 ## The Four Adversarial Roles (Large/XL)
 
@@ -112,8 +112,8 @@ Attacks:
 Survived Scrutiny:
   - [list of synthesis points that withstood all attacks]
 
-Honesty Declarations:
-  - [D1]: "No forced dissent on [X]" / [D2]: "Genuine flaw found in [Y]"
+Honesty Declarations (canonical phrase per HONESTY CLAUSE above — MED-5):
+  - [D1]: "No forced dissent — evidence does not support a contrarian position on [X]." / [D2]: "Genuine flaw found in [Y]"
 ```
 
 ## Feeding Into Debate (Phase 7)

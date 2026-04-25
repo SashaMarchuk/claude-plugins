@@ -139,8 +139,8 @@ The skill's (possibly offloaded) output becomes this phase's output ONLY after t
 3. **Scope Minimizer (SM1, xl only)**: Argue for simpler/cheaper approach.
 4. **External Observer (EO1, xl only)**: End-user perspective, outside technical frame.
 
-Each role includes the honesty escape valve:
-> "If you genuinely cannot find significant flaws, say so explicitly. Forced contrarianism is itself a form of slop."
+Each role includes the canonical honesty escape valve (MED-5 — IDENTICAL phrase across devil-advocate.md and debate-protocol.md):
+> "If, after thorough investigation, you cannot produce a genuine counter-position, emit the canonical phrase verbatim: 'No forced dissent — evidence does not support a contrarian position on [X].' Forced contrarianism is itself a form of slop."
 
 ## Phase 7: 2v2 Debate
 

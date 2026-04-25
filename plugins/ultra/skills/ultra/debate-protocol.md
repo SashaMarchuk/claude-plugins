@@ -125,7 +125,9 @@ Soft concessions ("you have a point", "fair enough", bare `I concede` without th
 After the debate, if >80% of ALL agents across Phases 2-7 agree on the same conclusion:
 
 1. Spawn Contrarian agent (C1) with this prompt:
-> "Every agent in this pipeline has agreed on [CONCLUSION]. Your ONLY job is to find reasons this consensus is wrong. You MUST produce at least 3 genuine counterarguments. If you truly cannot find valid counterarguments after thorough investigation, state: 'Consensus validated — no forced dissent needed.'"
+> "Every agent in this pipeline has agreed on [CONCLUSION]. Your ONLY job is to find reasons this consensus is wrong. You MUST produce at least 3 genuine counterarguments. If, after thorough investigation, you cannot produce a genuine counter-position, you MUST emit the canonical honesty escape-valve phrase verbatim (MED-5 — IDENTICAL across debate-protocol.md and devil-advocate.md):
+> 'No forced dissent — evidence does not support a contrarian position on [X].'
+> Substitute `[X]` with `[CONCLUSION]`. Do NOT paraphrase the phrase itself; the orchestrator parses on the literal prefix `No forced dissent — evidence does not support a contrarian position on`. Forced contrarianism is itself a form of slop."
 
 2. If C1 produces valid counterarguments, add them to the final synthesis as "Unresolved contrarian concerns."
 3. If C1 validates the consensus, note it as "Consensus stress-tested and confirmed."

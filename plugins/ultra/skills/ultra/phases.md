@@ -2,6 +2,35 @@
 
 All tiers run ALL phases. Agent count and depth vary by tier. Phases are STRICTLY sequential — no phase starts until the previous phase completes. Within each phase, all agents launch in PARALLEL.
 
+## Pause Matrix (MED-10, SINGLE SOURCE OF TRUTH)
+
+The following table is the ONE canonical pause matrix for /ultra. All per-phase prose below MUST defer to this table — it replaces the previously-scattered `--ask=critical` / `--ask=all` notes that had drifted across Phases 1, 3, 4, 5, 7. If a per-phase note disagrees with this table, this table wins.
+
+Cell legend: `pause` = orchestrator MUST call AskUserQuestion before proceeding; `no` = no pause; `cond:<expr>` = pause only when the conditional expression is true.
+
+| Pause point | (no flag) | `--ask` (start sync only) | `--ask=critical` | `--ask=all` |
+|---|---|---|---|---|
+| **Pre-Step 5 start sync** (launcher, SKILL.md Step 3b) | no | pause | no | no |
+| **Phase 0 (Pre-Research, XL only) start** | no | no | no | no |
+| **Phase 1 (Scope Analysis) end** | no | no | no | pause |
+| **Phase 2 (Research) start** | no | no | no | no |
+| **Phase 2 wrapped-skill ingest** | no | no | no | no |
+| **Phase 3 (Synthesis) end** | no | no | no | pause |
+| **Phase 4 (Execution) before** | no | no | pause | pause |
+| **Phase 4 (Execution) after** | no | no | no | pause |
+| **Phase 5 (Blind Validation) start** | no | no | no | pause |
+| **Phase 6 (Devil's Advocate) end** | no | no | no | no |
+| **Phase 7 (Debate) end** | no | no | cond:`verdict==decisive AGAINST` | pause |
+| **Phase 8 (Anti-Slop) end** | no | no | cond:`audit==FAIL` | pause |
+| **Phase 9 (Final Synthesis) end** | no | no | no | no |
+
+**Rules**:
+- Bare `--ask` is the launcher start-sync only (handled in SKILL.md Step 3b); it does NOT pause inside the pipeline.
+- `--ask=critical` pauses only on (i) before execution if Phase 4 will run, (ii) Phase 7 if the debate verdict is `decisive AGAINST` per the MED-2 threshold table, (iii) Phase 8 if the anti-slop audit returns `FAIL`. Otherwise no pause.
+- `--ask=all` pauses at the end of every numbered milestone (Phase 1, 3, 4-before, 4-after, 5-start, 7, 8).
+- Headless detection (MED-8, SKILL.md Step 3b) silently disables ALL `--ask*` variants — every cell becomes `no` regardless of the flag.
+- Tier-flag collision (MED-6) refuses before any pause cell is evaluated.
+
 ## Phase 0: Pre-Research (XL ONLY)
 
 **Purpose**: Compass, not GPS. Expand the scope of investigation without dictating steps.
@@ -35,11 +64,9 @@ All tiers run ALL phases. Agent count and depth vary by tier. Phases are STRICTL
 - If wrapping a skill: how to brief that skill
 
 **Rules**:
-- If `--ask=all`, pause here and sync with user via AskUserQuestion before proceeding
+- Pause behavior at this phase: see the **Pause Matrix** at top of this file (single source of truth, MED-10). Per the matrix, `--ask=all` pauses at end of Phase 1; `--ask=critical` and bare `--ask` do NOT.
 - If --mode is specified, use it instead of auto-detection
 - Scope analysis must complete before ANY agents launch
-
-**Note**: Bare `--ask` (start sync) is handled by the launcher (SKILL.md Step 3), not the orchestrator. `--ask=critical` does NOT pause here.
 
 ## Phase 2: Parallel Research / Exploration
 
@@ -75,7 +102,7 @@ The skill's (possibly offloaded) output becomes this phase's output ONLY after t
 
 **Agents**: Orchestrator handles directly for small/medium. S1 (Synthesizer) for large/xl.
 
-**--ask=all behavior**: If `--ask=all`, pause after synthesis and show the merged findings + proposed approach before proceeding.
+**Pause behavior**: see the **Pause Matrix** at top of this file (MED-10). `--ask=all` pauses after synthesis to show merged findings + proposed approach.
 **Input**: All Phase 2 findings
 **Output**:
 - Merged findings with convergence/divergence analysis
@@ -100,13 +127,11 @@ The skill's (possibly offloaded) output becomes this phase's output ONLY after t
 **Rules**:
 - Only runs if task type is build/create/implement
 - For research/review/validate tasks, this phase is a no-op (skip to Phase 5)
-- If --ask=critical or --ask=all, pause before execution and show the plan via AskUserQuestion
-
-**--ask=all behavior**: If `--ask=all`, also pause AFTER execution completes to show what was built before proceeding to validation.
+- Pause behavior: see the **Pause Matrix** at top of this file (MED-10). `--ask=critical` and `--ask=all` BOTH pause before execution; `--ask=all` ALSO pauses after execution.
 
 ## Phase 5: Blind Validation
 
-**--ask=all behavior**: If `--ask=all`, pause before blind validation and show convergence preview.
+**Pause behavior**: see the **Pause Matrix** at top of this file (MED-10). `--ask=all` pauses at the start of Phase 5 to show the convergence preview.
 
 **Purpose**: Independent agents solve the same problem WITHOUT seeing Phase 2-4 output.
 
@@ -150,8 +175,7 @@ Each role includes the canonical honesty escape valve (MED-5 — IDENTICAL phras
 **Input**: Phase 3 synthesis + Phase 6 attack report
 **Debate topic**: The most contentious finding or the proposed solution
 
-**--ask=all behavior**: If `--ask=all`, pause after debate and show verdict before anti-slop audit.
-**--ask=critical behavior**: If `--ask=critical` AND the debate produces a DECISIVE verdict against the proposed solution, pause and ask user whether to proceed or revise.
+**Pause behavior**: see the **Pause Matrix** at top of this file (MED-10). `--ask=all` pauses at end of Phase 7 to show verdict before anti-slop. `--ask=critical` pauses ONLY when the debate verdict is `decisive AGAINST` per the MED-2 threshold table.
 
 **See `debate-protocol.md` for full 3-round protocol with mandatory concession tracking.**
 

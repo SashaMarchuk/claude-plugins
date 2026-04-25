@@ -113,7 +113,7 @@ User may provide event ID, or a title + approximate time.
      [None — silent cancel, no emails]
    ```
    The user's pick overrides `config.defaults.send_updates` for THIS cancel only. The count in the prompt is load-bearing — it is the blast-radius surface the user needs to see before clicking confirm.
-4. **Confirm**: `AskUserQuestion` "Cancel `<title>` on `<date>` at `<time>`? `<attendee_count>` attendees will be notified via `<resolved_sendUpdates>`." The attendee count and resolved mode BOTH appear verbatim — never show a confirmation without the count.
+4. **Confirm**: `AskUserQuestion` "Cancel `<title>` on `<date>` at `<time>`? `<attendee_count>` attendees will be notified via `<resolved_sendUpdates>`." The attendee count and resolved mode BOTH appear verbatim — never show a confirmation without the count. **L-18 — also surface the attendee-list head when count ≤ 10** (full list in the prompt body) and a count-only head when count > 10 (e.g. `"50 attendees: <first 5 emails>, … and 45 more"`). The blast-radius surface (count, mode, sample) is the user's last visual checkpoint before Google ships the cancellation emails — never collapse it to a yes/no without the count + sample.
 5. **Delete** via `events delete` with `sendUpdates: <resolved_sendUpdates>` (value resolved in step 2, possibly overridden in step 3). NEVER hardcode `"all"`.
 
 ---
@@ -368,18 +368,26 @@ Load it safely:
 
 ```python
 import json, glob, os, pathlib
+LEGACY_CONTACTS_MAX_BYTES = 5_000_000  # L-8: size cap; reject files larger than 5 MB
 def load_legacy_aliases():
     candidates = [pathlib.Path.home() / ".claude/skills/create-call/contacts.json"]
     candidates += [pathlib.Path(p) for p in sorted(
         glob.glob(str(pathlib.Path.home() / ".claude-plugins-backup-*/skills-create-call/contacts.json")),
         key=os.path.getmtime, reverse=True)]
     for p in candidates:
-        if p.is_file():
-            try:
-                raw = json.loads(p.read_text())
-                return {v.strip().casefold(): k for k, v in raw.items() if isinstance(v, str)}
-            except Exception:
+        # L-8: explicitly reject symlinks (avoid contacts.json → /etc/passwd attacks)
+        # AND enforce a 5MB size cap (avoid memory exhaustion via 100MB symlink-or-copy).
+        try:
+            if p.is_symlink():
                 continue
+            if not p.is_file():
+                continue
+            if p.stat().st_size > LEGACY_CONTACTS_MAX_BYTES:
+                continue
+            raw = json.loads(p.read_text())
+            return {v.strip().casefold(): k for k, v in raw.items() if isinstance(v, str)}
+        except Exception:
+            continue
     return {}
 ```
 
@@ -475,7 +483,8 @@ Leave a right-side blank to skip that teammate (keeps first_name).
 ##### Post-parse
 
 1. Parse each line into `{email, proposed_alias}`. Lines with blank right-side → use `first_name`. `accept all` sentinel → use every proposal as shown.
-2. Final-collision recheck (casefolded). If any duplicates remain → re-prompt with a `⚠ alias X used by A and B — disambiguate:` header. Max 2 retry rounds; 3rd attempt → auto-append `last_initial` and proceed with a banner warning.
+2. Final-collision recheck (casefolded). If any duplicates remain → re-prompt with a `⚠ alias X used by A and B — disambiguate:` header. Max 2 retry rounds; 3rd attempt → auto-append `last_initial` and proceed with a **banner warning (L-11 — verbatim text, do NOT paraphrase)**:
+   > `⚠ Alias-collision auto-resolved on 3rd attempt: <alias> → <alias>.<L1> (<full_name_1>) and <alias> → <alias>.<L2> (<full_name_2>). Edit ~/.claude/shared/identity.json directly to override, or re-run /gevent:onboard identity to redo aliases.`
 3. Apply to `teammates[].latin_alias` via the same atomic update as Step 8 (NOT a separate write — merge into Step 8's single atomic commit).
 4. Skip entirely if zero rows qualify (no fatigue on teams where Latin-first-name defaults are already good).
 
@@ -565,7 +574,7 @@ Writes `~/.claude/gevent/config.json`. Assumes `~/.claude/shared/identity.json` 
 
    Decision storage:
    - **Option 1** ("Yes — use default") → `always_include: [{email: "notes.bot@speedandfunction.com", tag: "notes_bot", optional: true}]`, `behavior.notes_bot_decided: true`.
-   - **Option 2** ("Yes — different email") → follow-up `AskUserQuestion` asking for the email. Validate against the same regex SKILL.md uses (`^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$`) AND reject any domain with non-ASCII characters. On failure, re-prompt with the reason. On valid email → `always_include: [{email: "<entered>", tag: "notes_bot", optional: true}]`, `behavior.notes_bot_decided: true`.
+   - **Option 2** ("Yes — different email") → follow-up `AskUserQuestion` asking for the email. Validate against the same regex SKILL.md uses (`^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$`) AND reject any domain with non-ASCII characters AND **L-2**: reject if the entered email casefold-equals `identity.user.email` ("Notes-bot email cannot be your own email — the create-flow's exclude-organizer rule would silently strip it from `attendees[]`, leaving `always_include` de-facto empty. Pick a different bot address."). On failure, re-prompt with the reason. On valid email → `always_include: [{email: "<entered>", tag: "notes_bot", optional: true}]`, `behavior.notes_bot_decided: true`.
    - **Option 3** ("No — I don't use a notes bot") → `always_include: []`, `behavior.notes_bot_decided: true`. This is a valid, explicit opt-out — the empty array + flag together mean "user reviewed and declined."
 
    If the user dismisses the card or the response is unparseable, re-ask until one of the three options is chosen. This step must complete before step 3.
@@ -625,5 +634,6 @@ Switch the active default calendar. Only mutates `~/.claude/gevent/config.json` 
 
 1. `npx @googleworkspace/cli calendar calendarList list --params '{}' 2>/dev/null` to fetch all calendars the current auth has access to.
 2. `AskUserQuestion` (single-select) with the list.
-3. On pick, atomic-write `defaults.calendar` in `~/.claude/gevent/config.json`.
-4. Confirm: "Active calendar is now `<name>`. Future events default here unless overridden."
+3. **L-12 — validate the picked ID against `calendars[]` registry (and against `CALENDAR_ID_RE` from M-4) BEFORE writing.** If the chosen ID is not in the freshly-fetched `calendarList` AND not in `config.calendars[]`, refuse with a banner: `"Calendar <id> not in your accessible list — Google would reject. Re-pick from the list above."`. Also revalidate `CALENDAR_ID_RE` (M-4) — defense-in-depth in case a malformed ID slipped past auto-detection.
+4. On pick + validation pass, atomic-write `defaults.calendar` in `~/.claude/gevent/config.json` AND upsert into `calendars[]` registry (so `--status` output reflects the canonical name + timezone).
+5. Confirm: "Active calendar is now `<name>` (id: `<id>`). Future events default here unless overridden."

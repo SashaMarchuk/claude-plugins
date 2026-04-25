@@ -21,6 +21,15 @@ CURRENT_SCHEMA_VERSION = 2
 PREVIOUS_SCHEMA_VERSION = 1  # supported for SCHEMA_VERSION_DEPRECATION_DAYS
 ```
 
+### L-15 — plugin.json `version` vs `schemaVersion` mapping
+
+`plugin.json:version` (currently `1.2.0`) and `config.schemaVersion` (currently `2`) evolve INDEPENDENTLY. Documented policy:
+
+- **`schemaVersion` bumps** only when an on-disk JSON shape changes in a way that requires reader awareness (new required field, type change, semantic shift). This triggers a 90-day back-compat window per `SCHEMA_VERSION_DEPRECATION_DAYS`.
+- **`plugin.json:version` bumps** every meaningful release (semver — patch/minor/major). A plugin-version bump does NOT imply a schema bump.
+- **Schema bumps DO require a plugin-version bump** (minor at minimum) — the writer code that emits the new schema must ship as a tagged release. The reverse is not true.
+- Audit trail: every schema bump appends a `{from, to, at}` row to `schemaVersionHistory[]` (see schema example) AND bumps `plugin.json:version`. Future drift is detectable by walking commit history and joining `schemaVersionHistory` against tagged `plugin.json` versions.
+
 The gevent skill reads **two** JSON files on every invocation:
 
 1. `~/.claude/shared/identity.json` — user profile + teammate roster, shared with `/clickup`.
@@ -54,7 +63,12 @@ class SchemaVersionTooNew(Exception):
     """Raised when on-disk file declares schemaVersion > what this helper understands."""
 
 def atomic_update(path, mutate):
-    path = os.path.expanduser(path)
+    # L-9: normalize path at helper entry. On case-insensitive macOS APFS/HFS+
+    # volumes, identity.json.lock and Identity.json.lock collapse to one inode,
+    # so flock still serializes correctly — but a caller-passed mixed-case
+    # variant would print confusingly in error messages and break log-grep.
+    # os.path.realpath canonicalizes via the OS (resolves case + symlinks).
+    path = os.path.realpath(os.path.expanduser(path))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     lock_path = path + ".lock"
     dir_ = os.path.dirname(path)
@@ -217,6 +231,10 @@ is still on schemaVersion 1 — run `/gevent:onboard identity` or
 `/clickup:onboard identity` to upgrade") and refuse auto-migration, to
 surface stale-plugin mixes.
 
+### `trusted_domains[]` (L-14)
+
+Initialized at identity-onboarding Step 3 with the user's own email domain. Used by `/gevent` to gate the silent-allow-vs-prompt decision on attendee invites: an external-domain email that lands in `trusted_domains[]` (because the user said "trust this domain forever" via the [T] action in Step 5 flag review) is silently accepted; otherwise it falls through to the homoglyph + IDN gate for prompt. Schema example above includes `"trusted_domains": ["speedandfunction.com"]` — a previously-undocumented field rule that this section makes explicit. Both plugins MUST round-trip the array on rewrite (unknown-keys rule applies even though this field is now known).
+
 ### `teammates[].sources` vocabulary
 
 A single teammate can carry multiple tags (union across discovery passes during onboarding). Reserved values:
@@ -295,10 +313,10 @@ Written by `--onboard calendar`. Read on every invocation.
 - `schemaVersion_bumped_at` — ISO8601 UTC. Set by the writer that performs the v1 → v2 upgrade; never overwritten on later same-version writes.
 - `schemaVersionHistory[]` — append-only log of version transitions, each entry `{from: <int>, to: <int>, at: "<ISO8601>"}`. Preserved verbatim on round-trip.
 - `defaults.timezone` — IANA name. Never an offset like `-04:00`.
-- `defaults.duration_minutes` — integer. Used when the user doesn't specify a duration.
+- `defaults.duration_minutes` — integer. Used when the user doesn't specify a duration. **L-6 type check on load**: `isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 1440`. Stringified `"30"` HALTs at load with banner: `"defaults.duration_minutes must be an integer 1–1440, got <type>=<value>"`. Fall back to `30` and surface banner if validation fails (read-only mode until corrected).
 - `defaults.calendar` — the active calendar ID. **Validated at pre-flight against a pinned regex** (see `SKILL.md` → "Calendar" → `CALENDAR_ID_RE`): `^[a-zA-Z0-9._\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$|^primary$|^[a-f0-9]{24,}@group\.calendar\.google\.com$`. Hand-edited values like `"../../etc/passwd"` HALT at pre-flight with exit code 1 + clear message — the value never enters a JSON envelope. Accepted: `primary`, any email-shaped string, or a Google secondary-calendar ID `<24+-hex>@group.calendar.google.com`. Anything else is refused.
-- `defaults.send_updates` — `"all" | "externalOnly" | "none"`. Controls whether Google emails invitations.
-- `defaults.conference_type` — `"hangoutsMeet"` for Google Meet; no other values currently supported.
+- `defaults.send_updates` — `"all" | "externalOnly" | "none"`. Controls whether Google emails invitations. **L-6 type check on load**: `v in {"all", "externalOnly", "none"}`. A typo like `"always"` (instead of `"all"`) HALTs at load with banner: `"defaults.send_updates must be one of {all, externalOnly, none}, got <value> — falling back to \"all\""`. Fall back to `"all"` and surface banner.
+- `defaults.conference_type` — `"hangoutsMeet"` for Google Meet; no other values currently supported. **L-6 type check on load**: `v in {"hangoutsMeet"}` (or `None` to skip Meet). Anything else surfaces banner + falls back to `"hangoutsMeet"`.
 - `behavior.confirm_before_create` — if `true`, always show the preview + confirm in interactive mode. Never honored under `--auto`.
 - `behavior.check_conflicts` — if `true`, run the conflict query before creating.
 - `behavior.past_time_check` — if `true`, guard against past-start times (interactive: ask; `--auto`: refuse).
@@ -340,7 +358,7 @@ The shadow check uses a broadened glob (see `SKILL.md` step 1) covering the cano
 - `~/.claude-backup-*/skills/create-call/` and `~/.claude-backup-*/skills-create-call/`
 - `~/.claude-plugins-backup-*/skills-create-call/` and `~/.claude-plugins-backup-*/skills/create-call/`
 
-If any of those globs match a directory, the plugin emits a banner on every invocation enumerating every hit:
+If any of those globs match a directory, the plugin emits a banner on every invocation enumerating every hit. **L-5 + L-16: single source of truth — every reference (SKILL.md step 1, modes.md status output, this section) uses the same `⚠` emoji and verbatim wording. Do not duplicate or paraphrase elsewhere.**
 
 ```
 ⚠ Legacy user-level create-call skill detected at: <hit_1>, <hit_2>, … — this plugin is now called gevent. Remove with: rm -rf <each path>. Backups under ~/.claude.backup-*, ~/.claude.bak, ~/.claude.old*, ~/.claude-backup-* are caught here too.

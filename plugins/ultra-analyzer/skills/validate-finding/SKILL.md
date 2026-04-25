@@ -43,7 +43,82 @@ For every unit (collection/file/URL/page) referenced: it must appear in the adap
 
 ## Step 5: Forbidden-fields check
 Read `<RUN_PATH>/state/forbidden_fields.json`.
-Parse each Query in the findings to identify fields in filter/match/group/sort positions (adapter-specific DSL — use the same parser as discover-topics). Any forbidden field in a disqualifying position → FAIL with `forbidden-field-used: <name>`.
+Parse each Query in the findings to identify fields in filter/match/group/sort positions. Any forbidden field in a disqualifying position → FAIL with `forbidden-field-used: <name>`.
+
+### Step 5a — Alias resolution (closes H-5)
+
+Naive name-match is insufficient. A query can introduce an alias for a
+forbidden field via a computed projection, then reference the alias in a
+disqualifying position. The validator MUST track aliases and treat the alias
+as equivalent to its source expression for the duration of the query.
+
+**MongoDB pipeline DSL.** Build an alias table by walking pipeline stages in
+order:
+- `{$addFields: {<alias>: "$<expr>"}}` → record `<alias> -> <expr>`.
+- `{$set: {<alias>: "$<expr>"}}` → same as `$addFields`.
+- `{$project: {<alias>: "$<expr>"}}` → record alias when value is a `$`-prefixed field reference.
+- `{$group: {_id: "$<expr>", <alias>: {<accumulator>: "$<expr>"}}}` → record `<alias> -> <expr>` for each accumulator value.
+- `{$lookup: {as: "<alias>", localField: "<f>", foreignField: "<g>"}}` → alias resolves to a join with the foreign collection's documents; do NOT mark the join target as a free pass.
+
+After building the alias table, when checking `$match`, `$group._id`, or
+`$sort` keys: if a key matches an alias, REPLACE it with the alias's source
+expression and re-check the substituted expression against the forbidden
+list. Repeat until fixed point (alias chains are allowed).
+
+EXAMPLE (MUST FAIL):
+```
+[
+  {$addFields: {e: "$users.email"}},
+  {$group: {_id: "$e"}}
+]
+```
+Even though `_id` literally references `$e`, alias resolution maps
+`e -> users.email`, and `users.email` is in `forbidden_fields.json`. FAIL
+with `forbidden-field-used: users.email (via alias 'e')`.
+
+**SQL DSL** (sqlite, postgres, etc.). Build alias table from `SELECT`
+clause:
+- `SELECT <expr> AS <alias>, ...` → record `<alias> -> <expr>`.
+- `SELECT <col>, ...` (no AS) → no alias entry, column resolves to itself.
+- Subqueries / CTEs introduce a nested scope; alias tables stack.
+
+When checking `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY`: if the referenced
+identifier is an alias, substitute its source expression and re-check.
+
+EXAMPLE (MUST FAIL):
+```
+SELECT email AS x FROM users GROUP BY x
+```
+`x` is an alias for `email`; if `users.email` is forbidden, FAIL with
+`forbidden-field-used: users.email (via alias 'x')`.
+
+**Other DSLs** (jsonl jq filters, http-api response paths, browser DOM
+selectors). Use the same general principle: any computed projection that
+re-binds a forbidden source under a new name must be resolved and the
+substituted source re-checked. If the connector lacks a defined alias
+syntax, the absence-of-alias is itself a check that MUST be documented in
+the connector spec — otherwise the validator treats any `as` / `AS` /
+`addFields` / `set` keyword in the query string as a flag for manual review.
+
+### Step 5b — Forbidden-field check fixed-point loop
+
+```
+forbidden = load_set(<RUN_PATH>/state/forbidden_fields.json)
+aliases   = build_alias_table(query, dsl)
+for key in disqualifying_positions(query):
+    expr = key
+    while expr in aliases:
+        expr = aliases[expr]
+    if expr in forbidden or any_forbidden_substring(expr, forbidden):
+        FAIL: forbidden-field-used: <expr> (via alias '<key>') if key != expr
+        FAIL: forbidden-field-used: <expr>                       otherwise
+```
+
+The `any_forbidden_substring` step also catches dotted refs (e.g.
+`users.email` substring in `$users.email`) so the dollar-prefix or table-
+qualified forms still match. Document any false-positives the rule produces
+in the run's `state/forbidden_fields_review.md` for human triage rather
+than silently bypassing the check.
 
 ## Step 6: Contradiction-honesty check
 If the Answer section directly contradicts the Hypothesis (sign flipped, magnitude >2x off, etc.) AND the Contradictions section says "None" → FAIL with `dishonest-contradiction`.

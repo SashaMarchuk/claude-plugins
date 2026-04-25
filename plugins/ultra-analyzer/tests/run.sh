@@ -156,6 +156,28 @@ else
 fi
 rm -rf "$H4_PATHDIR"
 
+# ------------------------------------------------------------------ WS-9 AC H-5
+# Validator + analyze-unit prose flags computed-alias forbidden fields.
+VALIDATE_SKILL="$PLUGIN_DIR/skills/validate-finding/SKILL.md"
+ANALYZE_SKILL="$PLUGIN_DIR/skills/analyze-unit/SKILL.md"
+if grep -q 'addFields' "$VALIDATE_SKILL" && grep -q 'alias' "$VALIDATE_SKILL" \
+   && grep -q 'forbidden-field-used.*alias' "$VALIDATE_SKILL"; then
+  report_pass "WS9-H5: validator SKILL documents alias resolution"
+else
+  report_fail "WS9-H5: validator SKILL documents alias resolution" "missing alias rule"
+fi
+if grep -q 'alias' "$ANALYZE_SKILL"; then
+  report_pass "WS9-H5: analyze-unit SKILL documents alias resolution"
+else
+  report_fail "WS9-H5: analyze-unit SKILL documents alias resolution" "missing alias rule"
+fi
+# Spec-level: the canonical FAIL example is on file as a literal pattern.
+if grep -q '\$addFields: {e: "\$users.email"}' "$VALIDATE_SKILL"; then
+  report_pass "WS9-H5: canonical \$addFields FAIL example documented"
+else
+  report_fail "WS9-H5: canonical \$addFields FAIL example documented" "example missing"
+fi
+
 # ------------------------------------------------------------------ AC 2
 # Run-name sanitization rejects ../../tmp/evil with exit 6.
 (

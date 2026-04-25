@@ -27,8 +27,16 @@ Read `<RUN_PATH>/config.yaml` for source.type. All source operations go through 
 ## Step 3: Forbidden-field preflight
 For each Query in the topic:
 - Parse fields appearing in filter/match/group/sort positions (adapter-specific DSL parsing).
+- **Resolve aliases first (closes H-5).** Build an alias table from the query
+  in the same way validate-finding's Step 5a describes:
+  - MongoDB: `$addFields`, `$set`, `$project`, `$group` accumulators.
+  - SQL: `SELECT <expr> AS <alias>` clauses.
+  Then for each disqualifying-position key, substitute alias → source until
+  fixed point. Check the substituted source against `Fields FORBIDDEN` AND
+  `forbidden_fields.json`.
 - Cross-check against topic's `Fields FORBIDDEN` list and the run-level `forbidden_fields.json`.
-- If any forbidden field is used in a disqualifying position → `release.sh <topic> requeue forbidden-field-used` and exit.
+- If any forbidden field is used in a disqualifying position (directly or
+  via alias) → `release.sh <topic> requeue forbidden-field-used` and exit.
 
 ## Step 4: Execute queries
 For each query:

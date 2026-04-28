@@ -12,6 +12,7 @@ Detailed flow for each mode. Load only the section for the current invocation.
 - [memory](#memory) — manage learned patterns
 - [status](#status) — health check of both files
 - [workspace](#workspace) — switch active ClickUp workspace
+- [reload](#reload) — reconcile config.lists with the active workspace
 
 ---
 
@@ -573,6 +574,8 @@ identity.json    (~/.claude/shared/)
 clickup/config.json
   Workspace:     Speed&Functions (id: 90151491867)
   Lists:         7 aliased
+  Lists last validated: <duration> ago  (oldest: "<name>" <D>d ago, freshest: "<name>" <d>d ago)
+                                         → run /clickup:reload  (if oldest > 30 days)
   Config age:    12 days  (OK — refresh at 30)
   Schema:        v1  ✓
 
@@ -598,3 +601,211 @@ Switch the active ClickUp workspace. Only mutates `~/.claude/clickup/config.json
    - If their `external_ids.clickup` IS in the new workspace → bump `last_validated_at`, ensure `active: true`.
    - If their `external_ids.clickup` is NOT in the new workspace → set `active: false`, keep all other fields (email, name, `/gevent` still uses them).
 5. Prompt: "Run `/clickup --onboard workspace` if you want to refresh lists + add aliases for this workspace."
+
+---
+
+## reload
+
+Incremental reconciliation of `~/.claude/clickup/config.json` `lists[]` against the active ClickUp workspace. Preserves aliases by `id`. Surfaces renames, adds, archived/missing in a confirm card. Auto-routes massive diffs to `/clickup:onboard workspace` with `lists_archive[]` carry-forward.
+
+### Common workflow
+
+1. After ClickUp workspace changes (rename, add, archive), run `/clickup:reload`.
+2. Review the confirm card.
+3. Pick aliases for new lists in the inline prompt (single `AskUserQuestion` round, default = lowercased name stripped of brackets).
+4. Confirm. Done.
+
+### Flow
+
+1. **Pre-flight**: inherits SKILL.md → Step 2 (identity, config, schemaVersion, MCP auth probe with the 4-bucket classification — `auth-ok` / `auth-fail` / `retryable-network` / `other`). Reload does NOT duplicate these checks.
+
+2. **Parse `--mode`**: accept `--mode=incremental` or `--mode=full`. If neither, threshold decides.
+
+3. **Fetch workspace hierarchy** via `mcp__clickup__clickup_get_workspace_hierarchy`. Filter to the workspace whose `id` matches `config.workspace.id`. **Empirical question for executor**: confirm whether the call returns archived lists by default; if so, filter them out (`mcp_lists = [l for l in mcp_lists if not l.get("archived")]`) before the diff. Document the empirical answer in a comment.
+
+4. **Defensive halts** (each is a one-line refusal; do NOT mutate config):
+   - If MCP returns 0 workspaces → `"workspace ${name} not visible to current MCP auth — re-onboard"`.
+   - If MCP returns workspaces but `config.workspace.id` is not among them → `"active workspace ${name} (${id}) not in MCP results — auth scope changed; re-onboard"`.
+   - If MCP returns 0 lists for the active workspace AND stored `lists[]` has > 0 active records → `"MCP returned 0 lists for ${name} (had ${N} stored) — refusing to auto-archive; run /clickup:status"`.
+   - If two stored records share the same `id`, OR two MCP records share the same `id` → `"duplicate list_id ${id} — refusing reload (data corruption); investigate config.json or report MCP bug"`.
+
+5. **Filter empty ids**: drop any entry from either side with empty / null / whitespace-only `id`. Defensive.
+
+6. **Categorize the diff** (by `id`):
+   - **renamed**: `s.id == m.id and s.name != m.name`.
+   - **added**: `m.id not in stored_active_ids`.
+   - **archived_or_missing**: `s.id not in mcp_active_ids and not s.archived`.
+   - **moved (silent)**: `s.id == m.id and (s.space_id != m.space_id or s.folder_id != m.folder_id)`. Update silently; do not surface in confirm card. Future `--verbose` flag may surface.
+   - **workspace_renamed (silent)**: if MCP's workspace name differs from `config.workspace.name`, update silently. Workspace renames are organizational housekeeping, not list-level operations.
+
+7. **Threshold metric**: Jaccard on `lists[].id` sets.
+   - `S = {x.id for x in stored_active}`; `M = {x.id for x in mcp_active}`.
+   - `J = |S ∩ M| / |S ∪ M|` if `|S ∪ M| > 0` else 1 (no change).
+   - `change_pct = round((1 - J) * 100)` for user-facing copy.
+   - **Small-N guard**: if `max(|S|, |M|) <= 3` → always incremental.
+   - **Threshold**: `J < 0.5` AND not small-N → route to full (with confirm).
+   - **Override flags always win**: `--mode=incremental` and `--mode=full` skip the threshold.
+   - The threshold value `0.5` is documented as a Schelling-point default; tunable via a future config setting (out of scope for this PR).
+
+8. **Confirm card (incremental)** — render as monospace block. Order: header, change rows (renamed → added → archived/missing), totals + metric, snapshot path, action prompt:
+
+   ```
+   /clickup:reload — workspace "<name>"
+   ─────────────────────────────────────────
+    Renamed lists:                            (<N>)
+      <old name> → <new name>                      (id: <id>)
+                                                   aliases preserved: [<a>, <b>, ...]
+    Added lists:                              (<N>)
+      <name>                                       (id: <id>)
+                                                   propose aliases? [text input]
+    Archived/missing in MCP:                  (<N>)
+      <name>                                       (id: <id>)
+                                                   alias kept; resolution will refuse with archive notice
+
+    Total: <N> changes  |  metric: Jaccard=<J>, <change_pct>% changed → incremental
+    Snapshot: ~/.claude/clickup/.snapshots/<ISO>.json
+
+   [1] Apply  [2] Cancel  [3] Pick aliases for new lists first
+   ```
+
+9. **Confirm card (massive — Jaccard `< 0.5`, not small-N, no `--mode` override)**:
+
+   ```
+   /clickup:reload — workspace "<name>"
+   ─────────────────────────────────────────
+   ⚠ Massive divergence detected.
+
+    Renamed: <N>    Added: <N>    Archived/missing: <N>
+    Stored <X> lists; MCP returned <Y> lists.
+    Jaccard on list-ids: <J> (threshold: 0.50; <change_pct>% changed → full)
+
+    Recommended: route to /clickup:onboard workspace with current `lists[]`
+                 archived to `lists_archive[]`. The wizard will display the
+                 archived aliases as a reference panel during alias entry —
+                 you can copy them across to the new lists by hand. (No
+                 automatic alias inheritance — the id-to-id mapping is
+                 ambiguous in a massive-diff scenario.)
+
+   [1] Route to onboard-workspace   [2] Force incremental anyway   [3] Cancel
+   ```
+
+   **`[2]` semantics**: picking `[2]` is exactly equivalent to re-running `/clickup:reload --mode=incremental` — same threshold bypass, same incremental confirm card. The runtime button and the CLI flag share one code path.
+
+10. **On user pick `[1] Apply` (incremental)**:
+    - **Acquire flock** on `~/.claude/clickup/.config.json.lock`.
+    - **Re-read** `config.json` inside the lock (M-5 stale-read guard — never trust the pre-confirm read).
+    - **Re-run quarantine gate** per `atomic_update` semantics (missing/non-int `schemaVersion` → quarantine + abort).
+    - **Re-compute the diff** vs MCP. If it differs from the previewed diff (concurrent writer scenario), abort with `"config changed during preview — re-run /clickup:reload"`. User re-runs.
+    - **Write snapshot** to `~/.claude/clickup/.snapshots/<YYYY-MM-DDTHHMMSSZ>.json` (ISO without colons for filesystem portability) via tempfile + fsync + `os.replace` (the snapshot is itself an atomic write — never naive `open().write()`).
+    - **Apply mutations** to in-memory `data`:
+      - For each renamed: `data.lists[i].name = new_name; data.lists[i].last_validated_at = <now>`.
+      - For each added: append `{id, name, aliases: [user-supplied list], space_id, folder_id, archived: false, last_validated_at: <now>}`.
+      - For each archived_or_missing: `data.lists[i].archived = true; data.lists[i].removed_at = <now>; data.lists[i].last_validated_at = <now>`.
+      - For each unchanged in MCP: bump `data.lists[i].last_validated_at = <now>`.
+      - Silent updates (moved space/folder, workspace rename): apply without surfacing.
+      - `data.updated_at = <now>`.
+    - **Write** `config.json` via tempfile + fsync + `os.replace` + parent-dir fsync. SAME critical section.
+    - **Release flock**.
+    - **Prune snapshots**: keep last 5 by mtime. Failures silent (per existing `atomic_update` style).
+    - **Print post-apply banner** with undo affordance:
+      ```
+      ✓ /clickup:reload applied (<N> changes). To undo:
+        cp ~/.claude/clickup/.snapshots/<ISO>.json ~/.claude/clickup/config.json
+      ```
+
+11. **On user pick `[1] Route to onboard-workspace` (full)**:
+    - **Acquire flock** on `~/.claude/clickup/.config.json.lock`.
+    - **Re-read** + quarantine gate.
+    - **Append** current `data.lists[]` to `data.lists_archive[]` (do NOT replace; never delete from `lists_archive[]` in this command).
+    - **Write snapshot** + write config + release flock + prune snapshots (same as step 10).
+    - **Invoke** the `## onboard-workspace` flow. The wizard reads `config.lists_archive[]` and, during its alias-input step (modes.md → onboard-workspace step 2), surfaces a reference panel: *"Previously aliased lists from your archive: ..."* — purely informational; user copies aliases manually if desired. No automatic id-to-id inheritance.
+
+12. **On user pick `[2] Cancel`**:
+    - No mutation. No snapshot. Banner: `/clickup:reload — cancelled, no changes`.
+
+13. **No-diff case**: if diff is empty AND no `--mode` override changes things:
+    - Acquire flock; re-read; bump `last_validated_at` on all active lists; write; release.
+    - Skip snapshot (no destructive change).
+    - Banner: `✓ /clickup:reload — no change since last reload (<duration> ago); last_validated_at bumped`.
+
+### Threshold examples (math sanity)
+
+| stored | mcp | added | removed | renamed | J | route |
+|---|---|---|---|---|---|---|
+| 5 | 6 | 1 | 0 | 1 | 5/6 = 0.83 | incremental |
+| 7 | 7 | 0 | 0 | 7 | 7/7 = 1.00 | incremental (renames-only) |
+| 10 | 10 | 0 | 0 | 0 | 1.00 | incremental (no-op; bump validated) |
+| 10 | 15 | 5 | 0 | 0 | 10/15 = 0.67 | incremental |
+| 10 | 10 | 5 | 5 | 0 | 5/15 = 0.33 | full |
+| 1 | 1 | 0 | 0 | 1 | 1/1 = 1.00 | incremental (small-N) |
+| 1 | 2 | 1 | 0 | 0 | 1/2 = 0.50 | incremental (small-N guard active) |
+| 1 | 3 | 3 | 1 | 0 | 0/4 = 0.00 | incremental (small-N guard) |
+| 0 | 50 | 50 | 0 | 0 | 0/50 = 0.00 | full (executor: probably refuse and route to onboard-workspace explicitly) |
+
+### Snapshot & retention
+
+- Path: `~/.claude/clickup/.snapshots/<YYYY-MM-DDTHHMMSSZ>.json` (no colons in filename — filesystem portability).
+- Hidden subdir; matches `.config.json.lock` dot-prefix convention.
+- Created `mode=0o700` if it doesn't exist; matches user-state perm convention.
+- Retention: keep last 5 by mtime. Prune at END of reload flow (after successful write) so a crash mid-reload leaves the snapshot for forensics. Failures silent.
+- No retention on `lists_archive[]`; manual purge belongs to a future `/clickup:reload --purge-archive` command (out of scope).
+
+### Edge cases
+
+- `--reload --auto` → parse-time refuse (mirrors `--onboard --auto`).
+- Concurrent writer detected on re-read → abort + tell user to re-run.
+- User Ctrl-C between confirm and apply → no flock taken yet; no mutation. Safe.
+- User Ctrl-C between snapshot write and config write → snapshot exists; config unchanged. Re-running reload re-snapshots and proceeds.
+- Empty workspace (S=M=∅) → no-op banner.
+
+### Status banner integration
+
+`## status` mode (this file, above) gains a one-line surfacing of config staleness. In the `clickup/config.json` block of `/clickup:status` output, add:
+
+```
+  Lists last validated: <duration> ago  (oldest: "<name>" <D>d ago, freshest: "<name>" <d>d ago)
+```
+
+Computed as `max(lists[].last_validated_at)` for the headline duration, with min/max teammate names for context. If max > 30 days, append the recommendation `→ run /clickup:reload`.
+
+### Updating to 1.4.0 / discovering the new command
+
+The `/clickup` plugin is shipped via the user's marketplace clone. To pick up `/clickup:reload` (or any future `/clickup` change) without losing data:
+
+1. **Pull the marketplace clone** (the local checkout of `claude-plugins` that `/plugin` reads from):
+
+   ```bash
+   cd <path-to-claude-plugins-clone>
+   git pull
+   ```
+
+2. **Refresh the marketplace inside any active Claude Code session**:
+
+   ```
+   /plugin marketplace update <marketplace-name>
+   ```
+
+   `<marketplace-name>` is whatever name the user registered (run `/plugin marketplace list` to see it — typically `claude-plugins`).
+
+3. **Verify**:
+   - `/plugin list` shows `clickup` at version `1.4.0`.
+   - Typing `/clickup:` autocompletes `reload` as one of the options.
+
+**File-state guarantees during the update**:
+
+- `~/.claude/clickup/config.json` — **NEVER touched** by `git pull` or `/plugin marketplace update`. The marketplace clone updates only files inside `plugins/clickup/`. User config lives in `~/.claude/clickup/` (outside the clone).
+- `~/.claude/shared/identity.json` — **NEVER touched** by the update. Cross-plugin shared user state.
+- `~/.claude/clickup/memory.md` — never touched.
+- `~/.claude/clickup/.snapshots/` — never touched (created by `/clickup:reload` itself, not by the update).
+
+**No Claude Code restart needed.** SKILL.md is read at skill-invocation time, so the new prose is live the moment `/plugin marketplace update` returns.
+
+**When to run `/clickup:reload` after updating** (decision table):
+
+| Situation | Action |
+|---|---|
+| Lists in ClickUp have been renamed / added / archived recently | Run `/clickup:reload`. Pick aliases for new lists. Done. |
+| Last `/clickup:onboard workspace` was > 30 days ago | Run `/clickup:status` first; it surfaces the staleness banner with a recommendation. Then `/clickup:reload`. |
+| Just onboarded yesterday and nothing has changed | Don't bother. Next `/clickup:create` works as-is. Reload would be a no-op. |
+| `~/.claude/clickup/config.json` is from before this PR (no `last_validated_at` fields) | First `/clickup:create` succeeds normally; first `/clickup:reload` populates the new fields. Existing aliases are NOT lost — `atomic_update` preserves unknown keys and `lists[].id` is the join key. |
+| MCP auth scope changed (workspace not visible) | `/clickup:reload` refuses with the "auth scope changed" halt — re-authenticate via `mcp__clickup__authenticate`, then rerun. |

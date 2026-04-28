@@ -277,8 +277,32 @@ Written by `--onboard workspace`. Read on every invocation.
 - `lists[].aliases` — lowercase matching; stored as-typed.
 - `defaults` — values (what to use when user doesn't specify). Replaces the older `preferences` bag.
 - `behavior` — boolean flags that gate UX. Empty in v1; reserved for future toggles.
+- `lists[].archived` — boolean. **Default `false` on missing.** Set to `true` by `/clickup:reload` when the list is no longer present in the workspace hierarchy (archived OR deleted — same observable state). Once `true`, the alias resolver (SKILL.md → "Resolution rules → List", step 2) refuses to resolve aliases that point at this `list_id` with the message `"list <name> archived — re-onboard or pick a different list"`. NEVER auto-removed by reload; manual purge belongs to a future command. Round-tripped per the unknown-key preservation rule (M-6) — old v2 readers without reload knowledge see this as an unknown key and preserve it on rewrite.
+- `lists[].removed_at` — ISO8601 UTC string with colons (example: `"2026-04-25T13:45:00Z"`). **Set ONLY when `archived` flips from `false` → `true` (or unset → `true`).** Never modified after that. Absent on lists that are still active. Used by `/clickup:status` to surface `"<name> archived <duration> ago"` so the user knows when access was lost.
+- `lists[].last_validated_at` — ISO8601 UTC string with colons (example: `"2026-04-25T13:45:00Z"`). Bumped to "now" by `/clickup:reload` for every list confirmed present in the MCP response (unchanged, renamed, or newly added). Bumped by `/clickup:onboard workspace` on initial write. Bumped by the alias-hit verification path in `/clickup:create` (SKILL.md → Resolution rules → List, step 2). Reading `/clickup:status` flags config staleness if the freshest `last_validated_at` is > 30 days ago, with a recommendation to run `/clickup:reload`.
+
+  Note: the `~/.claude/clickup/.snapshots/<YYYY-MM-DDTHHMMSSZ>.json` snapshot filename uses a colon-stripped ISO form for filesystem portability — that no-colons form applies ONLY to the snapshot filename, NOT to JSON field values. Field values always use the canonical ISO with colons.
+
+**Invariant — `archived` ↔ `removed_at` must agree on writes.** Writers (specifically `/clickup:reload`) NEVER persist either of these illegal combinations:
+
+- `archived: true` with `removed_at` absent or `null` — illegal: an archived list MUST carry the timestamp of when it was archived.
+- `archived: false` with `removed_at` set — illegal: a still-active list MUST NOT carry an archive timestamp.
+
+Readers MUST tolerate both illegal combinations on read (e.g. from a hand-edited config or legacy v1 data inflated without the migration helper). Specifically: `archived: true` with absent `removed_at` is treated in memory as `archived: true, removed_at: <reader's now>`. The next write (any mutation that touches that list record) repairs the on-disk state to the canonical pair via `/clickup:reload`'s atomic_update closure.
+- `lists_archive[]` — array of frozen list records, same shape as `lists[]`. Populated by `/clickup:reload --mode=full` when routing to `/clickup:onboard workspace`: the previous `lists[]` is APPENDED here (never overwritten) so the wizard can SURFACE the archived aliases as a reference panel during alias entry. The wizard does NOT automatically inherit aliases by id — the id-to-id mapping is ambiguous in a massive-diff scenario. The reload command never deletes from `lists_archive[]`; manual purge is a future command. Default `[]` on missing. Round-tripped per the unknown-key preservation rule (M-6).
 
 **Removed from older schemas:** `user`, `teammates[]`, `preferences` (split into `defaults` + `behavior`).
+
+### Back-compat reader (clickup config — same v1 → v2 window)
+
+Readers MUST accept `schemaVersion ∈ {1, 2}` for the same 90-day window as identity.json (2026-04-24 → 2026-07-23). On v1 read, fill in defaults in memory:
+
+- `lists[].archived` — default `false` when missing.
+- `lists[].removed_at` — default absent (do not synthesize).
+- `lists[].last_validated_at` — default absent (do not synthesize; let `/clickup:reload` populate on first run).
+- `lists_archive[]` — default `[]` when missing.
+
+Writers always emit `schemaVersion: 2` and persist these new fields where applicable. Old v2 readers that don't know about the new fields preserve them on rewrite per the unknown-key rule (M-6).
 
 ### Validation
 

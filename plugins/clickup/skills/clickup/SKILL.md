@@ -20,8 +20,11 @@ Universal skill for creating and managing ClickUp tickets. Enforces consistent t
 | `--memory [add\|list\|remove\|clear]` | Manage learned patterns | `references/modes.md#memory` |
 | `--status` | Config health check (both files) | `references/modes.md#status` |
 | `--workspace` | Switch active ClickUp workspace | `references/modes.md#workspace` |
+| `--reload` | Reconcile config.lists with workspace state | `references/modes.md#reload` |
+| `--reload --mode=incremental` | Force incremental even on large diff | `references/modes.md#reload` |
+| `--reload --mode=full` | Force route to onboard-workspace with archive carry-forward | `references/modes.md#reload` |
 
-**Precedence on conflict:** `--onboard` > `--status` > `--memory` > `--workspace` > `--auto` > default. Flag arguments are space-separated (`--onboard identity`, not `--onboard=identity`). Positional args after flags are the ticket-seed text.
+**Precedence on conflict:** `--onboard` > `--status` > `--memory` > `--workspace` > `--reload` > `--auto` > default. Flag arguments are space-separated (`--onboard identity`, not `--onboard=identity`). Positional args after flags are the ticket-seed text.
 
 **`--onboard --auto` is REJECTED at parse time.** If `$ARGUMENTS` contains BOTH `--onboard` AND `--auto` (in any order, with or without a sub-arg like `--onboard identity`), HALT BEFORE any pre-flight step with the one-liner:
 
@@ -30,6 +33,14 @@ refusing --onboard --auto: onboarding must be interactive (AskUserQuestion requi
 ```
 
 Rationale: `--onboard` requires `AskUserQuestion` rounds (see `references/modes.md` → `onboard-identity` Step 2/3/4/7); `--auto` explicitly bans interactive prompts ("silent create with defaults"). The combined invocation has no valid execution — either AskUserQuestion opens (violating `--auto`) or onboarding silently skips (violating `--onboard` precedence). An LLM resolves this differently each run; the only safe behaviour is parse-time refusal. Closes PLG-clickup-F5.
+
+**`--reload --auto` is REJECTED at parse time.** If `$ARGUMENTS` contains BOTH `--reload` AND `--auto` (in any order), HALT BEFORE any pre-flight step with the one-liner:
+
+```
+refusing --reload --auto: list-reconciliation requires interactive confirm. Run `/clickup:reload` alone.
+```
+
+Rationale: reload's diff is presented in a confirm card (`[1] Apply / [2] Cancel / [3] Pick aliases for new lists first`). `--auto` bans interactive prompts. Silently rewriting the user's `lists[]` + aliases is a data-loss vector. Mirrors the parse-time refuse for `--onboard --auto` immediately above.
 
 **Seed-text 4 KB cap (pre-extract truncation).** Any seed text — pasted transcript, previous-turn context carried forward, positional args — longer than **4096 bytes** (UTF-8 encoded) is truncated BEFORE the extract step. Truncation point: the nearest **sentence boundary** (period, question mark, exclamation mark, or newline) at or before the 4096-byte mark. If no sentence boundary exists in the first 4096 bytes, fall back to the nearest whitespace; if none, hard-cut at 4096 bytes. After truncation, show the user an explicit banner:
 
@@ -122,7 +133,7 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/geve
 ### List (alias → fuzzy hierarchy)
 
 1. Match user-named list (case-insensitive) against `config.lists[].aliases`.
-2. **Alias hit** → resolve to stored `list_id`; verify still exists and not archived via `mcp__clickup__clickup_get_list`. If renamed, update alias silently. If archived/missing, refuse with "list not found — re-onboard."
+2. **Alias hit** → resolve to stored `list_id`; verify still exists and not archived via `mcp__clickup__clickup_get_list`. If renamed, update alias silently. If `archived: true` on the stored record, refuse with `"list <name> archived — re-onboard or pick a different list"`. If the `id` is not present in the MCP response and the stored record does NOT have `archived: true`, refuse with `"list not found — run /clickup:reload to reconcile (id may have been deleted) or re-onboard"`. If renamed (id present, name differs), update the stored `name` silently — alias resolution is by id, not name.
 3. **No alias hit** → call `mcp__clickup__clickup_get_workspace_hierarchy`, fuzzy-match top 3 candidates, surface for user confirm.
 4. In `--auto`: if no alias hit AND no single high-confidence fuzzy match → refuse.
 

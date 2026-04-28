@@ -689,6 +689,8 @@ Incremental reconciliation of `~/.claude/clickup/config.json` `lists[]` against 
    [1] Route to onboard-workspace   [2] Force incremental anyway   [3] Cancel
    ```
 
+   **`[2]` semantics**: picking `[2]` is exactly equivalent to re-running `/clickup:reload --mode=incremental` — same threshold bypass, same incremental confirm card. The runtime button and the CLI flag share one code path.
+
 10. **On user pick `[1] Apply` (incremental)**:
     - **Acquire flock** on `~/.claude/clickup/.config.json.lock`.
     - **Re-read** `config.json` inside the lock (M-5 stale-read guard — never trust the pre-confirm read).
@@ -765,3 +767,45 @@ Incremental reconciliation of `~/.claude/clickup/config.json` `lists[]` against 
 ```
 
 Computed as `max(lists[].last_validated_at)` for the headline duration, with min/max teammate names for context. If max > 30 days, append the recommendation `→ run /clickup:reload`.
+
+### Updating to 1.4.0 / discovering the new command
+
+The `/clickup` plugin is shipped via the user's marketplace clone. To pick up `/clickup:reload` (or any future `/clickup` change) without losing data:
+
+1. **Pull the marketplace clone** (the local checkout of `claude-plugins` that `/plugin` reads from):
+
+   ```bash
+   cd <path-to-claude-plugins-clone>
+   git pull
+   ```
+
+2. **Refresh the marketplace inside any active Claude Code session**:
+
+   ```
+   /plugin marketplace update <marketplace-name>
+   ```
+
+   `<marketplace-name>` is whatever name the user registered (run `/plugin marketplace list` to see it — typically `claude-plugins`).
+
+3. **Verify**:
+   - `/plugin list` shows `clickup` at version `1.4.0`.
+   - Typing `/clickup:` autocompletes `reload` as one of the options.
+
+**File-state guarantees during the update**:
+
+- `~/.claude/clickup/config.json` — **NEVER touched** by `git pull` or `/plugin marketplace update`. The marketplace clone updates only files inside `plugins/clickup/`. User config lives in `~/.claude/clickup/` (outside the clone).
+- `~/.claude/shared/identity.json` — **NEVER touched** by the update. Cross-plugin shared user state.
+- `~/.claude/clickup/memory.md` — never touched.
+- `~/.claude/clickup/.snapshots/` — never touched (created by `/clickup:reload` itself, not by the update).
+
+**No Claude Code restart needed.** SKILL.md is read at skill-invocation time, so the new prose is live the moment `/plugin marketplace update` returns.
+
+**When to run `/clickup:reload` after updating** (decision table):
+
+| Situation | Action |
+|---|---|
+| Lists in ClickUp have been renamed / added / archived recently | Run `/clickup:reload`. Pick aliases for new lists. Done. |
+| Last `/clickup:onboard workspace` was > 30 days ago | Run `/clickup:status` first; it surfaces the staleness banner with a recommendation. Then `/clickup:reload`. |
+| Just onboarded yesterday and nothing has changed | Don't bother. Next `/clickup:create` works as-is. Reload would be a no-op. |
+| `~/.claude/clickup/config.json` is from before this PR (no `last_validated_at` fields) | First `/clickup:create` succeeds normally; first `/clickup:reload` populates the new fields. Existing aliases are NOT lost — `atomic_update` preserves unknown keys and `lists[].id` is the join key. |
+| MCP auth scope changed (workspace not visible) | `/clickup:reload` refuses with the "auth scope changed" halt — re-authenticate via `mcp__clickup__authenticate`, then rerun. |

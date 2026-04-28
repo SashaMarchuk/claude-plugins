@@ -283,6 +283,39 @@ else
   fail "WSR-13: --mode override flags" "one or both missing"
 fi
 
+# ---------- WSR-14: defensive halts pinned in modes.md (data-loss prevention) ----------
+# The four halt conditions from PLAN are the data-loss prevention path; pin them
+# against drift. We require at least 2 of the 4 marker phrases to appear so the
+# test survives small wording tweaks but catches a wholesale removal.
+halt_hits=0
+grep -q "refusing to auto-archive\|refuse to auto-archive" "$MODES" && halt_hits=$((halt_hits+1))
+grep -q "duplicate list_id\|duplicate \`id\`\|duplicate id" "$MODES" && halt_hits=$((halt_hits+1))
+grep -q "auth scope changed\|auth-scope\|workspace not visible" "$MODES" && halt_hits=$((halt_hits+1))
+grep -q "0 workspaces\|zero workspaces\|MCP returns 0\|no workspaces" "$MODES" && halt_hits=$((halt_hits+1))
+if [[ "$halt_hits" -ge 2 ]]; then
+  pass "WSR-14: defensive halt-condition copy pinned in modes.md ($halt_hits/4 markers found)"
+else
+  fail "WSR-14: defensive halt-condition copy" "only $halt_hits/4 markers found; expected >= 2"
+fi
+
+# ---------- WSR-15: production-update guidance ships with the PR ----------
+if grep -q "/plugin marketplace update" "$MODES" \
+   && grep -q "git pull" "$MODES" \
+   && grep -q "NEVER touched" "$MODES"; then
+  pass "WSR-15: production-update guidance (marketplace update + git pull + file-state guarantees)"
+else
+  fail "WSR-15: production-update guidance" "missing one of: marketplace update | git pull | NEVER touched"
+fi
+
+# ---------- WSR-16: archived ↔ removed_at impossible-state invariant pinned ----------
+if grep -q "archived: true" "$SCHEMA" \
+   && grep -q "removed_at" "$SCHEMA" \
+   && grep -qi "illegal\|invariant\|impossible" "$SCHEMA"; then
+  pass "WSR-16: archived↔removed_at invariant pinned in config-schema.md"
+else
+  fail "WSR-16: archived↔removed_at invariant" "invariant prose not found"
+fi
+
 # ---------- Summary ----------
 TOTAL=$((PASS + FAIL))
 echo

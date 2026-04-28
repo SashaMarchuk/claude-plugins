@@ -178,6 +178,111 @@ else
   fail "WS6-F15: 90-day auto-demote rule" "missing 90/120 day thresholds"
 fi
 
+# ---------- WSR-1: /clickup:reload command file ----------
+RELOAD_CMD="$PLUGIN_DIR/commands/reload.md"
+if [[ -f "$RELOAD_CMD" ]] && grep -q "argument-hint:" "$RELOAD_CMD" \
+   && grep -q "clickup:clickup" "$RELOAD_CMD" \
+   && grep -q -- "--reload" "$RELOAD_CMD"; then
+  pass "WSR-1: commands/reload.md exists and dispatches --reload to clickup:clickup"
+else
+  fail "WSR-1: commands/reload.md exists" "missing file or wiring"
+fi
+
+# ---------- WSR-2: SKILL.md dispatch table has --reload row ----------
+if grep -q '`--reload`' "$SKILL" \
+   && grep -q "references/modes\.md#reload" "$SKILL"; then
+  pass "WSR-2: SKILL.md dispatch table includes --reload row"
+else
+  fail "WSR-2: SKILL.md dispatch table includes --reload row" "missing"
+fi
+
+# ---------- WSR-3: SKILL.md precedence updated ----------
+if grep -qE -- "--workspace.*--reload.*--auto" "$SKILL"; then
+  pass "WSR-3: precedence line includes --reload between --workspace and --auto"
+else
+  fail "WSR-3: precedence line includes --reload" "ordering not pinned"
+fi
+
+# ---------- WSR-4: --reload --auto parse-time refuse ----------
+if grep -q -- "--reload --auto.*REJECTED at parse time" "$SKILL" \
+   || grep -q "refusing --reload --auto" "$SKILL"; then
+  pass "WSR-4: --reload --auto rejected at parse time"
+else
+  fail "WSR-4: --reload --auto parse-time refuse" "missing prose"
+fi
+
+# ---------- WSR-5: modes.md has ## reload section ----------
+if grep -q "^## reload$" "$MODES" \
+   && grep -q "clickup_get_workspace_hierarchy" "$MODES" \
+   && grep -q "Jaccard" "$MODES"; then
+  pass "WSR-5: modes.md ## reload section with hierarchy + Jaccard anchors"
+else
+  fail "WSR-5: modes.md ## reload section" "missing one of: header / hierarchy / Jaccard"
+fi
+
+# ---------- WSR-6: small-N guard documented ----------
+if grep -qE "max\(.S., .M.\) <= 3|max\(\\\|S\\\|, \\\|M\\\|\\) <= 3|small-N guard|small-N" "$MODES"; then
+  pass "WSR-6: small-N guard documented in modes.md"
+else
+  fail "WSR-6: small-N guard" "no anchor for max<=3 or small-N guard"
+fi
+
+# ---------- WSR-7: snapshot path + retention pinned ----------
+if grep -q "\.snapshots" "$MODES" \
+   && grep -qE "last 5|retain.*5|keep last 5" "$MODES"; then
+  pass "WSR-7: snapshot path .snapshots/ + retain-5 documented"
+else
+  fail "WSR-7: snapshot path + retention" "missing one anchor"
+fi
+
+# ---------- WSR-8: schema additions in config-schema.md ----------
+if grep -q "lists\[\]\.archived" "$SCHEMA" \
+   && grep -q "lists\[\]\.removed_at" "$SCHEMA" \
+   && grep -q "lists_archive\[\]" "$SCHEMA" \
+   && grep -q "lists\[\]\.last_validated_at" "$SCHEMA"; then
+  pass "WSR-8: config-schema.md documents all four new fields"
+else
+  fail "WSR-8: config-schema.md schema additions" "missing one of: archived / removed_at / lists_archive / last_validated_at"
+fi
+
+# ---------- WSR-9: default-on-missing semantics ----------
+if grep -qE "Default \`false\` on missing|default \`false\` when missing" "$SCHEMA" \
+   && grep -qE "Default \`\[\]\` on missing|default \`\[\]\` when missing" "$SCHEMA"; then
+  pass "WSR-9: new fields document default-on-missing semantics"
+else
+  fail "WSR-9: default-on-missing for new fields" "v1->v2 inflate not pinned"
+fi
+
+# ---------- WSR-10: NO schemaVersion bump ----------
+if grep -q "CURRENT_SCHEMA_VERSION = 2" "$SCHEMA" \
+   && ! grep -q "CURRENT_SCHEMA_VERSION = 3" "$SCHEMA"; then
+  pass "WSR-10: CURRENT_SCHEMA_VERSION still 2 (no bump)"
+else
+  fail "WSR-10: no schemaVersion bump" "found CURRENT_SCHEMA_VERSION = 3 OR removed = 2"
+fi
+
+# ---------- WSR-11: reload uses canonical lock path ----------
+if grep -q "\.config\.json\.lock" "$MODES"; then
+  pass "WSR-11: reload references the canonical clickup config lock path"
+else
+  fail "WSR-11: canonical lock path in reload section" "missing"
+fi
+
+# ---------- WSR-12: archived list resolver-refusal message ----------
+if grep -q "archived — re-onboard or pick a different list" "$SKILL"; then
+  pass "WSR-12: SKILL.md updates resolver to differentiate archived from missing"
+else
+  fail "WSR-12: archived-vs-missing resolver message" "SKILL.md not updated"
+fi
+
+# ---------- WSR-13: --mode override flags documented ----------
+if grep -q -- "--mode=incremental" "$MODES" \
+   && grep -q -- "--mode=full" "$MODES"; then
+  pass "WSR-13: --mode=incremental and --mode=full documented in modes.md"
+else
+  fail "WSR-13: --mode override flags" "one or both missing"
+fi
+
 # ---------- Summary ----------
 TOTAL=$((PASS + FAIL))
 echo

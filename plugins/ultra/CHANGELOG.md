@@ -1,5 +1,36 @@
 # /ultra changelog
 
+## 1.4.1 — 2026-05-03 (hotfix)
+
+### Reverted
+- **Skill rename `ultra:ultra` → `ultra:launcher` is reverted.** The combination
+  of `name: launcher` (frontmatter) + `user-invocable: false` + directory name
+  `skills/ultra/` (mismatch with frontmatter) caused Claude Code v2.1.126 to
+  silently fail registration of the backing skill. `Skill: ultra:launcher` was
+  returning "Unknown skill", which broke `/ultra:run`, `/ultra:resume`, and
+  ultra-analyzer's Gate 1 / Gate 2 invocations end-to-end.
+- The backing skill is back to `name: ultra` (registers as `ultra:ultra` per
+  the directory). The doubled-name registry entry returns, but its description
+  was rewritten in 1.4.0 to lead with `/ultra:run` literal — TIER-1 description
+  fixes (the dominant cause of the bare-`/ultra` LLM-emission bug) are KEPT.
+- ultra-analyzer 0.2.1 reverts its Gate 1 / Gate 2 invocations and preflight
+  detection back to the `ultra` skill name.
+
+### Migration
+**No reinstall required.** Run:
+```
+claude plugin update ultra@sashamarchuk-plugins
+claude plugin update ultra-analyzer@sashamarchuk-plugins
+```
+**Then restart your Claude Code session** (`/exit` and relaunch) so the plugin
+registry refreshes from disk.
+
+### Follow-up
+A proper TIER-2 cleanup (rename both directory `skills/ultra/` → `skills/launcher/`
+AND frontmatter `name:` to match) is tracked as future work. Will be done in
+a separate PR with the test harness path updates and CC v2.1.x registration
+semantics nailed down.
+
 ## 1.4.0 — 2026-05-03
 
 ### Fixed

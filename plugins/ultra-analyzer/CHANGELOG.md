@@ -1,5 +1,23 @@
 # /ultra-analyzer changelog
 
+## 0.2.1 — 2026-05-03 (hotfix)
+
+### Reverted
+- Gate 1 (pre-discover) and Gate 2 (pre-synthesize) invocations reverted from
+  `ultra:launcher` back to `ultra` (the working form). Companion `ultra` plugin
+  1.4.1 reverted the failed skill rename — see ultra/CHANGELOG.md for details.
+- Preflight detection in `references/ultra-dep-preflight.md` reverted to probe
+  for the `ultra` skill (was: `ultra:launcher`).
+- Minimum `ultra` floor relaxed back to any version (was: `>= 1.4.0`).
+
+### Migration
+**No reinstall required.** Update both plugins together:
+```
+claude plugin update ultra@sashamarchuk-plugins
+claude plugin update ultra-analyzer@sashamarchuk-plugins
+```
+**Then restart your Claude Code session** so the plugin registry refreshes.
+
 ## 0.2.0 — 2026-05-03
 
 ### Changed

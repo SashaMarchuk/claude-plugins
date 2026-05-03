@@ -29,7 +29,7 @@
     },
     {
       "name": "ultra-analyzer",
-      "description": "(beta) Rigorous pipeline analyzer. Discover → Analyze → Validate → Synthesize, with resume-able state and /ultra:run validation gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF corpora, web scrapes, logs, JSON/CSV. Requires the `ultra` plugin (>= 1.4.0) from this same marketplace.",
+      "description": "(beta) Rigorous pipeline analyzer. Discover → Analyze → Validate → Synthesize, with resume-able state and /ultra:run validation gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF corpora, web scrapes, logs, JSON/CSV. Requires the `ultra` plugin from this same marketplace.",
       "author": {
         "name": "Sasha Marchuk"
       },

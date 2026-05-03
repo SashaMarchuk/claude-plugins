@@ -38,15 +38,15 @@ The tier drives gate rigor. User can change mid-run with `/ultra-analyzer:set-pr
 - If validation passes, advance `current_step = "pre-discover-gate"` and call this skill recursively (or return and let user re-invoke).
 
 ### current_step == "pre-discover-gate"
-**This is GATE 1.** Invoke the `ultra:launcher` skill (provided by the companion `ultra` plugin) to validate config + seeds + connector.
+**This is GATE 1.** Invoke /ultra to validate config + seeds + connector.
 
-**Preflight: verify the `ultra` plugin is installed.** Before invoking, confirm the `ultra:launcher` skill is available. Follow the detection + halt-message rules in `${CLAUDE_PLUGIN_ROOT}/references/ultra-dep-preflight.md` — that file is the single source of truth for the halt text; read it and print it verbatim to the user if the `ultra:launcher` skill is not available.
+**Preflight: verify /ultra is installed.** Before invoking, confirm the `ultra` skill is available. Follow the detection + halt-message rules in `${CLAUDE_PLUGIN_ROOT}/references/ultra-dep-preflight.md` — that file is the single source of truth for the halt text; read it and print it verbatim to the user if the `ultra` skill is not available.
 
 Gate 1 cannot be bypassed. Failing the preflight sets `status = blocked` and does NOT advance state.
 
-Note: on Claude Code v2.1.110+ the dependency auto-installs via the plugin's `dependencies` field, so most users never see this halt. It exists as a belt-and-suspenders safety net for older Claude Code versions, `--plugin-dir` local dev loads, and users who manually uninstalled the `ultra` plugin.
+Note: on Claude Code v2.1.110+ the dependency auto-installs via the plugin's `dependencies` field, so most users never see this halt. It exists as a belt-and-suspenders safety net for older Claude Code versions, `--plugin-dir` local dev loads, and users who manually uninstalled `ultra`.
 
-Use the Skill tool to invoke `ultra:launcher` with the tier read from `state.profile.ultra_gate_tier`:
+Use the Skill tool to invoke `ultra` with the tier read from `state.profile.ultra_gate_tier`:
 ```
 args: $ULTRA_TIER --task=analyzer-gate1-<run-name> Review analyzer run bootstrap for soundness. Read: <RUN_PATH>/config.yaml, <RUN_PATH>/seeds.md, <RUN_PATH>/connector.md. Criteria: (1) seeds have sufficient P1/P2/P3 count — not template placeholders; (2) connector.md implements all 6 contract operations with concrete, runnable instructions; (3) connector auth / env-vars are declared (not hardcoded); (4) budget tiers realistic for corpus scale; (5) forbidden_fields / forbidden_patterns are plausible for the source. Produce verdict PASS or FAIL with specific remediation. Write report to <RUN_PATH>/validation/gate1-<timestamp>.md.
 ```
@@ -82,7 +82,7 @@ When complete: verify `counters.findings_passed / counters.topics_total >= 0.5` 
 If healthy, checkpoint, advance `current_step = "pre-synthesize-gate"`.
 
 ### current_step == "pre-synthesize-gate"
-**This is GATE 2.** Invoke the `ultra:launcher` skill via the Skill tool for findings review before synthesis. Tier from `state.profile.ultra_gate_tier`.
+**This is GATE 2.** Invoke /ultra for findings review before synthesis. Tier from `state.profile.ultra_gate_tier`.
 
 ```
 args: $ULTRA_TIER --task=analyzer-gate2-<run-name> Review findings corpus before synthesis. Seeds: <RUN_PATH>/seeds.md. Findings: <RUN_PATH>/findings/. Validator verdicts: <RUN_PATH>/validation/findings/. Criteria: (1) coverage vs seeds — did topics drift?; (2) denominator discipline — no bare "% of users" claims without subset qualifier; (3) divergent redundancy pairs flagged not averaged; (4) any PASS finding that should be FAIL. Produce verdict PASS or revise-list. Write to <RUN_PATH>/validation/gate2-<timestamp>.md.

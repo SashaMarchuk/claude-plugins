@@ -59,7 +59,7 @@ Always include these sections (truncate as needed for focused asks):
 
 **Execution:**
 - `/ultra-analyzer:run [name]` — advance state machine (idempotent)
-- `/ultra-analyzer:resume [name]` — show progress + resume
+- `/ultra-analyzer:resume-run [name]` — show progress + resume
 - `/ultra-analyzer:next` — one-step router (reads state, says what to do)
 
 **Monitoring:**

@@ -68,7 +68,7 @@ Read:
 ## How to resume
 1. (optional) Read this PAUSE.md to refresh context.
 2. Run: /ultra-analyzer:progress <run-name>  — reconcile with current state.
-3. Run: /ultra-analyzer:resume <run-name>  — continues the pipeline.
+3. Run: /ultra-analyzer:resume-run <run-name>  — continues the pipeline.
 
 ## Known hazards on resume
 - <any in-progress topics with orphan risk>
@@ -83,7 +83,7 @@ Read:
   Snapshot: <checkpoint path>
   Handoff doc: <run>/PAUSE-<timestamp>.md
   
-To resume: /ultra-analyzer:resume <run-name>
+To resume: /ultra-analyzer:resume-run <run-name>
 ```
 
 # Hard rules

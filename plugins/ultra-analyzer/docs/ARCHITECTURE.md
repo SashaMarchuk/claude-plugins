@@ -7,7 +7,7 @@ init → [GATE 1: /ultra] → discover → analyze (parallel) → validate (per 
      → [GATE 2: /ultra] → synthesize → DONE
 ```
 
-Each arrow represents a state transition recorded in `state.json`. A kill at any point leaves the run resumable via `/ultra-analyzer:resume`.
+Each arrow represents a state transition recorded in `state.json`. A kill at any point leaves the run resumable via `/ultra-analyzer:resume-run`.
 
 ## state.json contract
 

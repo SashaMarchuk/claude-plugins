@@ -35,7 +35,7 @@ For each candidate lockdir (`<run>/topics/.claim.lock.d/` and `<run>/state.json.
    - Age > 10 min regardless → SEVERITY=CRITICAL, REPAIR=`rmdir <lockdir>`.
    - Age < 30s → likely a live worker mid-write; leave alone.
 
-This logic mirrors `/ultra-analyzer:resume`'s Step 1b auto-heal so a single
+This logic mirrors `/ultra-analyzer:resume-run`'s Step 1b auto-heal so a single
 implementation rules both surfaces. Resume runs the heal automatically,
 health surfaces it as a check + reports it.
 

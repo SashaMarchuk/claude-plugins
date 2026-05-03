@@ -1,10 +1,9 @@
-# ultra-analyzer: ultra plugin dependency preflight
+# ultra-analyzer: /ultra plugin dependency preflight
 
 ## Purpose
-`ultra-analyzer` hard-depends on the companion `ultra` plugin. It invokes the
-`ultra:launcher` skill (registered by the `ultra` plugin) at two validation gates
-inside `skills/run/SKILL.md` (Gate 1 pre-discover, Gate 2 pre-synthesize). Without
-the `ultra` plugin installed, runs cannot complete.
+`ultra-analyzer` hard-depends on the companion `ultra` plugin. It invokes `Skill: ultra`
+at two validation gates inside `skills/run/SKILL.md` (Gate 1 pre-discover, Gate 2
+pre-synthesize). Without `ultra` installed, runs cannot complete.
 
 ## Primary mechanism: plugin dependency auto-install
 Starting with Claude Code v2.1.110, `plugins/ultra-analyzer/.claude-plugin/plugin.json`
@@ -23,20 +22,18 @@ BEFORE the user invests time editing `config.yaml` and `seeds.md`.
 
 ## Preflight detection
 
-Check availability of the `ultra:launcher` skill using any of these signals
-(whichever the caller has access to):
+Check availability of the `ultra` skill using any of these signals (whichever the
+caller has access to):
 
-1. **From the skill tool harness:** Is the skill named `ultra:launcher` in the
-   current session's listed skills? If yes, proceed.
+1. **From the skill tool harness:** Is the skill named `ultra` in the current
+   session's listed skills? If yes, proceed.
 2. **From the filesystem (hook or Bash context):**
-   - `test -d "${CLAUDE_PLUGIN_ROOT}/../ultra/skills/ultra"` — NB: this relies on
-     the plugin cache layout; prefer (1). Note: the directory is still named
-     `ultra/` even though the registered skill name is `launcher`; the on-disk
-     layout did not change in ultra 1.4.0.
-3. **From a probe invocation:** attempt to invoke `Skill: ultra:launcher ...`.
-   If it returns "skill not found" or equivalent, treat as unavailable.
+   - `test -d "${CLAUDE_PLUGIN_ROOT}/../ultra/skills/run"` — NB: this relies on
+     the plugin cache layout; prefer (1).
+3. **From a probe invocation:** attempt `Skill: ultra ...`. If it returns
+   "skill not found" or equivalent, treat as unavailable.
 
-If the `ultra:launcher` skill appears available → continue.
+If `ultra` appears available → continue.
 If it does NOT appear available → HALT and print the message below verbatim.
 Do NOT advance any state machine. Do NOT begin long-running setup work.
 

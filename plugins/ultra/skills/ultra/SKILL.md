@@ -1,5 +1,5 @@
 ---
-name: launcher
+name: ultra
 description: |
   Backing skill for the /ultra:run and /ultra:resume slash commands — multi-agent
   swarm with adversarial validation, structured debates, devil's advocate, and

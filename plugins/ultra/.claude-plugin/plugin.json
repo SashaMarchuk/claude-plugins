@@ -1,6 +1,6 @@
 {
   "name": "ultra",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Provides /ultra:run (and /ultra:resume) — multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Always invoked as /ultra:run (never bare /ultra). Supports tiers (--small/--medium/--large/--xl), multi-terminal coordination, and wrapping other skills.",
   "author": {
     "name": "Sasha Marchuk",

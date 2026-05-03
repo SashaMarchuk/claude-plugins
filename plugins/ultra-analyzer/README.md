@@ -30,7 +30,7 @@ with `/ultra` swarm validation gates at **two** critical boundaries (before disc
 2. **Every numeric claim must have an evidence anchor.** `[DATA:...]`, `[DOC:...]`, `[FILE:...]`, or `[HYPOTHESIS: no evidence]` — unanchored claims fail validation.
 3. **Validator runs a different model than worker.** Prevents hallucination capture.
 4. **Workers are crash-simple.** One unit per subprocess, no conversation history, state in files.
-5. **Resume-able.** `state.json` is single source of truth. Kill at any point, run `/ultra-analyzer:resume`.
+5. **Resume-able.** `state.json` is single source of truth. Kill at any point, run `/ultra-analyzer:resume-run`.
 6. **/ultra only at gates.** Swarm validates config before discover and findings before synthesis. Inside atomic steps: no swarm (overkill, cost explosion).
 
 ## Install & run
@@ -54,7 +54,7 @@ claude --plugin-dir ./ultra-analyzer
 # Edit <run>/config.yaml and <run>/seeds.md (hand-authored — required), then:
 /ultra-analyzer:run           # advances state; pauses at /ultra gates
 /ultra-analyzer:progress      # inspect state
-/ultra-analyzer:resume        # continue after interruption
+/ultra-analyzer:resume-run    # continue after interruption
 ```
 
 ## Directory layout
@@ -63,7 +63,7 @@ claude --plugin-dir ./ultra-analyzer
 ultra-analyzer/
 ├── .claude-plugin/plugin.json
 ├── skills/
-│   ├── init, run, progress, resume,               ← control surface
+│   ├── init, run, progress, resume-run,           ← control surface
 │   │   next, pause, help
 │   ├── scan, explore, connector-init,             ← setup / discovery
 │   │   set-profile, list-runs, health

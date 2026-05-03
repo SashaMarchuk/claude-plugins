@@ -1,11 +1,11 @@
 ---
-name: ultra
+name: launcher
 description: |
-  Multi-agent swarm with adversarial validation, structured debates, devil's advocate,
-  and anti-AI-slop checks. Use when maximum rigor is needed: research, implementation,
-  validation, creation, or any complex task requiring independent verification.
-  Supports tiers (--small/--medium/--large/--xl), multi-terminal coordination,
-  and wrapping other skills.
+  Backing skill for the /ultra:run and /ultra:resume slash commands — multi-agent
+  swarm with adversarial validation, structured debates, devil's advocate, and
+  anti-AI-slop checks. Users invoke this via /ultra:run (or /ultra:resume); never
+  via a bare /ultra. Supports tiers (--small/--medium/--large/--xl), multi-terminal
+  coordination, and wrapping other skills.
 disable-model-invocation: false
 user-invocable: false
 allowed-tools:

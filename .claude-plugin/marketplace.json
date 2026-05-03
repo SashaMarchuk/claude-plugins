@@ -19,7 +19,7 @@
     },
     {
       "name": "ultra",
-      "description": "Multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Use when maximum rigor is needed: research, implementation, validation, creation, or any complex task requiring independent verification. Supports tiers (--small/--medium/--large/--xl), multi-terminal coordination, and wrapping other skills.",
+      "description": "Provides /ultra:run (and /ultra:resume) — multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Always invoked as /ultra:run (never bare /ultra). Supports tiers (--small/--medium/--large/--xl), multi-terminal coordination, and wrapping other skills.",
       "author": {
         "name": "Sasha Marchuk"
       },
@@ -29,7 +29,7 @@
     },
     {
       "name": "ultra-analyzer",
-      "description": "(beta) Rigorous pipeline analyzer. Discover → Analyze → Validate → Synthesize, with resume-able state and /ultra validation gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF corpora, web scrapes, logs, JSON/CSV. Requires the `ultra` plugin from this same marketplace.",
+      "description": "(beta) Rigorous pipeline analyzer. Discover → Analyze → Validate → Synthesize, with resume-able state and /ultra:run validation gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF corpora, web scrapes, logs, JSON/CSV. Requires the `ultra` plugin (>= 1.4.0) from this same marketplace.",
       "author": {
         "name": "Sasha Marchuk"
       },

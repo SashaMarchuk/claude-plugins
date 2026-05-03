@@ -1,7 +1,7 @@
 {
   "name": "ultra",
-  "version": "1.3.0",
-  "description": "Multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Use when maximum rigor is needed: research, implementation, validation, creation, or any complex task requiring independent verification. Supports tiers (--small/--medium/--large/--xl), multi-terminal coordination, and wrapping other skills.",
+  "version": "1.4.0",
+  "description": "Provides /ultra:run (and /ultra:resume) — multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Always invoked as /ultra:run (never bare /ultra). Supports tiers (--small/--medium/--large/--xl), multi-terminal coordination, and wrapping other skills.",
   "author": {
     "name": "Sasha Marchuk",
     "url": "https://github.com/SashaMarchuk"

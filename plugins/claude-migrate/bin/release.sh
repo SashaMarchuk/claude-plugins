@@ -21,7 +21,11 @@
 # set (Edge C-3 / AC-REDACT) before it is written to either the retry-tag
 # filename or the JSONL run.log, so a token-bearing reason never lands on disk.
 
-set -uo pipefail
+# Strict mode: a failed `mv` MUST abort before any `state.sh inc/dec` runs, so a
+# half-completed move can never desync the per-queue SUM invariant (§3.3). This is
+# a linear move-then-count flow with no retry loop, so `-e` is correct here (unlike
+# launch-worker.sh, whose retry loop reads `$rc` and so uses `-uo` only).
+set -euo pipefail
 
 item="${1:?item-path required}"
 outcome="${2:?outcome required (done|failed|requeue)}"
@@ -97,9 +101,16 @@ case "$outcome" in
     ;;
   requeue)
     mkdir -p "$qroot/pending"
-    # Retry tag encodes attempt epoch + redacted reason; workers count
-    # `__retry-` substrings to cap retries.
-    tagged="${base%.$ext}__retry-$(date +%s)-${reason}.$ext"
+    # Retry tag encodes attempt epoch + a SLUGIFIED reason; workers count
+    # `__retry-` substrings to cap retries. The redacted reason can contain
+    # spaces and `[REDACTED:*]` brackets/colons, which would break the
+    # `^[A-Za-z0-9_.-]+$` basename_safe check in launch-worker.sh and desync the
+    # UNNN <-> seed/UNNN.json mapping apply-unit relies on. So collapse it to the
+    # basename-safe charset before tagging; the FULL redacted reason is kept only
+    # in the JSONL run.log field below (Edge C-3 / AC-REDACT, FIX-06).
+    reason_slug=$(printf '%s' "$reason" | LC_ALL=C tr -c 'A-Za-z0-9._-' '-' | sed -E 's/-+/-/g; s/^-|-$//g')
+    reason_slug="${reason_slug:0:40}"
+    tagged="${base%.$ext}__retry-$(date +%s)-${reason_slug}.$ext"
     mv "$tmp" "$qroot/pending/$tagged"
     # Do not increment done/failed - the item remains unresolved.
     # in-progress -> pending: keep the per-queue sum invariant intact.

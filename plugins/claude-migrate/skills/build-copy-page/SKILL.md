@@ -44,15 +44,28 @@ For each `UNNN`:
 Append, AFTER the chat cards, one card per kept project carrying its STEADY instructions: the trailing "swap to steady-state instructions" card (§5.6 / §7.1) so copy-page users finish by swapping each project to its steady Custom Instructions. Use `kind = "project-steady"`, `name = <project display name>`, `body` = contents of `project/<PNN__slug>/instructions-steady.md`. Also include, for each kept project, a `kind = "project-migration"` card carrying `instructions-migration.md` so the user pastes migration instructions BEFORE seeding.
 
 ## Step 3: Write per-card payloads
-For EVERY card write `<RUN_PATH>/out/payloads/<id>.json` (id is `UNNN` for chats; `PNN__slug.steady` / `PNN__slug.migration` for project cards). Each payload is the exact JSON object `{ "id": "...", "group": "...", "kind": "...", "num": N, "name": "...", "body": "..." }`. The `body` field is the byte-exact brief/instruction text. `verify-copy-page.cjs` asserts the page's copied text === this payload `body` byte-for-byte, so DO NOT transform, trim, or re-encode `body` here. Write atomically:
+For EVERY card write `<RUN_PATH>/out/payloads/<id>.json` (id is `UNNN` for chats; `PNN__slug.steady` / `PNN__slug.migration` for project cards). Each payload is the exact JSON object `{ "id": "...", "group": "...", "kind": "...", "num": N, "name": "...", "body": "..." }`. The `body` field is the byte-exact brief/instruction text. `verify-copy-page.cjs` asserts the page's copied text === this payload `body` byte-for-byte, so DO NOT transform, trim, or re-encode `body` here.
+
+The `--rawfile body` source depends on the card `kind` (NEVER hardcode `briefs/$id.brief.md` for project cards):
+- `kind == "chat"` -> `"$RUN_PATH/briefs/$id.brief.md"`.
+- `kind == "project-migration"` -> `"$RUN_PATH/project/<PNN__slug>/instructions-migration.md"`.
+- `kind == "project-steady"` -> `"$RUN_PATH/project/<PNN__slug>/instructions-steady.md"`.
+
+Resolve `<PNN__slug>` for project cards by stripping the trailing `.steady` / `.migration` suffix off `$id` (e.g. `P01__alpha.steady` -> `P01__alpha`). Write atomically:
 ```bash
 mkdir -p "$RUN_PATH/out/payloads"
+case "$kind" in
+  chat)              body_path="$RUN_PATH/briefs/$id.brief.md" ;;
+  project-migration) body_path="$RUN_PATH/project/${id%.migration}/instructions-migration.md" ;;
+  project-steady)    body_path="$RUN_PATH/project/${id%.steady}/instructions-steady.md" ;;
+  *) echo "unknown card kind: $kind" >&2; exit 1 ;;
+esac
 tmp=$(mktemp "$RUN_PATH/out/payloads/.p.XXXXXX")
 jq -n --arg id "$id" --arg group "$group" --arg kind "$kind" --argjson num "$num" \
-  --arg name "$name" --rawfile body "$RUN_PATH/briefs/$id.brief.md" \
+  --arg name "$name" --rawfile body "$body_path" \
   '{id:$id,group:$group,kind:$kind,num:$num,name:$name,body:$body}' > "$tmp" && mv "$tmp" "$RUN_PATH/out/payloads/$id.json"
 ```
-(`--rawfile body <path>` reads the brief verbatim into the JSON string so escaping is jq's job, not ours.)
+(`--rawfile body <path>` reads the brief/instruction file verbatim into the JSON string so escaping is jq's job, not ours. Project cards thus get their migration/steady instructions as `body`, and `out/payloads/<PNN__slug>.{steady,migration}.json` is written for every kept project.)
 
 ## Step 4: Decide inline vs lazy-load
 Compute card count `N` and total payload bytes `B`:
@@ -80,7 +93,7 @@ Write atomically (mktemp in `out/`, then mv).
 Produce `<RUN_PATH>/out/README.md` with:
 - A one-line purpose and the explicit instruction to serve the page over HTTP, NOT `file://` (clipboard fails under `file://`): "Run `python3 -m http.server` in this `out/` directory, then open the printed `http://localhost:8000/` URL."
 - The seed -> await-first-turn (bounded) -> rename law and the create-then-strip lifecycle, VERBATIM from `${CLAUDE_PLUGIN_ROOT}/references/auto-title-gotcha.md` (do not paraphrase; that file is the single source of truth).
-- A short ordered manual-migration recipe: (1) create each project in the NEW account and paste its migration instructions; (2) for each chat card, open a new chat (in the matching project for GROUPED cards, standalone otherwise), paste the brief, send, wait for the first reply, then rename the chat to the card's name; (3) when all of a project's chats are seeded, paste that project's STEADY instructions to remove the OK-protocol line.
+- A short ordered manual-migration checklist: (1) create each project in the NEW account and paste its migration instructions; (2) for each chat card, open a new chat (in the matching project for GROUPED cards, standalone otherwise), paste the brief, send, wait for the first reply, then rename the chat to the card's name; (3) when all of a project's chats are seeded, paste that project's STEADY instructions to remove the OK-protocol line.
 
 ## Step 7: Write out/.gitignore
 Write `<RUN_PATH>/out/.gitignore` excluding the per-card payloads (they can contain chat content) while keeping the page itself reviewable. At minimum:

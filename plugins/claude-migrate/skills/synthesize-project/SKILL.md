@@ -32,7 +32,7 @@ Enumerate source projects deterministically (sorted-uuid `PNN` order, M1):
 ```bash
 ls -d "$RUN_PATH"/project/P*__*/ 2>/dev/null | sort
 ```
-Each source project dir already contains the parser's artifacts: a `meta.json` holding `{pid_uuid, name, prompt_template, is_starter}` and a `knowledge/` subtree of `<doc>.md` files (full text). Read the bucket display labels from `config.yaml` only if you need to surface a role label in the instructions; never hardcode a domain or group label.
+Each source project dir already contains the parser's artifacts: a `source.json` holding `{pnn, pnn_slug, pid_uuid, name, prompt_template, knowledge_docs:[{filename}]}` and a `knowledge/` subtree of `<doc>.md` files (full text). Read the bucket display labels from `config.yaml` only if you need to surface a role label in the instructions; never hardcode a domain or group label.
 
 ## Step 2: Determine which projects are kept
 A project `PNN__slug` is SYNTHESIZED iff `decisions.project_assignment` contains at least one `UNNN -> PNN__slug` entry. Build the kept set with jq over the assignment map:
@@ -60,25 +60,70 @@ trap 'rmdir "$lockd" 2>/dev/null' EXIT
 This is a per-project lock (`project/<PNN__slug>/.create.lock.d`), NOT one global lock.
 
 ## Step 4: Build instructions-migration.md
-For each kept project, read `meta.json.prompt_template` (the source project's Custom Instructions) and the bucket display label from `config.yaml`. Compose `<RUN_PATH>/project/<PNN__slug>/instructions-migration.md` as the destination Custom Instructions text the user will paste into the NEW project, in this order:
+For each kept project, do NOT hand-compose the file. FILL the shipped template so section order and headers stay byte-for-byte identical to the contract.
 
-1. The source `prompt_template` verbatim (preserve the user's own instructions; never summarize away their intent). If `prompt_template` is empty, write `(no source project instructions)`.
-2. A blank line, then the OK-protocol onboarding block - included ONLY when `decisions.onboarding_ok_protocol == "ok-then-strip"`. Use the canonical wording from the shipped template rather than inventing it:
-   - Read `${CLAUDE_PLUGIN_ROOT}/templates/instructions/project-instructions-migration.md` for the verbatim OK-protocol clause and the create-then-strip note, and the seed -> await-first-turn -> rename law from `${CLAUDE_PLUGIN_ROOT}/references/auto-title-gotcha.md`. Append the OK-protocol clause text exactly.
-   - When `onboarding_ok_protocol == "strip-myself"` or `"none"`, DO NOT include the OK-protocol clause in `instructions-migration.md`; in those modes `instructions-migration.md` equals `instructions-steady.md` (still emit BOTH files so downstream invariants hold).
+Read the two source values from `source.json` (the parser writes no other per-project metadata file):
+```bash
+NAME=$(jq -r '.name' "$RUN_PATH/project/$pnn/source.json")
+PROMPT=$(jq -r '.prompt_template // ""' "$RUN_PATH/project/$pnn/source.json")
+# Substituted value for {{WORKING_INSTRUCTIONS}}: the source rules verbatim, or the
+# template's empty-source wording when the source carried none.
+WORKING="$PROMPT"
+[ -z "$(printf '%s' "$PROMPT" | tr -d '[:space:]')" ] && WORKING="No carried-over project rules."
+```
 
-The OK-protocol clause (domain-neutral, the create-then-strip first-message contract) is the single behavioral difference between the two variants. Never embed a domain, persona, menu, client, or group name - those come only from the source `prompt_template` text the user wrote.
+Pick the template by `onboarding_ok_protocol`:
+- `onboarding_ok_protocol == "ok-then-strip"` -> migration variant carries the OK-protocol section, so fill `${CLAUDE_PLUGIN_ROOT}/templates/instructions/project-instructions-migration.md`.
+- `onboarding_ok_protocol == "strip-myself"` or `"none"` -> the migration variant has NO OK-protocol clause, so it equals the steady variant; fill `${CLAUDE_PLUGIN_ROOT}/templates/instructions/project-instructions-steady.md` for BOTH files (still emit both so downstream invariants hold).
+
+Fill the chosen template into `instructions-migration.md`:
+1. Read the shipped template file verbatim.
+2. Strip the leading copy-first banner line (the `> **This is a shipped template.** ...` paragraph) and the `<!-- ... -->` fill-rules comment block. Keep everything from the first `#` heading onward.
+3. Substitute every `{{PROJECT_NAME}}` with `$NAME` and every `{{WORKING_INSTRUCTIONS}}` with `$WORKING`. Use a literal, no-regex substitution (e.g. an awk pass that replaces the exact tokens) so prompt text containing `&`, `\`, or `/` is preserved unchanged.
+4. The result MUST contain no literal `{{PROJECT_NAME}}` or `{{WORKING_INSTRUCTIONS}}`.
+
+The migration template's section order is OK-protocol onboarding BEFORE `## Working instructions` - preserve it exactly; never reorder. The OK-protocol section (domain-neutral, the create-then-strip first-message contract) is the single behavioral difference between the two variants, and it ships only in the migration template. Never embed a domain, persona, menu, client, or group name - those come only from the source `prompt_template` text the user wrote (carried in `$WORKING`).
 
 ## Step 5: Build instructions-steady.md
-Compose `<RUN_PATH>/project/<PNN__slug>/instructions-steady.md` = the source `prompt_template` verbatim WITHOUT the OK-protocol clause (the steady-state Custom Instructions after seeding completes). Read `${CLAUDE_PLUGIN_ROOT}/templates/instructions/project-instructions-steady.md` for the exact steady framing. This is the file `finalize_run` swaps to (browser) or the trailing "swap to steady-state" card points at (copy-page). Both files MUST exist for every kept project - the `projects_created == projects_finalized` invariant and GATE 3 depend on both variants existing.
+Fill `${CLAUDE_PLUGIN_ROOT}/templates/instructions/project-instructions-steady.md` into `<RUN_PATH>/project/<PNN__slug>/instructions-steady.md` for EVERY kept project, regardless of `onboarding_ok_protocol`. Use the SAME `$NAME` and `$WORKING` values resolved in Step 4, and the SAME fill procedure: strip the leading copy-first banner line and the `<!-- ... -->` fill-rules comment block, then substitute `{{PROJECT_NAME}}` and `{{WORKING_INSTRUCTIONS}}` literally. The steady template has only `## Working instructions` (no OK-protocol section) - it is the steady-state Custom Instructions after seeding completes. This is the file `finalize_run` swaps to (browser) or the trailing "swap to steady-state" card points at (copy-page). Both files MUST exist for every kept project - the `projects_created == projects_finalized` invariant and GATE 3 depend on both variants existing.
 
-Write atomically (mktemp in the SAME dir, then mv):
+Fill + write atomically (mktemp in the SAME dir, then mv). The `fill_template` helper drops the banner + fill-rules comment and substitutes the two tokens with a LITERAL `index`/`substr` splice (never `sub`/`gsub`), so values containing `&`, `\`, or `/` are inserted byte-for-byte and never interpreted as regex or replacement-field metacharacters. The two values are passed via FILES (read with `getline`), not `-v` - BSD/macOS awk rejects an embedded newline in a `-v` assignment, and a multi-line `prompt_template` is common:
 ```bash
+# Stage the literal values once (multi-line safe). $NAME / $WORKING resolved in Step 4.
+namef=$(mktemp "$RUN_PATH/project/$pnn/.name.XXXXXX");    printf '%s' "$NAME"    > "$namef"
+workf=$(mktemp "$RUN_PATH/project/$pnn/.work.XXXXXX");    printf '%s' "$WORKING" > "$workf"
+
+# fill_template <template-path> <out-path>
+fill_template() {
+  awk -v namef="$namef" -v workf="$workf" '
+    function slurp(f,   s,l) { s=""; while ((getline l < f) > 0) s = (s=="" ? l : s "\n" l); close(f); return s }
+    function splice(line, tok, val,   p) {           # literal replace of every <tok> with <val>
+      while ((p = index(line, tok)) > 0)
+        line = substr(line, 1, p-1) val substr(line, p + length(tok))
+      return line
+    }
+    BEGIN { name = slurp(namef); working = slurp(workf) }
+    /^> \*\*This is a shipped template\.\*\*/ { next }   # drop copy-first banner line
+    /^<!--/ { incomment=1 }                              # enter fill-rules comment block
+    incomment { if (/-->/) incomment=0; next }           # drop every comment line incl. closer
+    {
+      $0 = splice($0, "{{PROJECT_NAME}}", name)
+      $0 = splice($0, "{{WORKING_INSTRUCTIONS}}", working)
+      print
+    }
+  ' "$1" > "$2"
+}
+TPL="${CLAUDE_PLUGIN_ROOT}/templates/instructions"
+# Migration variant: OK-protocol template only when ok-then-strip; else the steady template.
+[ "$ONBOARD" = "ok-then-strip" ] && mig_tpl="$TPL/project-instructions-migration.md" || mig_tpl="$TPL/project-instructions-steady.md"
+
 tmp=$(mktemp "$RUN_PATH/project/$pnn/.instr.XXXXXX")
-printf '%s\n' "$migration_text" > "$tmp" && mv "$tmp" "$RUN_PATH/project/$pnn/instructions-migration.md"
+fill_template "$mig_tpl" "$tmp" && mv "$tmp" "$RUN_PATH/project/$pnn/instructions-migration.md"
 tmp=$(mktemp "$RUN_PATH/project/$pnn/.instr.XXXXXX")
-printf '%s\n' "$steady_text" > "$tmp" && mv "$tmp" "$RUN_PATH/project/$pnn/instructions-steady.md"
+fill_template "$TPL/project-instructions-steady.md" "$tmp" && mv "$tmp" "$RUN_PATH/project/$pnn/instructions-steady.md"
+rm -f "$namef" "$workf"
 ```
+The `index`/`substr` splice is mandatory: `awk`'s `sub`/`gsub` would treat `&` in the replacement as "the whole match" and `\` as an escape, corrupting any `name`/`prompt_template` that contains them. Reading the values via `getline` (not `-v`) keeps multi-line `prompt_template` intact on macOS awk, and the per-line splice inserts the full multi-line block in place of the `{{WORKING_INSTRUCTIONS}}` token.
 
 ## Step 6: Copy knowledge docs
 The parser already wrote source knowledge docs under `<RUN_PATH>/project/<PNN__slug>/knowledge/<doc>.md` with full text. Confirm they are present and well-formed (non-empty, `.md`). If `distill-brief` produced any `doc_only` overflow chats assigned to THIS project, those raw-chat knowledge docs were written by `distill-brief` into the same `knowledge/` subtree - leave them in place. Do NOT re-fetch or re-derive doc content here; this step only verifies the `knowledge/` subtree exists and lists what will travel with the project. If `knowledge/` is missing entirely, create an empty dir so the copy-page / browser sink finds a stable path:
@@ -101,8 +146,8 @@ Print a concise summary to the user: kept projects synthesized (with `PNN__slug`
 # Hard rules
 - Synthesize a project ONLY if it has at least one kept chat in `decisions.project_assignment`; zero-kept projects are logged and skipped, never created (C1/H4).
 - ALWAYS emit BOTH `instructions-migration.md` and `instructions-steady.md` for every kept project - even when `onboarding_ok_protocol` is `strip-myself`/`none` (the two files are then identical). GATE 3 and the `projects_created == projects_finalized` invariant require both to exist.
-- The OK-protocol clause is the ONLY difference between the two variants, and it is included in migration only when `onboarding_ok_protocol == ok-then-strip`. Take the clause text verbatim from the shipped instruction templates - never paraphrase the create-then-strip contract.
-- Preserve the user's source `prompt_template` verbatim; never summarize, translate, or inject a domain/persona/group/menu/client term. Group/bucket labels come from `config.yaml`, not hardcoded.
+- The OK-protocol section is the ONLY difference between the two variants, and it ships only in the migration template (used for the migration variant only when `onboarding_ok_protocol == ok-then-strip`). FILL the shipped templates - never hand-compose or paraphrase the create-then-strip contract. After filling, strip the leading copy-first banner line and the `<!-- ... -->` fill-rules comment, preserve section order (OK-protocol BEFORE `## Working instructions` in the migration variant), and leave no literal `{{PROJECT_NAME}}`/`{{WORKING_INSTRUCTIONS}}`.
+- Read `name` and `prompt_template` from `source.json` (the only per-project metadata file the parser writes). Substitute `{{PROJECT_NAME}}` <- `source.json.name` and `{{WORKING_INSTRUCTIONS}}` <- `source.json.prompt_template` verbatim, or the template's `No carried-over project rules.` when `prompt_template` is empty; never summarize, translate, or inject a domain/persona/group/menu/client term. Group/bucket labels come from `config.yaml`, not hardcoded.
 - Never invent knowledge-doc content; copy/verify only what the parser already wrote under `project/<PNN__slug>/knowledge/`.
 - Use a per-project mkdir lock with a 30s cap and trap-release; write instruction files atomically via mktemp-in-same-dir then mv. Never use `$TMPDIR`.
 - Never mutate `state.json` outside `bin/state.sh`. Preserve the `projects_total == projects_pending + projects_created` invariant.

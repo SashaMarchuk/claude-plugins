@@ -359,9 +359,12 @@ function buildUnit(idx, chat) {
     }
   }
 
-  // est_tokens (H2): sum over every message body + folded attachment text.
-  const fullTextForTokens =
-    messages.map((x) => x.text).join('\n') + '\n' + attachmentsText.join('\n');
+  // est_tokens (H2): sum over every message body ONLY. extractMessageText already
+  // folds attachments[].extracted_content INTO messages[].text, so adding the
+  // separately-collected attachmentsText here would double-count document
+  // attachments and inflate the G-COST money gate (M3). attachmentsText is kept
+  // for has_attachments / scaffold use only.
+  const fullTextForTokens = messages.map((x) => x.text).join('\n');
   const rawTokenEst = estTokens(fullTextForTokens);
 
   return {
@@ -386,15 +389,21 @@ function buildUnit(idx, chat) {
  * ------------------------------------------------------------------ */
 
 function renderUnitMarkdown(unit) {
+  // Unit markdown is FAITHFUL CONTENT (consumed by distill-brief and ultimately
+  // copied by the user). RAW </script> MUST be preserved verbatim here - the
+  // </script> escape (escapeScriptClose) belongs ONLY at the HTML-embed layer
+  // (build-copy-page / the test embed step), where it is reversible via
+  // JSON.parse(textContent). Escaping at this content layer would corrupt the
+  // copied text (FIX-02 / F1).
   const lines = [];
   const title = unit.name.trim() || '(no name)';
-  lines.push('# ' + unnnTitle(unit) + ': ' + escapeScriptClose(title));
+  lines.push('# ' + unnnTitle(unit) + ': ' + title);
   lines.push('uuid: ' + unit.uuid);
   lines.push('created: ' + (unit.created_at || '(unknown)'));
   lines.push('messages: ' + unit.msg_count);
   lines.push('est_tokens: ' + unit.raw_token_est);
   if (unit.image_refs.length) {
-    lines.push('images: ' + unit.image_refs.map(escapeScriptClose).join(', '));
+    lines.push('images: ' + unit.image_refs.join(', '));
   }
   lines.push('');
   lines.push('---');
@@ -402,7 +411,7 @@ function renderUnitMarkdown(unit) {
   for (const m of unit.messages) {
     lines.push('## [' + m.sender + ']');
     lines.push('');
-    lines.push(escapeScriptClose(m.text));
+    lines.push(m.text);
     lines.push('');
   }
   return lines.join('\n').replace(/\n+$/g, '\n');
@@ -701,8 +710,16 @@ function main() {
       })
     );
     // Stage knowledge docs as separate files (full text recoverable per §1.3).
+    // When two filenames slugify to the same basename, disambiguate by appending
+    // -2, -3, ... so the later doc never silently overwrites the earlier one (M4).
+    // Iteration order is the deterministic export array order -> the suffix is
+    // reproducible across runs.
+    const docSlugSeen = new Map();
     for (const d of p.knowledge_docs) {
-      const docSlug = projectSlug(d.filename, d.filename) || 'doc';
+      const baseSlug = projectSlug(d.filename, d.filename) || 'doc';
+      const seen = docSlugSeen.get(baseSlug) || 0;
+      docSlugSeen.set(baseSlug, seen + 1);
+      const docSlug = seen === 0 ? baseSlug : baseSlug + '-' + (seen + 1);
       writeAtomic(path.join(pdir, 'knowledge', docSlug + '.md'), d.content + '\n');
     }
     projectIndex.push({ pnn: p.pnn, pnn_slug: p.pnn_slug, name: p.name, docs: p.knowledge_docs.length });

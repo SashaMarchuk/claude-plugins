@@ -7,8 +7,9 @@
 #
 # It exercises the SPEC §10 acceptance IDs that are reachable without a model:
 #   AC-PARSE     parse-export reproduces every fixture edge; starter project
-#                dropped; empty chat flagged; </script> escaped/safe; est_tokens
-#                a positive integer; UNNN sorted-uuid + stable across two runs.
+#                dropped; empty chat flagged; raw </script> preserved faithfully
+#                in unit content (F1); est_tokens a positive integer; UNNN
+#                sorted-uuid + stable across two runs.
 #   AC-DEDUP     dedup representative = lowest idx (no false clusters here).
 #   AC-PII       NONE of the users.json PII strings leak into ANY file the
 #                parser writes under the run dir (grep -r).
@@ -178,8 +179,8 @@ else
 fi
 
 # The </script> content unit (uuid 3333 -> U002): the parser must have folded the
-# content[] text block (thinking/tool_* SKIPPED) AND escaped the closing-script
-# sequence into the safe "<\/script" form in the rendered unit markdown.
+# content[] text block (thinking/tool_* SKIPPED) AND preserved the raw closing-
+# script sequence verbatim in the rendered unit markdown (F1 - no content escape).
 U002_MD=$(find "$RUN/units/pending" -name 'U002__*.md' | head -1)
 [[ -n "$U002_MD" ]] \
   && report_pass "AC-PARSE: U002 unit markdown written" \
@@ -209,16 +210,19 @@ if [[ -n "$U002_MD" ]]; then
   else
     report_fail "AC-PARSE: image ref noted" "missing image-existed note"
   fi
-  # </script> ESCAPED: the safe form "<\/script" present; a raw "</script" absent.
-  if grep -qF '<\/script' "$U002_MD"; then
-    report_pass "AC-PARSE: </script> escaped to safe <\\/script form (H-4)"
+  # </script> PRESERVED RAW (F1): the unit markdown is faithful CONTENT consumed
+  # downstream by distill-brief, so the parser must NOT escape it. The literal
+  # "</script>" must be present, and the backslash-escaped "<\/script" form must
+  # be ABSENT (escaping is the HTML-embed layer's job, applied at embed time).
+  if grep -qF '</script>' "$U002_MD"; then
+    report_pass "AC-PARSE: raw </script> preserved faithfully in unit md (F1)"
   else
-    report_fail "AC-PARSE: </script> escaped to safe form" "no <\\/script in unit md"
+    report_fail "AC-PARSE: raw </script> preserved in unit md" "no literal </script> in unit md"
   fi
-  if grep -qiE '</script' "$U002_MD"; then
-    report_fail "AC-PARSE: no raw </script in unit md" "raw closing-script tag present"
+  if grep -qF '<\/script' "$U002_MD"; then
+    report_fail "AC-PARSE: no backslash-escaped <\\/script in unit md" "parser escaped content (F1 regression)"
   else
-    report_pass "AC-PARSE: no raw </script in unit md"
+    report_pass "AC-PARSE: no backslash-escaped <\\/script in unit md (F1)"
   fi
 fi
 
@@ -275,8 +279,9 @@ assert_eq "AC-PII: manifest stores ONLY the email sha256 (no clear value)" "$EXP
 #   - kept units = every unit NOT flagged looks_empty (the empty chat is dropped
 #     from the card set, mirroring the DROP rule for empty chats).
 #   - for each kept unit write out/payloads/<id>.json = {id,group,kind,num,name,body}.
-#   - body  = the unit's normalized text (the parser's rendered, </script>-safe
-#             unit markdown) -> stands in for the resume brief, deterministically.
+#   - body  = the unit's normalized text (the parser's rendered RAW unit markdown,
+#             which may contain </script>) -> stands in for the resume brief,
+#             deterministically; escaped at embed time, not by the parser (F1).
 #   - name  = the chat title from the manifest.
 #   - group = STANDALONE (every kept chat unassigned to a project -> STANDALONE).
 #   - DATA_JSON = JSON array of the card objects, with /<\/(script)/gi -> "<\/$1"
@@ -322,7 +327,8 @@ for (const u of manifest.units) {
     kind: "chat",
     num: num,
     name: u.name,
-    body: unitBody(u.unnn) // verbatim, already </script>-safe from the parser
+    body: unitBody(u.unnn) // verbatim RAW content (may contain </script>); the
+                           // embed step below escapes it at embed time (H-4)
   };
   cards.push(card);
 }

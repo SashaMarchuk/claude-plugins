@@ -19,7 +19,11 @@
 #     seed/pending/ and re-add to seed_pending so the seed invariant
 #     `seeded_units == seed_{pending+in_progress+done+failed}` is NOT broken.
 
-set -uo pipefail
+# Strict mode: a failed `mv` (done -> temp -> pending) MUST abort before any
+# `state.sh inc/dec` runs, so a half-completed move can never desync the
+# distill/seed SUM invariants (§3.3). Linear move-then-count, no retry loop, so
+# `-e` is correct here (unlike launch-worker.sh's retry loop, which uses `-uo`).
+set -euo pipefail
 
 run_path="${1:?run-path required}"
 unit_base="${2:?unit basename required (e.g. U012__topic-1.md)}"

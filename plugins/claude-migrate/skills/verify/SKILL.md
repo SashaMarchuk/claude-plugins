@@ -56,7 +56,7 @@ For each kept brief (sorted `UNNN`), run the audit on the chosen model, passing 
 claude --plugin-dir ${CLAUDE_PLUGIN_ROOT} --model "$VALIDATOR_MODEL" --print \
   "/claude-migrate:distill-brief --audit <<U_BEGIN>>${RUN_PATH}/briefs/${id}.brief.md<<U_END>> <<S_BEGIN>>${RUN_PATH}/units/done/${id}__*.md<<S_END>>"
 ```
-Wrap each subprocess in `timeout`/`gtimeout` (`--kill-after=30s`) and FATAL-exit if neither binary exists (a hung audit must not block forever). Use `set -uo pipefail` (NOT `-e`) so a non-zero audit exit can be read and routed. Each audit writes a PASS/FAIL verdict to `<RUN_PATH>/validation/briefs/<id>.json`.
+Wrap each subprocess in `timeout`/`gtimeout` (`--kill-after=30s`) and FATAL-exit if neither binary exists (a hung audit must not block forever). Use `set -uo pipefail` (NOT `-e`) so a non-zero audit exit can be read and routed. The `--audit` mode of `distill-brief` is READ-ONLY (Step A there): it reads only the two BEGIN/END-wrapped paths and writes a `{verdict:PASS|FAIL, reasons}` JSON to `<RUN_PATH>/validation/briefs/<id>.json`; it NEVER touches any `briefs/*` file or `state.json`. Read that verdict file (and the audit exit code) and route per below; `verify` owns all counter and requeue side effects.
 
 Route verdicts:
 - PASS -> `bash ${CLAUDE_PLUGIN_ROOT}/bin/state.sh inc "$RUN_PATH" .counters.briefs_verified_ok`.

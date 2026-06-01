@@ -1,6 +1,6 @@
 ---
 name: resume
-description: (beta) Crash-safe resume for an interrupted migration. Dumps current progress, clears orphan locks, requeues orphaned in-progress units, re-renames any chat that was seeded but not renamed, re-polls a seeded chat for its first turn, runs a destination dedupe probe on any ambiguous "opened" chat before re-seeding, re-opens a blocked user gate, then hands back to the controller. Use when the user types /claude-migrate:resume, or says "resume my migration", "continue where I left off", "I dropped the export, pick it up".
+description: (beta) Crash-safe resume for an interrupted migration. Dumps current progress, clears orphan locks, requeues orphaned in-progress units, re-renames any chat that already had its first turn (awaited_ok) but was not renamed, re-polls a seeded chat for its first turn, runs a destination dedupe probe on any ambiguous "opened" chat before re-seeding, re-opens a blocked user gate, then hands back to the controller. Use when the user types /claude-migrate:resume, or says "resume my migration", "continue where I left off", "I dropped the export, pick it up".
 allowed-tools: Bash, Read, Write, Skill, AskUserQuestion
 ---
 

@@ -27,7 +27,7 @@ Dispatch by `REASON`:
 - `filter-gate` → Step 2 (the filter-gate round + G-COST).
 - `auto-reoffer` → Step 3 (G-AUTO-REOFFER, then login/browser).
 - `login` or `browser-lost` → Step 4 (G-LOGIN/G-BROWSER only).
-- `cost` → Step 2c (G-COST only, then re-evaluate).
+- `cost` → Step 2f (G-COST only, then re-evaluate).
 - anything else → print "This block is not a user gate - see `/claude-migrate:health <run-name>`." and exit.
 
 ## Step 2: The filter-gate round  (blocked_reason == "filter-gate")

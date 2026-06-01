@@ -1,8 +1,8 @@
 # claude-plugins
 
-Opinionated Claude Code plugins by [Sasha Marchuk](https://github.com/SashaMarchuk) — tooling for ticket management, automation, and everyday engineering workflows.
+Opinionated Claude Code plugins by [Sasha Marchuk](https://github.com/SashaMarchuk) — tooling for ticket management, automation, multi-agent rigor, data analysis, and account migration. Free, MIT-licensed, and open to contributions.
 
-## Quick install — get all four plugins
+## Quick install — get all five plugins
 
 In Claude Code:
 
@@ -12,12 +12,13 @@ In Claude Code:
 /plugin install gevent@sashamarchuk-plugins
 /plugin install ultra@sashamarchuk-plugins
 /plugin install ultra-analyzer@sashamarchuk-plugins
+/plugin install claude-migrate@sashamarchuk-plugins
 /reload-plugins
 ```
 
 > **Marketplace name vs. GitHub source**: `SashaMarchuk/claude-plugins` (GitHub `owner/repo`) is what you pass to `marketplace add` to fetch the manifest. `sashamarchuk-plugins` is the marketplace's declared name inside `marketplace.json` — that's the suffix you use on `plugin install`. Anthropic's plugin-manifest validator rejects marketplace names that start with `claude-` or `anthropic-` (reserved for official), hence the rename.
 
-`ultra-analyzer` declares `ultra` as a dependency, so it will pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the fourth line fetches it explicitly. `clickup` and `gevent` are independent but share `~/.claude/shared/identity.json` for user + teammate data — onboard either one first and the other inherits the roster.
+`ultra-analyzer` and `claude-migrate` both declare `ultra` as a dependency, so they pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the explicit install lines above fetch it. `claude-migrate` (beta) additionally uses a local Node + Playwright runtime, but only for its byte-exact copy-page verification step. `clickup` and `gevent` are independent but share `~/.claude/shared/identity.json` for user + teammate data — onboard either one first and the other inherits the roster.
 
 ## Plugins
 
@@ -27,6 +28,7 @@ In Claude Code:
 | [gevent](plugins/gevent) | `/gevent:schedule` / `:onboard` / `:status` / `:calendar` — create/update/cancel Google Calendar events with Google Meet. Always attaches a configurable notes bot, conflict + past-time guards, two-step onboarding (identity + calendar defaults). Shares the teammate roster with `clickup`. |
 | [ultra](plugins/ultra) | `/ultra:run` / `:resume` — multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Tiers `--small` / `--medium` / `--large` / `--xl`; wraps other skills for maximum-rigor runs. |
 | [ultra-analyzer](plugins/ultra-analyzer) *(beta)* | `/ultra-analyzer` skill set — rigorous data/corpus pipeline (discover → analyze → validate → synthesize) with resume-able state and `/ultra` gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF, web scrapes, JSON/CSV, SQLite. **Requires the `ultra` plugin.** |
+| [claude-migrate](plugins/claude-migrate) *(beta)* | `/claude-migrate:init` / `:run` / `:resume` / `:progress` / `:verify` — move your chats and projects from one Claude.ai account to another. Parse a data export (or extract live in a browser) → cheap-model value scan → you confirm what migrates → distill each kept chat into one paste-ready first message → re-create projects and seed chats. Always builds a byte-exact, self-contained copy page (the zero-tooling floor); when a pre-authenticated browser is reachable it also runs confirmation-gated automation (seed → await OK → rename → strip). Resume-able state machine with `/ultra` gates. **Requires the `ultra` plugin + local Node/Playwright.** |
 
 ### Install a single plugin
 
@@ -37,6 +39,7 @@ Assuming `/plugin marketplace add SashaMarchuk/claude-plugins` was already run:
 /plugin install gevent@sashamarchuk-plugins
 /plugin install ultra@sashamarchuk-plugins
 /plugin install ultra-analyzer@sashamarchuk-plugins   # requires ultra
+/plugin install claude-migrate@sashamarchuk-plugins   # requires ultra + Node/Playwright
 /reload-plugins
 ```
 
@@ -51,6 +54,7 @@ All user state lives **outside** the plugin directory by design, so `/plugin upd
 | `~/.claude/gevent/config.json` | Calendar defaults + always-include attendees (notes bot) + behavior flags | `gevent` |
 | `~/.claude/skills/ultra/global-lessons.md` | Per-run lessons log | `ultra` |
 | `<your-project>/.planning/ultra-analyzer/<run-name>/` | Config, seeds, findings, state per analyzer run | `ultra-analyzer` |
+| `<your-project>/.planning/claude-migrate/<run-name>/` | Per-run migration state, parsed chat units, value scores, distilled briefs, and the generated copy page | `claude-migrate` |
 
 All JSON writes are atomic (`tmp + fsync + os.replace`) under `fcntl.flock` on a sentinel file, and readers preserve unknown keys — so `clickup` and `gevent` can evolve independently without stepping on each other's fields in `identity.json`.
 
@@ -72,7 +76,7 @@ The plugin will emit a loud banner on every invocation as long as `~/.claude/ski
 
 ### Platform support
 
-All plugins are tested on **macOS** and **Linux**. Windows is not currently supported — the shared-identity helper uses `fcntl.flock` for cross-process locking, which is POSIX-only. A Windows fallback (`msvcrt.locking`) would be a welcome PR.
+All plugins are tested on **macOS** and **Linux**. Windows is not currently supported — the shared-identity helper uses `fcntl.flock` for cross-process locking, which is POSIX-only, and the `ultra-analyzer` / `claude-migrate` runners use POSIX shell. `claude-migrate` additionally needs **Node 18+** and **Playwright (Chromium)** for its `verify` step (the migration itself runs without them; only byte-exact copy-page verification requires them). A Windows fallback (`msvcrt.locking`) would be a welcome PR.
 
 ### Troubleshooting install
 
@@ -88,8 +92,8 @@ Not `@SashaMarchuk/claude-plugins` (that's the GitHub source, which `marketplace
 
 ## Contributing / feedback
 
-Open an [issue](https://github.com/SashaMarchuk/claude-plugins/issues) with a concrete example of what broke or what's missing. PRs welcome.
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to file an issue, propose a plugin, or open a PR. The quickest way to help: open an [issue](https://github.com/SashaMarchuk/claude-plugins/issues) with a concrete example of what broke or what's missing.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Use it, fork it, ship your own marketplace from it.

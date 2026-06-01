@@ -1,0 +1,81 @@
+# claude-migrate run config. Edit before running /claude-migrate:run
+# Run: {{RUN_NAME}}
+#
+# **This is a shipped template.** **Copy it to your run directory before editing**. Direct
+# edits to this file will be wiped on `/plugin update`. `init` already copies it for you to:
+#   .planning/claude-migrate/{{RUN_NAME}}/config.yaml
+#
+# NOTE: the active SOURCE and SINK are defined by source-connector.md / sink-connector.md
+# (next to this file), NOT here. config.yaml holds run-level settings that apply regardless
+# of which source or sink is active. These values are a record only; state.json is authoritative
+# for fields it also tracks (tier, parallelism, thresholds); change those via /claude-migrate:config.
+
+run:
+  name: {{RUN_NAME}}
+
+# Profile tier. Scales model choice, /ultra gate rigor, topic/worker parallelism.
+# Tiers: small | medium | large (default) | xl
+# Change with: /claude-migrate:config
+# Authoritative copy lives in state.json (profile.tier); this is a record only.
+profile_tier: large
+
+# Worker fan-out for the preflight (haiku) and distill (sonnet) steps.
+# Each terminal runs bin/launch-worker.sh and claims one unit at a time.
+parallelism: 4
+
+# v0.1.0 apply is IN-SESSION SERIAL (holds the one MCP browser connection).
+# seed_parallelism MUST stay 1; values >1 are reserved for the future CDP-library
+# path (each tab = a separate Node context) and are documented future work.
+seed_parallelism: 1
+
+# Pacing between successive seed submissions during browser apply (milliseconds).
+seed_delay_ms: 1500
+
+# Bounded wait for the first assistant turn to render after a seed submit (milliseconds).
+# The literal "OK" is a confirmation, never the blocking condition; on timeout the unit
+# stays `seeded` with last_error=ok_timeout and resume re-polls; it is never dropped.
+ok_wait_ms: 45000
+
+# Consecutive transport/auth-class failures before the apply circuit breaker trips
+# (stops claiming, status=blocked, re-probes the browser, fires G-BROWSER).
+# Only systemic transport/auth classes count; content/selector misses do not.
+breaker_threshold: 3
+
+# Per-attempt seed screenshots. OFF by default to avoid persisting PII to disk.
+# When true, screenshots are banner-warned and excluded from git by the run-dir .gitignore.
+capture_screenshots: false
+
+# Hard cap on a distilled brief's token size. Over the cap, the unit becomes `doc_only`:
+# a seeded context brief plus the raw chat attached as a project knowledge document.
+max_brief_tokens: 7000
+
+# Copy-page inline-vs-lazy thresholds. The page inlines every card body into one
+# <script id="data"> only when N <= inline_card_limit AND total payload bytes
+# <= inline_byte_limit; otherwise each card lazy-loads its body from out/payloads/<id>.json.
+inline_card_limit: 60
+inline_byte_limit: 1500000
+
+# Cost guardrails for the distill pass (G-COST fires BEFORE distill, in BOTH modes).
+# est_tokens is computed deterministically by bin/parse-export.cjs (no model in the loop).
+# Below warn_usd the run proceeds without prompting.
+cost:
+  warn_usd: 10        # show the G-COST question at or above this estimated high cost
+  hard_stop_usd: 25   # above this, require an explicit "Proceed"; never auto-continue
+  warn_chat_count: 75 # above this many chats, warn that the run splits into resumable batches
+  warn_chat_tokens: 80000  # any single chat above this is summarized at distill time
+
+# Chat naming. Default keeps each chat's own title; distill-brief derives a title ONLY
+# when the original name is empty or generic. For a custom scheme set:
+#   naming_convention: "custom:<scheme>"
+# where <scheme> is a structured pick captured at G-NAMING (worked example: "Name DD.MM tag").
+# The rename step always consumes briefs/<UNNN>.name.txt as the single source of the target title.
+naming_convention: keep
+
+# Display labels for the four closed bucket ROLES. The core switches on the role enum only
+# (GROUPED | STANDALONE | REFERENCE | DROP); these labels are purely how each role is shown
+# on the copy page and in summaries. You may relabel a role; you may NOT add or remove roles.
+bucket_labels:
+  GROUPED: "Project chats"      # chats assigned to a destination project
+  STANDALONE: "Standalone chats" # kept chats that are not in any project
+  REFERENCE: "Reference chats"   # kept for lookup; lower-priority context
+  DROP: "Not migrated"           # empty / starter / tool-only / explicitly skipped

@@ -46,6 +46,16 @@
       "source": "./plugins/gevent",
       "category": "productivity",
       "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/gevent"
+    },
+    {
+      "name": "claude-migrate",
+      "description": "(beta) Universal Claude-to-Claude account migrator. Parse a Claude.ai data export (or extract live from the old account) -> deterministically score each chat's value -> you confirm what migrates -> distill every kept chat into one paste-ready first message -> re-create projects and seed chats in the new account. Always builds a byte-exact, self-contained copy page (zero tooling, the reliable floor); when a pre-authenticated browser is reachable it also runs confirmation-gated automation (seed -> await OK -> rename, then strips the onboarding instruction). Resume-able state machine with /ultra gates. Requires the `ultra` plugin from this same marketplace.",
+      "author": {
+        "name": "Sasha Marchuk"
+      },
+      "source": "./plugins/claude-migrate",
+      "category": "development",
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/claude-migrate"
     }
   ]
 }

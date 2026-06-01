@@ -1,0 +1,12 @@
+[
+  {
+    "uuid": "user-fixture-0000",
+    "full_name": "Casey Fixture",
+    "email_address": "casey.fixture.pii@example-fixture.test",
+    "phone_number": "+1-555-0100-9999",
+    "verification_token": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmaXh0dXJlLXBpaSIsIm5hbWUiOiJDYXNleSJ9.s3cr3tSignatureFixturePIIzzz",
+    "settings": {
+      "newsletter_email": "casey.fixture.pii@example-fixture.test"
+    }
+  }
+]

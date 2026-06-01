@@ -46,6 +46,16 @@
       "source": "./plugins/gevent",
       "category": "productivity",
       "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/gevent"
+    },
+    {
+      "name": "claude-migrate",
+      "description": "(beta) Migrate Claude.ai chats and projects to a new Claude account. Parse export or extract live -> deterministic value scan -> you confirm -> distill resume briefs -> re-create projects + seed chats. Always emits a byte-exact copy page (zero tooling); optional confirmation-gated browser automation (seed -> await OK -> rename -> strip). Requires the `ultra` plugin and a local Node + Playwright runtime for byte-exact verification.",
+      "author": {
+        "name": "Sasha Marchuk"
+      },
+      "source": "./plugins/claude-migrate",
+      "category": "development",
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/claude-migrate"
     }
   ]
 }

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "//": "C-3/M-5 last-resort PII tripwire. Reads .tool_input.file_path AND a grep -c count of PII-class matches over .tool_input.content. awk applies the same strict basename allowlist as ultra-analyzer (rejects any shell-meta in the path) and only proceeds when the count is non-zero. Emits ONLY a printf %q WARNING (path quoted against shell-meta). Invokes no external tools, mutates nothing, and ALWAYS exits 0 - it never blocks the Write. Primary PII defense is in-skill redaction (references/pii-policy.md); this is the safety net.",
+            "command": "input=$(cat); fp=$(printf '%s' \"$input\" | jq -r '(.tool_input.file_path // \"\")'); n=$(printf '%s' \"$input\" | jq -r '(.tool_input.content // \"\")' | grep -aciE '(bearer[ ]+[A-Za-z0-9._-]+|eyJ[A-Za-z0-9._-]{10,}|authorization[\"'\\'' :=]+|(set-)?cookie[\"'\\'' :=]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}|[+]?[0-9][0-9 ()-]{8,}[0-9])'); printf '%s\\n' \"$fp\" | awk -v n=\"$n\" '$0 !~ /[^A-Za-z0-9_.\\/-]/ && $0 !~ /[`$;&|<>(){}*?~!]/ && length($0)>0 && length($0)<=4096 && n+0>0 {print}' | while IFS= read -r f; do [ -n \"$f\" ] && printf '[hook] WARNING: possible PII in %q (last-resort tripwire only; redact at source - references/pii-policy.md)\\n' \"$f\"; done; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,173 @@
+[
+  {
+    "uuid": "11111111-1111-4111-8111-111111111111",
+    "name": "Trip planning for the coast",
+    "summary": "",
+    "created_at": "2026-01-02T10:00:00.000000Z",
+    "updated_at": "2026-01-02T10:30:00.000000Z",
+    "account": { "uuid": "acct-fixture-0000" },
+    "chat_messages": [
+      {
+        "uuid": "m-11-1",
+        "text": "Help me plan a three day trip along the coast with a small budget.",
+        "content": [
+          { "type": "text", "text": "Help me plan a three day trip along the coast with a small budget." }
+        ],
+        "sender": "human",
+        "created_at": "2026-01-02T10:00:00.000000Z",
+        "updated_at": "2026-01-02T10:00:00.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "m-11-2",
+        "text": "Here is a three day coastal itinerary. Day one: drive to the first town and walk the harbor. Day two: take the cliff trail and pack a picnic. Day three: visit the lighthouse before heading home. Budget tip: book hostels and cook breakfast yourself.",
+        "content": [],
+        "sender": "assistant",
+        "created_at": "2026-01-02T10:01:00.000000Z",
+        "updated_at": "2026-01-02T10:01:00.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "m-11-1"
+      }
+    ]
+  },
+  {
+    "uuid": "22222222-2222-4222-8222-222222222222",
+    "name": "Untitled",
+    "summary": "",
+    "created_at": "2026-01-03T09:00:00.000000Z",
+    "updated_at": "2026-01-03T09:00:00.000000Z",
+    "account": { "uuid": "acct-fixture-0000" },
+    "chat_messages": [
+      {
+        "uuid": "m-22-1",
+        "text": "",
+        "content": [],
+        "sender": "human",
+        "created_at": "2026-01-03T09:00:00.000000Z",
+        "updated_at": "2026-01-03T09:00:00.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "m-22-2",
+        "text": "",
+        "content": [],
+        "sender": "assistant",
+        "created_at": "2026-01-03T09:00:30.000000Z",
+        "updated_at": "2026-01-03T09:00:30.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "m-22-1"
+      }
+    ]
+  },
+  {
+    "uuid": "33333333-3333-4333-8333-333333333333",
+    "name": "Code snippets and a tricky string",
+    "summary": "",
+    "created_at": "2026-01-04T14:00:00.000000Z",
+    "updated_at": "2026-01-04T14:20:00.000000Z",
+    "account": { "uuid": "acct-fixture-0000" },
+    "chat_messages": [
+      {
+        "uuid": "m-33-1",
+        "text": "Show me a tiny HTML snippet and explain how to close a script tag safely.",
+        "content": [
+          { "type": "text", "text": "Show me a tiny HTML snippet and explain how to close a script tag safely." }
+        ],
+        "sender": "human",
+        "created_at": "2026-01-04T14:00:00.000000Z",
+        "updated_at": "2026-01-04T14:00:00.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "m-33-2",
+        "text": "",
+        "content": [
+          { "type": "thinking", "thinking": "The user wants an HTML snippet. I should be careful with the closing tag.", "summaries": [] },
+          { "type": "text", "text": "Here is a small snippet. To embed JSON safely you must break the closing tag so the literal </script> sequence does not end the block early:\n\n```html\n<script id=\"data\" type=\"application/json\">{\"k\":1}</script>\n```\n\nWhen you write the literal characters </SCRIPT > or </script\n> inside text, escape them. An HTML comment looks like <!-- comment -->." },
+          { "type": "tool_use", "name": "noop", "input": {} },
+          { "type": "tool_result", "content": [{ "type": "text", "text": "tool noise that must be skipped" }] }
+        ],
+        "sender": "assistant",
+        "created_at": "2026-01-04T14:01:00.000000Z",
+        "updated_at": "2026-01-04T14:01:00.000000Z",
+        "attachments": [
+          {
+            "file_name": "notes.txt",
+            "file_size": 42,
+            "extracted_content": "Reference note: prefer textContent plus JSON.parse over innerHTML."
+          }
+        ],
+        "files": [
+          { "file_name": "diagram.png", "file_uuid": "file-33-img" }
+        ],
+        "parent_message_uuid": "m-33-1"
+      }
+    ]
+  },
+  {
+    "uuid": "44444444-4444-4444-8444-444444444444",
+    "name": "Reading list long discussion",
+    "summary": "",
+    "created_at": "2026-01-05T08:00:00.000000Z",
+    "updated_at": "2026-01-05T11:00:00.000000Z",
+    "account": { "uuid": "acct-fixture-0000" },
+    "chat_messages": [
+      {
+        "uuid": "m-44-1",
+        "text": "I want a long themed reading list that reuses the same ten core books, with notes on how to pair each one across the month so nothing feels repetitive, plus rough page counts for each title and a few swaps for different moods. Please go into real detail for every single idea because I plan to print this out and stick it on the wall for the whole month ahead.",
+        "content": [
+          { "type": "text", "text": "I want a long themed reading list that reuses the same ten core books, with notes on how to pair each one across the month so nothing feels repetitive, plus rough page counts for each title and a few swaps for different moods. Please go into real detail for every single idea because I plan to print this out and stick it on the wall for the whole month ahead." }
+        ],
+        "sender": "human",
+        "created_at": "2026-01-05T08:00:00.000000Z",
+        "updated_at": "2026-01-05T08:00:00.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+      },
+      {
+        "uuid": "m-44-2",
+        "text": "Here is a detailed month of reading built around ten core titles: an adventure novel, a short story collection, a history of the printing press, a slim book of poems, a biography, a travel memoir, a popular science title, a collection of essays, a graphic novel, and one reference book you can dip into. Week one leans on momentum: open with the adventure novel on Monday to build the habit, switch to two or three short stories on Tuesday for a quick win, read a single history chapter on Wednesday while it is still fresh, take a handful of poems on Thursday as a lighter palate cleanser, and close the week with the first third of the biography on Friday. Each session runs roughly twenty five to thirty five minutes, and most of that is quiet uninterrupted reading you can do before bed or on a commute. To keep things from feeling repetitive, rotate the mood every evening: fast and plot driven one night, reflective and slow the next, factual and grounding after that. Week two repeats the same skeleton but swaps the format so the novel chapters become an audiobook stretch and the essays become a discussion with a friend, which makes the same titles feel like a different experience even though the shelf barely changes. For mood swaps, the biography can become the travel memoir for a lighter week, the reference book can be skipped entirely without losing the thread, and the graphic novel can stand in for any night you are too tired for dense prose. Print the title list at the top, then the four week grid below, and keep a short notes column on the right so you can jot down which pairings you actually enjoyed.",
+        "content": [],
+        "sender": "assistant",
+        "created_at": "2026-01-05T08:02:00.000000Z",
+        "updated_at": "2026-01-05T08:02:00.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "m-44-1"
+      },
+      {
+        "uuid": "m-44-3",
+        "text": "That is great. Can you also add a short borrow list for the first week and a couple of quick options for short breaks that reuse the same titles so I am not hunting for new material every single day?",
+        "content": [
+          { "type": "text", "text": "That is great. Can you also add a short borrow list for the first week and a couple of quick options for short breaks that reuse the same titles so I am not hunting for new material every single day?" }
+        ],
+        "sender": "human",
+        "created_at": "2026-01-05T08:05:00.000000Z",
+        "updated_at": "2026-01-05T08:05:00.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "m-44-2"
+      },
+      {
+        "uuid": "m-44-4",
+        "text": "Borrow list for week one: the adventure novel, the short story collection, the history of the printing press, the slim book of poems, and the first volume of the biography. That single list covers all five sessions with room to spare. For short breaks that reuse the same titles, try a single short story when you only have ten minutes, or a few poems when you want something even briefer. Both fit into the smallest pocket of free time and lean on what you already have on the shelf, so your reading stays steady and predictable across the whole month.",
+        "content": [],
+        "sender": "assistant",
+        "created_at": "2026-01-05T08:07:00.000000Z",
+        "updated_at": "2026-01-05T08:07:00.000000Z",
+        "attachments": [],
+        "files": [],
+        "parent_message_uuid": "m-44-3"
+      }
+    ]
+  }
+]

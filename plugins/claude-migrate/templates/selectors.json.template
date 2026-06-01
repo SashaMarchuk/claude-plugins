@@ -1,0 +1,95 @@
+{
+  "_banner": "This is a shipped template. Copy it to your run directory before editing (init already copies it to .planning/claude-migrate/<run>/selectors.json). Direct edits to this file will be wiped on /plugin update. These are ALL the claude.ai UI facts the browser SINK reads. Prefer accessibility locators (role + accessible name + visible text); CSS paths are intentionally absent because they break on every UI revision. When a label drifts, edit your run-dir copy and re-run; the always-emitted copy page is the documented escape if locators stop matching.",
+  "_version": 1,
+  "_doc": "Locators are expressed as accessibility intents, not CSS. The sink skill resolves them against the browser accessibility snapshot (role/name) and falls back to visible text. Order of keys is not significant except _banner, which MUST stay first per the strict-JSON banner rule.",
+
+  "urls": {
+    "base": "https://claude.ai",
+    "new_chat": "https://claude.ai/new",
+    "chats_list": "https://claude.ai/recents",
+    "projects_list": "https://claude.ai/projects",
+    "settings_account": "https://claude.ai/settings/account"
+  },
+
+  "auth": {
+    "_doc": "Authenticated-session marker. prepare() considers the account logged in only when at least one of these accessible markers is present in the snapshot after navigating to urls.base.",
+    "authed_markers": [
+      { "role": "textbox", "name_contains": "How can I help" },
+      { "role": "button", "name_contains": "New chat" },
+      { "role": "button", "name_contains": "account", "note": "user avatar / account options trigger" }
+    ],
+    "logged_out_markers": [
+      { "role": "button", "name_contains": "Log in" },
+      { "role": "button", "name_contains": "Sign up" },
+      { "role": "link", "name_contains": "Continue with Google" }
+    ],
+    "account_email": {
+      "_doc": "Where prepare()/account_check read the signed-in email to compute the SHA-256 hash. Read the hash only; NEVER store or log the clear value.",
+      "navigate": "settings_account",
+      "role": "text",
+      "name_contains": "@"
+    }
+  },
+
+  "composer": {
+    "_doc": "The first-message input. seed_first_message PASTES the brief here (never types char-by-char), then submits.",
+    "input": { "role": "textbox", "name_contains": "Reply to Claude" },
+    "input_fallback": { "role": "textbox", "name_contains": "How can I help" },
+    "send_button": { "role": "button", "name_contains": "Send" },
+    "send_shortcut": "Enter"
+  },
+
+  "new_chat": {
+    "_doc": "Start a fresh chat. For GROUPED units open the chat from inside the project; for STANDALONE/REFERENCE use the global new-chat affordance.",
+    "global_button": { "role": "button", "name_contains": "New chat" },
+    "in_project_button": { "role": "button", "name_contains": "New chat in project" }
+  },
+
+  "await_first_turn": {
+    "_doc": "await_first_turn blocks on STATE = first assistant turn rendered (bounded by ok_wait_ms), NOT on any literal text. These markers signal the turn finished streaming so it is safe to read first_reply and then rename.",
+    "assistant_turn_marker": { "role": "article", "name_contains": "Claude" },
+    "streaming_done_markers": [
+      { "role": "button", "name_contains": "Copy" },
+      { "role": "button", "name_contains": "Retry" }
+    ],
+    "still_streaming_marker": { "role": "button", "name_contains": "Stop" }
+  },
+
+  "rename": {
+    "_doc": "Rename a chat to briefs/<UNNN>.name.txt ONLY AFTER the first assistant turn (claude.ai auto-titles from the first exchange; renaming earlier gets overwritten). Idempotent and retryable.",
+    "title_options_button": { "role": "button", "name_contains": "chat options" },
+    "rename_option": { "role": "menuitem", "name_contains": "Rename", "_doc": "role value menuitem is the W3C ARIA role string the accessibility snapshot exposes for items inside a dropdown; it is a technical identifier, not content." },
+    "title_input": { "role": "textbox", "name_contains": "Chat title" },
+    "confirm_shortcut": "Enter"
+  },
+
+  "project": {
+    "_doc": "Project create + custom-instructions edit. create_project probes for an existing project of the target name first (idempotent adopt), then creates if absent. set_instructions writes the migration variant first; finalize_run swaps to the steady variant.",
+    "create_button": { "role": "button", "name_contains": "New project" },
+    "name_input": { "role": "textbox", "name_contains": "project name" },
+    "create_confirm_button": { "role": "button", "name_contains": "Create project" },
+    "existing_project_link": { "role": "link", "name_is_target_name": true },
+    "instructions_edit_button": { "role": "button", "name_contains": "instructions" },
+    "instructions_input": { "role": "textbox", "name_contains": "instructions" },
+    "instructions_save_button": { "role": "button", "name_contains": "Save" },
+    "add_knowledge_button": { "role": "button", "name_contains": "Add content" }
+  },
+
+  "dedupe_probe": {
+    "_doc": "Resume safety: search the destination for a chat whose first user message matches a normalized brief opening. Used when a unit is in the ambiguous `opened` state before any re-seed.",
+    "search_input": { "role": "searchbox", "name_contains": "Search" },
+    "result_link": { "role": "link" }
+  },
+
+  "rate_limit": {
+    "_doc": "Cap / rate-limit detection (M-7). When any of these markers appears, the sink sets error_class=rate_limited; the unit returns to `pending` with exponential backoff and is NEVER marked failed.",
+    "markers": [
+      { "role": "text", "name_contains": "message limit" },
+      { "role": "text", "name_contains": "reached your limit" },
+      { "role": "text", "name_contains": "out of free messages" },
+      { "role": "text", "name_contains": "try again later" },
+      { "role": "text", "name_contains": "usage limit" }
+    ],
+    "reset_hint": { "role": "text", "name_contains": "resets" }
+  }
+}

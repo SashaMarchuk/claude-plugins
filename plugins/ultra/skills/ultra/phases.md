@@ -2,6 +2,8 @@
 
 All tiers run ALL phases. Agent count and depth vary by tier. Phases are STRICTLY sequential — no phase starts until the previous phase completes. Within each phase, all agents launch in PARALLEL.
 
+**Who spawns the agents.** "The orchestrator" in this file is the **main agent** (SKILL.md Step 5 — it is NOT a spawned sub-agent). The orchestrator spawns each phase's R/V/D/F/AG/J/A/EX agents itself via the `Agent` tool, emitting all of a phase's independent calls in a SINGLE message so they run concurrently (true parallelism). "all agents launch in PARALLEL" is a hard requirement, not a metaphor: a phase where the orchestrator narrates each agent's findings as prose in its own context instead of making real `Agent` calls has FAILED that phase — it is the sequential-role-play anti-pattern, and Phase 8 (Anti-Slop) MUST flag any phase whose agents lack distinct `.planning/ultra/<task>/<phase>/<agent-id>.md` artifacts as evidence of a collapsed (non-parallel) swarm.
+
 ## Pause Matrix (MED-10, SINGLE SOURCE OF TRUTH)
 
 The following table is the ONE canonical pause matrix for /ultra. All per-phase prose below MUST defer to this table — it replaces the previously-scattered `--ask=critical` / `--ask=all` notes that had drifted across Phases 1, 3, 4, 5, 7. If a per-phase note disagrees with this table, this table wins.

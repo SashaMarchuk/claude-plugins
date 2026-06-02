@@ -1,5 +1,55 @@
 # /ultra changelog
 
+## 1.5.0 — 2026-06-02
+
+### Fixed (architecture — the swarm now actually runs in parallel)
+- **The orchestrator is now the main agent, and it spawns the worker swarm
+  directly.** Pre-1.5.0, SKILL.md Step 5 told the main agent to `Launch ONE
+  Agent` (a single "orchestrator" sub-agent) and hand it the entire pipeline.
+  A spawned sub-agent is a leaf — it cannot reliably fan out its own swarm — so
+  the pipeline silently collapsed into **one Opus context role-playing all 9
+  phases sequentially**. "Independent agents" and "blind validation" were fake:
+  the same context wrote every R/V/D's findings in turn. This is the root cause
+  behind the report that `/ultra` "worked NOT in parallel."
+- **What changed**: Step 5 is rewritten so the main agent IS the orchestrator.
+  It runs the phase pipeline in its own context and spawns every researcher /
+  validator / devil's-advocate / debater / auditor as a REAL `Agent` tool call
+  with an isolated context. All of a phase's independent `Agent` calls go out in
+  a SINGLE message so they run concurrently (true parallelism); phases stay
+  sequential. Each worker writes full findings to
+  `.planning/ultra/<task>/<phase>/<agent-id>.md` and returns only a compact
+  summary, so the main context stays lean without delegating orchestration away.
+- **Blind-isolation guarantees are now real**: Phase 5 validators receive only
+  the original task + scope (never Phase 2-4 output) because they are genuinely
+  separate sub-agent contexts, not the same context pretending not to remember.
+- **New guardrails**: `phases.md` now declares "all agents launch in PARALLEL" a
+  hard requirement and tells Phase 8 (Anti-Slop) to flag any phase whose agents
+  lack distinct per-agent artifacts as a collapsed (non-parallel) swarm.
+  `tier-config.md` MED-11 (`--xl` all-Opus assertion) was corrected — it now
+  describes the orchestrator as the main agent choosing each WORKER's model,
+  not a sub-agent constrained by a since-removed `model: "opus"` spawn param.
+- **Tests**: added ARCH-1..ARCH-4 to `plugins/ultra/tests/run.sh` locking in
+  main-agent orchestration, same-message concurrent spawns, removal of the old
+  `Spawn Orchestrator` / `Launch ONE Agent` delegation, and the collapsed-swarm
+  guard. Existing WS/PRD assertions are unchanged and still pass.
+
+### Migration
+**No reinstall, no name/description change.** Behavior-only fix. Update with:
+```
+/plugin update ultra@sashamarchuk-plugins
+```
+**Then restart your Claude Code session** (`/exit` and relaunch) so the plugin
+registry reloads the rewritten SKILL.md from disk. State files in
+`.planning/ultra/<task>/` and the lessons path are unchanged. `--resume` runs
+started under 1.4.x continue cleanly under 1.5.0.
+
+### Note for nested callers (ultra-analyzer gates, parent-agent invocations)
+`/ultra` only achieves true parallelism when its caller is the **main agent**
+(the top-level conversation), since only the top-level agent reliably holds the
+`Agent` tool. When `/ultra` is invoked from inside another sub-agent, the same
+leaf limitation applies to that caller. ultra-analyzer's Gate 1 / Gate 2 invoke
+`/ultra` from the main analyzer context, so they are unaffected.
+
 ## 1.4.1 — 2026-05-03 (hotfix)
 
 ### Reverted

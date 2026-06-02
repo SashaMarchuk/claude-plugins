@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # WS-10 regression harness for /ultra plugin.
-# One assertion per PRD finding (CRIT1-3 + HIGH1-7 + MED1-12 + LOW1-7 = 29).
+# One assertion per PRD finding (CRIT1-3 + HIGH1-7 + MED1-12 + LOW1-7 = 29)
+# plus ARCH1-4 (1.5.0 main-agent-orchestrator regression guard).
 # Exits 0 on all-pass, 1 on any FAIL.
 #
 # Usage:  bash plugins/ultra/tests/run.sh
@@ -336,6 +337,46 @@ if grep -qF "goal_backward_coverage" "$PHASES" \
   pass "WS8-LOW7: goal-backward tier-scaled coverage (LOW-7 anchor) — coverage rule per tier"
 else
   fail "WS8-LOW7: goal-backward coverage" "missing"
+fi
+
+# ============================================================ ARCH (orchestrator = main agent)
+# Regression guard for the 1.5.0 fix: the orchestrator MUST be the main agent and
+# spawn the worker swarm DIRECTLY via the Agent tool. The pre-1.5.0 bug delegated
+# the whole pipeline to ONE spawned "orchestrator" sub-agent (a leaf that cannot
+# fan out), collapsing the swarm into sequential role-play in a single context.
+
+# ---------- ARCH-1: SKILL mandates main-agent orchestration + the critical rule ----------
+if grep -qF "CRITICAL ARCHITECTURE RULE" "$SKILL" \
+   && grep -qF "you ARE the main agent" "$SKILL" \
+   && grep -qF "Do NOT spawn a single" "$SKILL"; then
+  pass "ARCH-1: SKILL pins orchestrator = main agent + forbids single-orchestrator-subagent delegation"
+else
+  fail "ARCH-1: main-agent orchestration rule" "missing CRITICAL ARCHITECTURE RULE / main-agent / no-single-orchestrator anchors"
+fi
+
+# ---------- ARCH-2: SKILL Step 5b mandates true parallelism + no role-play ----------
+if grep -qF "one message, many tool calls" "$SKILL" \
+   && grep -qF "NEVER role-play a worker" "$SKILL" \
+   && grep -qF "SINGLE assistant message" "$SKILL"; then
+  pass "ARCH-2: SKILL Step 5b mandates same-message concurrent Agent calls + bans role-play"
+else
+  fail "ARCH-2: true-parallelism contract" "missing one-message / NEVER role-play / SINGLE-message anchors"
+fi
+
+# ---------- ARCH-3: pre-1.5.0 delegation anti-pattern is gone ----------
+if ! grep -qF "Spawn Orchestrator" "$SKILL" \
+   && ! grep -qF "Launch ONE Agent with" "$SKILL"; then
+  pass "ARCH-3: old 'Spawn Orchestrator' / 'Launch ONE Agent' delegation heading removed from SKILL"
+else
+  fail "ARCH-3: delegation anti-pattern removed" "SKILL still contains the single-orchestrator-spawn instruction"
+fi
+
+# ---------- ARCH-4: phases.md flags a collapsed (non-parallel) swarm ----------
+if grep -qF "sequential-role-play anti-pattern" "$PHASES" \
+   && grep -qF "collapsed (non-parallel) swarm" "$PHASES"; then
+  pass "ARCH-4: phases.md requires real Agent calls + flags collapsed swarm via per-agent artifacts"
+else
+  fail "ARCH-4: collapsed-swarm guard" "missing phases.md anti-role-play / collapsed-swarm anchors"
 fi
 
 # ============================================================ Summary

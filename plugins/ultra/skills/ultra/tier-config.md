@@ -69,7 +69,7 @@
 
 ## Sub-Agent Opus Assertion (MED-11, MANDATORY at --xl)
 
-At `--xl`, the orchestrator's tier prose says "All Opus" but the orchestrator (which is itself constrained to Opus by SKILL.md Step 5's `model: "opus"` parameter) chooses sub-agent models when spawning via the `Agent` tool. Without an explicit verification step, a prompt-injected or buggy orchestrator could silently downgrade sub-agents to Sonnet/Haiku and the "All Opus" claim becomes unverifiable.
+At `--xl`, the orchestrator's tier prose says "All Opus" but the orchestrator is the **main agent** (per SKILL.md Step 5 it runs the pipeline directly — it is NOT a spawned sub-agent), and it chooses each worker sub-agent's model when spawning via the `Agent` tool. Whatever model the orchestrator itself runs on, the `--xl` "All Opus" guarantee is about the WORKERS it spawns. Without an explicit verification step, a prompt-injected or buggy orchestrator could silently downgrade sub-agents to Sonnet/Haiku and the "All Opus" claim becomes unverifiable.
 
 **Mandatory verification rule (MED-11)**: at `--xl`, the orchestrator MUST verify each spawned sub-agent's `model` parameter is exactly `opus` (case-insensitive match on the literal string `opus` — not `claude-3-opus`, not `sonnet`, not `haiku`). The verification has two parts:
 

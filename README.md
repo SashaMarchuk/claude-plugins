@@ -2,7 +2,7 @@
 
 Opinionated Claude Code plugins by [Sasha Marchuk](https://github.com/SashaMarchuk) — tooling for ticket management, automation, multi-agent rigor, data analysis, and account migration. Free, MIT-licensed, and open to contributions.
 
-## Quick install — get all six plugins
+## Quick install — get all seven plugins
 
 In Claude Code:
 
@@ -14,12 +14,13 @@ In Claude Code:
 /plugin install ultra-analyzer@sashamarchuk-plugins
 /plugin install claude-migrate@sashamarchuk-plugins
 /plugin install find-call@sashamarchuk-plugins
+/plugin install log-time@sashamarchuk-plugins
 /reload-plugins
 ```
 
 > **Marketplace name vs. GitHub source**: `SashaMarchuk/claude-plugins` (GitHub `owner/repo`) is what you pass to `marketplace add` to fetch the manifest. `sashamarchuk-plugins` is the marketplace's declared name inside `marketplace.json` — that's the suffix you use on `plugin install`. Anthropic's plugin-manifest validator rejects marketplace names that start with `claude-` or `anthropic-` (reserved for official), hence the rename.
 
-`ultra-analyzer` and `claude-migrate` both declare `ultra` as a dependency, so they pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the explicit install lines above fetch it. `claude-migrate` (beta) additionally uses a local Node + Playwright runtime, but only for its byte-exact copy-page verification step. `clickup` and `gevent` are independent but share `~/.claude/shared/identity.json` for user + teammate data — onboard either one first and the other inherits the roster. `find-call` (beta) is a **read-only consumer** of that same file: it never writes it, so it has no onboarding of its own — onboard `clickup` or `gevent` once and `find-call` inherits your profile + roster automatically (and works with limited name-resolution even if you skip onboarding).
+`ultra-analyzer` and `claude-migrate` both declare `ultra` as a dependency, so they pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the explicit install lines above fetch it. `claude-migrate` (beta) additionally uses a local Node + Playwright runtime, but only for its byte-exact copy-page verification step. `clickup` and `gevent` are independent but share `~/.claude/shared/identity.json` for user + teammate data — onboard either one first and the other inherits the roster. `find-call` (beta) is a **read-only consumer** of that same file: it never writes it, so it has no onboarding of its own — onboard `clickup` or `gevent` once and `find-call` inherits your profile + roster automatically (and works with limited name-resolution even if you skip onboarding). `log-time` (beta) is also a read-only consumer of the identity file, has its own onboarding (`/log-time:onboard`), and pairs especially well with `find-call` plus a connected calendar — call evidence is the strongest time signal it can gather.
 
 ## Plugins
 
@@ -31,6 +32,7 @@ In Claude Code:
 | [ultra-analyzer](plugins/ultra-analyzer) *(beta)* | `/ultra-analyzer` skill set — rigorous data/corpus pipeline (discover → analyze → validate → synthesize) with resume-able state and `/ultra` gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF, web scrapes, JSON/CSV, SQLite. **Requires the `ultra` plugin.** |
 | [claude-migrate](plugins/claude-migrate) *(beta)* | `/claude-migrate:init` / `:run` / `:resume` / `:progress` / `:verify` — move your chats and projects from one Claude.ai account to another. Parse a data export (or extract live in a browser) → cheap-model value scan → you confirm what migrates → distill each kept chat into one paste-ready first message → re-create projects and seed chats. Always builds a byte-exact, self-contained copy page (the zero-tooling floor); when a pre-authenticated browser is reachable it also runs confirmation-gated automation (seed → await OK → rename → strip). Resume-able state machine with `/ultra` gates. **Requires the `ultra` plugin + local Node/Playwright.** |
 | [find-call](plugins/find-call) *(beta)* | `/find-call <call>` / `:config` / `:status` — pull deep, cited context from a past Google Calendar meeting. Searches Calendar + optional transcripts (Sembly or any connected notetaker) in parallel, reads the notes-bot "Meeting Resources" block (Transcription, Meeting Notes, Video, Parent Folder), disambiguates matches, and spawns sonnet sub-agents per call for transcript-depth. Uses whatever tools are available by default; set a preferred provider per source with `:config` (always with fallback — data is retrieved by any working method), inspect with `:status`. Resolves teammate names against the shared roster. **Investigation is read-only** — never modifies Calendar, Drive, or transcripts; the only thing it writes is its own source-prefs file. |
+| [log-time](plugins/log-time) *(beta)* | `/log-time [range]` / `:onboard` / `:config` / `:status` — reconstruct what you actually worked on and emit a paste-ready time-log for Redmine (or any tracker your config describes). Cross-checks whatever evidence sources you configure — calendar, task tracker, Claude Code session history, meeting transcripts, spreadsheets, any custom source you can describe in plain text — via parallel sonnet sub-agents. Behavior lives in a **free-form markdown config** (`~/.claude/log-time/config.md`): your sources, target tickets, day rules, and output style, written by a four-step skippable wizard (forced on first run — it never builds a log unconfigured) and edited any time in natural language via `:config`. **Evidence-only by default** — no fabricated hours, no assumed daily target (set an optional steady target if you always log a fixed number). Pairs well with `find-call` for transcript-depth call context. **Read-only against every source** — writes only its own config and per-run artifacts. |
 
 ### Install a single plugin
 
@@ -43,6 +45,7 @@ Assuming `/plugin marketplace add SashaMarchuk/claude-plugins` was already run:
 /plugin install ultra-analyzer@sashamarchuk-plugins   # requires ultra
 /plugin install claude-migrate@sashamarchuk-plugins   # requires ultra + Node/Playwright
 /plugin install find-call@sashamarchuk-plugins        # reads (never writes) the shared identity file
+/plugin install log-time@sashamarchuk-plugins         # evidence-only time-logs; pairs well with find-call
 /reload-plugins
 ```
 
@@ -56,6 +59,7 @@ All user state lives **outside** the plugin directory by design, so `/plugin upd
 | `~/.claude/clickup/{config.json, memory.md, drafts/}` | Workspace + lists + aliases + learned memory rules + idempotency drafts | `clickup` |
 | `~/.claude/gevent/config.json` | Calendar defaults + always-include attendees (notes bot) + behavior flags | `gevent` |
 | `~/.claude/find-call/config.json` *(optional)* | Per-source provider *preference* (`calendar`/`docs`/`transcripts` → `auto`/`cli`/`mcp`/`off`) — preference + fallback, not a hard pin. Absent = universal auto-detect. Written by `/find-call:config` (guarded atomic write) or hand-edited | `find-call` |
+| `~/.claude/log-time/{config.md, runs/}` | Free-form markdown config (evidence sources, tracker targets, day rules, output style) + per-run evidence/audit artifacts. Written by `/log-time:onboard` / `:config` (confirm-before-write) or hand-edited — it's just text | `log-time` |
 | `~/.claude/skills/ultra/global-lessons.md` | Per-run lessons log | `ultra` |
 | `<your-project>/.planning/ultra-analyzer/<run-name>/` | Config, seeds, findings, state per analyzer run | `ultra-analyzer` |
 | `<your-project>/.planning/claude-migrate/<run-name>/` | Per-run migration state, parsed chat units, value scores, distilled briefs, and the generated copy page | `claude-migrate` |

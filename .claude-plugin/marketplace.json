@@ -66,6 +66,16 @@
       "source": "./plugins/find-call",
       "category": "productivity",
       "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/find-call"
+    },
+    {
+      "name": "log-time",
+      "description": "(beta) Universal /log-time skill — reconstruct what you actually worked on and produce a paste-ready time-log for Redmine (or any tracker your config describes) by cross-checking the evidence sources you configure: calendar, task tracker, Claude Code session history, meeting transcripts, spreadsheets, or any custom source you can describe in plain text. Behavior is driven by a free-form markdown config (~/.claude/log-time/config.md) written by a four-step, fully skippable onboarding wizard (/log-time:onboard) and editable any time via /log-time:config; a first run with no config routes straight into onboarding. Evidence-only by default: no fabricated hours and no assumed daily target. Pairs well with the find-call plugin for transcript-depth call context. Read-only against every source — writes only its own config and per-run artifacts.",
+      "author": {
+        "name": "Sasha Marchuk"
+      },
+      "source": "./plugins/log-time",
+      "category": "productivity",
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/log-time"
     }
   ]
 }

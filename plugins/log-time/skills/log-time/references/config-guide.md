@@ -66,6 +66,8 @@ What an emitted entry looks like. A date prefix like `[dd.mm]` is **suggested** 
 - Run artifacts: keep the default ~/.claude/log-time/runs/.
 ```
 
+**Posting into a chat tool.** If a destination posts your output into a team channel (e.g. a standup bot), mention people with that tool's plain `@handle` syntax — not raw user-ID markup like `<@U12345>`. Many bots rewrite a raw `<@ID>` into escaped, non-pinging text. A reliable handle is usually the person's email local-part; keep a small name -> handle table in your config so tags resolve.
+
 ## Anything else
 
 Free-form rules that fit no section still bind — e.g. "never log more than 0.5h to recruiting without asking", "treat the standup source as ground truth of intent when sources conflict". Write them the way you'd brief a careful assistant.

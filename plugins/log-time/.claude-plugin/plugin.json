@@ -1,6 +1,6 @@
 {
   "name": "log-time",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "(beta) Universal /log-time skill — reconstruct what you actually worked on and produce a paste-ready time-log for Redmine (or any tracker your config describes) by cross-checking the evidence sources you configure: calendar, task tracker, Claude Code session history, meeting transcripts, spreadsheets, or any custom source you can describe in plain text. Behavior is driven by a free-form markdown config (~/.claude/log-time/config.md) — your sources, target tickets, day rules, and output style — written by a four-step, fully skippable onboarding wizard (/log-time:onboard) and editable any time via /log-time:config; a first run with no config routes straight into onboarding — the skill never builds a log unconfigured. Evidence-only by default: no fabricated hours and no assumed daily target; add an optional steady daily target to your config if you always log a fixed number of hours. Pairs well with the find-call plugin for transcript-depth call context. Read-only against every source — writes only its own config and per-run artifacts.",
   "author": {
     "name": "Sasha Marchuk",

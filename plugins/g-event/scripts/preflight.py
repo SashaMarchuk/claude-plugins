@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-gevent pre-flight (mechanical, prose-as-code mitigation — see L-19).
+g-event pre-flight (mechanical, prose-as-code mitigation — see L-19).
 
 Runs three invariants before SKILL.md step 1:
   1. detect_shadow_dirs() — broad glob for legacy create-call directories
      (canonical + ~/.claude.backup-*, ~/.claude.bak/, ~/.claude.old*/,
      ~/.claude-backup-*, ~/.claude-plugins-backup-*).
-  2. validate_schema() — type/shape checks on identity.json + gevent/config.json
+  2. validate_schema() — type/shape checks on identity.json + g-event/config.json
      (schemaVersion int, behavior.notes_bot_decided strict bool,
      always_include array, defaults.calendar matches CALENDAR_ID_RE,
      defaults.send_updates / duration_minutes / conference_type type-checked).
@@ -23,9 +23,9 @@ Exit codes:
   4 — preflight crashed (uncaught exception — bug in the script).
 
 Usage:
-  python plugins/gevent/scripts/preflight.py
+  python plugins/g-event/scripts/preflight.py
   # or, from SKILL.md step 1 prose:
-  #   ! python plugins/gevent/scripts/preflight.py
+  #   ! python plugins/g-event/scripts/preflight.py
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import traceback
@@ -42,7 +43,10 @@ from typing import Any
 HOME = pathlib.Path.home()
 
 IDENTITY_PATH = HOME / ".claude" / "shared" / "identity.json"
-CONFIG_PATH = HOME / ".claude" / "gevent" / "config.json"
+CONFIG_PATH = HOME / ".claude" / "g-event" / "config.json"
+# Legacy path from when this plugin was named `gevent` (pre-1.3.0).
+# Used only by migrate_legacy_config() for a one-time copy-forward.
+LEGACY_CONFIG_PATH = HOME / ".claude" / "gevent" / "config.json"
 
 SHADOW_PATTERNS = [
     str(HOME / ".claude/skills/create-call"),
@@ -92,6 +96,33 @@ def _eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+def migrate_legacy_config() -> str | None:
+    """One-time, deterministic copy-forward of the pre-1.3.0 config.
+
+    When the plugin was renamed `gevent` -> `g-event`, the user config dir
+    moved from ~/.claude/gevent/ to ~/.claude/g-event/. This copies the old
+    config to the new path ONLY when the new one does not yet exist and the
+    old one does. Copy (not move) so a rollback to the old plugin still works.
+
+    Deterministic + cheap: if the legacy file is absent, return immediately —
+    no banner, no work. Returns a one-line banner string when a copy happened,
+    else None.
+    """
+    if CONFIG_PATH.exists() or not LEGACY_CONFIG_PATH.is_file():
+        return None
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(LEGACY_CONFIG_PATH, CONFIG_PATH)
+    except OSError as e:
+        _eprint(f"[preflight] migrate: could not copy legacy config: {e}")
+        return None
+    return (
+        f"ℹ Migrated calendar config gevent → g-event "
+        f"({CONFIG_PATH}). The old file at {LEGACY_CONFIG_PATH} was left in "
+        "place; you can delete it once everything works."
+    )
+
+
 def detect_shadow_dirs() -> list[str]:
     """Return the list of legacy create-call directories shadowing the plugin.
 
@@ -136,7 +167,7 @@ def validate_schema() -> list[str]:
     if identity is None:
         failures.append(
             f"identity.json missing or unparseable at {IDENTITY_PATH}; "
-            "run `/gevent:onboard identity` first."
+            "run `/g-event:onboard identity` first."
         )
     else:
         sv = identity.get("schemaVersion")
@@ -153,13 +184,13 @@ def validate_schema() -> list[str]:
         if not _is_strict_bool_true(identity.get("onboarding_complete")):
             failures.append(
                 "identity.json: onboarding_complete must be JSON boolean true; "
-                "run `/gevent:onboard identity`."
+                "run `/g-event:onboard identity`."
             )
 
     if config is None:
         failures.append(
-            f"gevent/config.json missing or unparseable at {CONFIG_PATH}; "
-            "run `/gevent:onboard calendar` first."
+            f"g-event/config.json missing or unparseable at {CONFIG_PATH}; "
+            "run `/g-event:onboard calendar` first."
         )
     else:
         sv = config.get("schemaVersion")
@@ -301,6 +332,7 @@ def auth_probe() -> list[str]:
 
 def main() -> int:
     try:
+        migration_banner = migrate_legacy_config()
         shadow_hits = detect_shadow_dirs()
         schema_failures = validate_schema()
         auth_failures = auth_probe()
@@ -308,6 +340,9 @@ def main() -> int:
         _eprint("[preflight] CRASHED — bug in preflight.py:")
         traceback.print_exc(file=sys.stderr)
         return 4
+
+    if migration_banner:
+        _eprint(migration_banner)
 
     if shadow_hits:
         _eprint(

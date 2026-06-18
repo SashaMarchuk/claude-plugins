@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# WS-10 regression harness for /gevent plugin.
+# WS-10 regression harness for /g-event plugin.
 # One assertion per PRD finding (H1-H4 + M1-M10 + L1-L19 = 33). Exits 0 on
 # all-pass, 1 on any FAIL.
 #
-# Usage:  bash plugins/gevent/tests/run.sh
+# Usage:  bash plugins/g-event/tests/run.sh
 #
 # POSIX-shell + grep + jq + Python (only for preflight.py invocation in L-19).
 # All assertions verify that prose / code contracts established by WS-3 (H4),
@@ -13,10 +13,10 @@ set -uo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PLUGIN_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
-SKILL="$PLUGIN_DIR/skills/gevent/SKILL.md"
-MODES="$PLUGIN_DIR/skills/gevent/references/modes.md"
-SCHEMA="$PLUGIN_DIR/skills/gevent/references/config-schema.md"
-EVENT="$PLUGIN_DIR/skills/gevent/references/event-format.md"
+SKILL="$PLUGIN_DIR/skills/g-event/SKILL.md"
+MODES="$PLUGIN_DIR/skills/g-event/references/modes.md"
+SCHEMA="$PLUGIN_DIR/skills/g-event/references/config-schema.md"
+EVENT="$PLUGIN_DIR/skills/g-event/references/event-format.md"
 PREFLIGHT="$PLUGIN_DIR/scripts/preflight.py"
 SCHEDULE_CMD="$PLUGIN_DIR/commands/schedule.md"
 CALENDAR_CMD="$PLUGIN_DIR/commands/calendar.md"
@@ -65,9 +65,9 @@ fi
 if grep -q "zero-match upsert" "$SKILL" \
    && grep -q "FORCE \`AskUserQuestion\` disambiguation" "$SKILL" \
    && grep -q "raw bytes differ but skeletons match" "$SKILL"; then
-  pass "WS3-H4: homoglyph gate fires on zero-match upsert path (gevent)"
+  pass "WS3-H4: homoglyph gate fires on zero-match upsert path (g-event)"
 else
-  fail "WS3-H4: homoglyph zero-match upsert" "missing rule in gevent SKILL"
+  fail "WS3-H4: homoglyph zero-match upsert" "missing rule in g-event SKILL"
 fi
 
 # ============================================================ MEDIUM (M-1..M-10)
@@ -272,11 +272,11 @@ else
 fi
 
 # ---------- L-13: teammates[].active=false refuse on --auto invite ----------
-# The shared-active-default rule already lives in clickup; gevent inherits via
-# shared identity.json. Verify gevent SKILL references the active gate.
+# The shared-active-default rule already lives in clickup; g-event inherits via
+# shared identity.json. Verify g-event SKILL references the active gate.
 if grep -qE "active|teammate.*invite|active.*false" "$SKILL" \
    && grep -q "trusted_domains" "$SKILL"; then
-  pass "WS7-L13: teammates[].active gating present in gevent invite path"
+  pass "WS7-L13: teammates[].active gating present in g-event invite path"
 else
   # Fallback: verify schema docs the active-default
   if grep -q "teammates\[\]\.active" "$SCHEMA"; then
@@ -354,7 +354,7 @@ fi
 TOTAL=$((PASS + FAIL))
 echo
 echo "=============================================================="
-echo "/gevent tests:  PASS=$PASS  FAIL=$FAIL  (TOTAL=$TOTAL)"
+echo "/g-event tests:  PASS=$PASS  FAIL=$FAIL  (TOTAL=$TOTAL)"
 echo "=============================================================="
 if [[ "$FAIL" -gt 0 ]]; then
   printf '  %s\n' "${FAIL_MSGS[@]}"

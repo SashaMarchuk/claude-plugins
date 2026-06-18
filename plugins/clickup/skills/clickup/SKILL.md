@@ -116,7 +116,7 @@ Omit the line entirely if the beneficiary role is not extractable from source. R
 
 ### Assignee (dual-key resolver, teammates live in shared identity.json)
 
-The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/gevent` reads the same file — changes here are seen there.
+The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/g-event` reads the same file — changes here are seen there.
 
 **Homoglyph-collision gate (runs before every silent single-match AND before every zero-match upsert)**: compute the UTS #39 skeleton on the **RAW typed input, BEFORE the zero-width / BOM strip in step 1** (`unicodedata.normalize("NFKC", raw).casefold()` + confusables-map transform). Order is load-bearing: if the strip runs first, a BOM-prefixed record like `﻿Misha` collapses to `Misha` and skeleton-matches an existing `Misha` as identical bytes — the gate would never fire even though the distinct-record signal was the very BOM the strip just erased. Compute the skeleton BEFORE the strip, and compare BOTH the skeleton AND the raw byte-string to every existing teammate's skeleton+raw. If the skeleton matches an EXISTING teammate AND raw byte-strings differ (i.e. visually identical but distinct records), FORCE disambiguation — never silent-match. This gate ALSO runs on the zero-match upsert path (step 7 below) BEFORE a new teammate is written: compute the skeleton of the typed local-part AND the full email AND compare against every existing `teammates[].email` skeleton; on collision, FORCE disambiguation between the existing and proposed record — do NOT silent-upsert. Legitimate pure-script names (all-Cyrillic, all-Latin) never trigger this — no skeleton collision with anyone else. This precedence is load-bearing and overrides any "silent-allow" rule elsewhere.
 
@@ -203,12 +203,12 @@ After any edit, redraw the preview and repeat. Cancel deletes the draft snapshot
 
 ## Files (user state, OUTSIDE the plugin dir — survives `/plugin update`)
 
-- `~/.claude/shared/identity.json` — **SHARED with `/gevent`**. User profile + teammate roster (first_name, latin_alias, full_name, email, external_ids, active, sources, last_validated_at). Both skills read and append.
+- `~/.claude/shared/identity.json` — **SHARED with `/g-event`**. User profile + teammate roster (first_name, latin_alias, full_name, email, external_ids, active, sources, last_validated_at). Both skills read and append.
 - `~/.claude/clickup/config.json` — clickup-local. Workspace, lists + aliases, defaults, behavior flags. No `user` or `teammates` here.
 - `~/.claude/clickup/memory.md` — learned patterns + corrections (markdown, human-editable).
 - `~/.claude/clickup/drafts/` — per-invocation idempotency snapshots.
 
-All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file. The canonical identity.json lock is **`~/.claude/shared/identity.json.lock`** (NO leading dot — sibling of `identity.json`, not a dotfile). This path is the cross-plugin contract shared with `/gevent`; any deviation breaks mutual exclusion. See the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/gevent` fields this plugin doesn't know about).
+All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file. The canonical identity.json lock is **`~/.claude/shared/identity.json.lock`** (NO leading dot — sibling of `identity.json`, not a dotfile). This path is the cross-plugin contract shared with `/g-event`; any deviation breaks mutual exclusion. See the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/g-event` fields this plugin doesn't know about).
 
 Schemas + examples in `references/config-schema.md`.
 

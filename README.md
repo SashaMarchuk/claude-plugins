@@ -9,7 +9,7 @@ In Claude Code:
 ```
 /plugin marketplace add SashaMarchuk/claude-plugins
 /plugin install clickup@sashamarchuk-plugins
-/plugin install gevent@sashamarchuk-plugins
+/plugin install g-event@sashamarchuk-plugins
 /plugin install ultra@sashamarchuk-plugins
 /plugin install ultra-analyzer@sashamarchuk-plugins
 /plugin install claude-migrate@sashamarchuk-plugins
@@ -20,14 +20,14 @@ In Claude Code:
 
 > **Marketplace name vs. GitHub source**: `SashaMarchuk/claude-plugins` (GitHub `owner/repo`) is what you pass to `marketplace add` to fetch the manifest. `sashamarchuk-plugins` is the marketplace's declared name inside `marketplace.json` — that's the suffix you use on `plugin install`. Anthropic's plugin-manifest validator rejects marketplace names that start with `claude-` or `anthropic-` (reserved for official), hence the rename.
 
-`ultra-analyzer` and `claude-migrate` both declare `ultra` as a dependency, so they pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the explicit install lines above fetch it. `claude-migrate` (beta) additionally uses a local Node + Playwright runtime, but only for its byte-exact copy-page verification step. `clickup` and `gevent` are independent but share `~/.claude/shared/identity.json` for user + teammate data — onboard either one first and the other inherits the roster. `find-call` (beta) is a **read-only consumer** of that same file: it never writes it, so it has no onboarding of its own — onboard `clickup` or `gevent` once and `find-call` inherits your profile + roster automatically (and works with limited name-resolution even if you skip onboarding). `log-time` (beta) is also a read-only consumer of the identity file, has its own onboarding (`/log-time:onboard`), and pairs especially well with `find-call` plus a connected calendar — call evidence is the strongest time signal it can gather.
+`ultra-analyzer` and `claude-migrate` both declare `ultra` as a dependency, so they pull `ultra` in automatically on Claude Code `v2.1.110+`; on older versions the explicit install lines above fetch it. `claude-migrate` (beta) additionally uses a local Node + Playwright runtime, but only for its byte-exact copy-page verification step. `clickup` and `g-event` are independent but share `~/.claude/shared/identity.json` for user + teammate data — onboard either one first and the other inherits the roster. `find-call` (beta) is a **read-only consumer** of that same file: it never writes it, so it has no onboarding of its own — onboard `clickup` or `g-event` once and `find-call` inherits your profile + roster automatically (and works with limited name-resolution even if you skip onboarding). `log-time` (beta) is also a read-only consumer of the identity file, has its own onboarding (`/log-time:onboard`), and pairs especially well with `find-call` plus a connected calendar — call evidence is the strongest time signal it can gather.
 
 ## Plugins
 
 | Plugin | What it does |
 |---|---|
 | [clickup](plugins/clickup) | `/clickup:create` / `:onboard` / `:status` / `:workspace` / `:memory` — create and manage ClickUp tickets with enforced Connextra user stories, fuzzy list aliases, teammate auto-resolution, duplicate detection, and a two-step onboarding wizard (identity + workspace). |
-| [gevent](plugins/gevent) | `/gevent:schedule` / `:onboard` / `:status` / `:calendar` — create/update/cancel Google Calendar events with Google Meet. Always attaches a configurable notes bot, conflict + past-time guards, two-step onboarding (identity + calendar defaults). Shares the teammate roster with `clickup`. |
+| [g-event](plugins/g-event) | `/g-event:schedule` / `:onboard` / `:status` / `:calendar` — create/update/cancel Google Calendar events with Google Meet. Always attaches a configurable notes bot, conflict + past-time guards, two-step onboarding (identity + calendar defaults). Shares the teammate roster with `clickup`. |
 | [ultra](plugins/ultra) | `/ultra:run` / `:resume` — multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Tiers `--small` / `--medium` / `--large` / `--xl`; wraps other skills for maximum-rigor runs. |
 | [ultra-analyzer](plugins/ultra-analyzer) *(beta)* | `/ultra-analyzer` skill set — rigorous data/corpus pipeline (discover → analyze → validate → synthesize) with resume-able state and `/ultra` gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF, web scrapes, JSON/CSV, SQLite. **Requires the `ultra` plugin.** |
 | [claude-migrate](plugins/claude-migrate) *(beta)* | `/claude-migrate:init` / `:run` / `:resume` / `:progress` / `:verify` — move your chats and projects from one Claude.ai account to another. Parse a data export (or extract live in a browser) → cheap-model value scan → you confirm what migrates → distill each kept chat into one paste-ready first message → re-create projects and seed chats. Always builds a byte-exact, self-contained copy page (the zero-tooling floor); when a pre-authenticated browser is reachable it also runs confirmation-gated automation (seed → await OK → rename → strip). Resume-able state machine with `/ultra` gates. **Requires the `ultra` plugin + local Node/Playwright.** |
@@ -40,7 +40,7 @@ Assuming `/plugin marketplace add SashaMarchuk/claude-plugins` was already run:
 
 ```
 /plugin install clickup@sashamarchuk-plugins
-/plugin install gevent@sashamarchuk-plugins
+/plugin install g-event@sashamarchuk-plugins
 /plugin install ultra@sashamarchuk-plugins
 /plugin install ultra-analyzer@sashamarchuk-plugins   # requires ultra
 /plugin install claude-migrate@sashamarchuk-plugins   # requires ultra + Node/Playwright
@@ -55,32 +55,47 @@ All user state lives **outside** the plugin directory by design, so `/plugin upd
 
 | Location | Contents | Used by |
 |---|---|---|
-| `~/.claude/shared/identity.json` | User profile + teammate roster (name, email, `external_ids`, `active`, `last_validated_at`) — single source of truth for "who is on the team" | `clickup`, `gevent` (read+write) · `find-call` (read-only) |
+| `~/.claude/shared/identity.json` | User profile + teammate roster (name, email, `external_ids`, `active`, `last_validated_at`) — single source of truth for "who is on the team" | `clickup`, `g-event` (read+write) · `find-call` (read-only) |
 | `~/.claude/clickup/{config.json, memory.md, drafts/}` | Workspace + lists + aliases + learned memory rules + idempotency drafts | `clickup` |
-| `~/.claude/gevent/config.json` | Calendar defaults + always-include attendees (notes bot) + behavior flags | `gevent` |
+| `~/.claude/g-event/config.json` | Calendar defaults + always-include attendees (notes bot) + behavior flags | `g-event` |
 | `~/.claude/find-call/config.json` *(optional)* | Per-source provider *preference* (`calendar`/`docs`/`transcripts` → `auto`/`cli`/`mcp`/`off`) — preference + fallback, not a hard pin. Absent = universal auto-detect. Written by `/find-call:config` (guarded atomic write) or hand-edited | `find-call` |
 | `~/.claude/log-time/{config.md, runs/}` | Free-form markdown config (evidence sources, tracker targets, day rules, output style) + per-run evidence/audit artifacts. Written by `/log-time:onboard` / `:config` (confirm-before-write) or hand-edited — it's just text | `log-time` |
 | `~/.claude/skills/ultra/global-lessons.md` | Per-run lessons log | `ultra` |
 | `<your-project>/.planning/ultra-analyzer/<run-name>/` | Config, seeds, findings, state per analyzer run | `ultra-analyzer` |
 | `<your-project>/.planning/claude-migrate/<run-name>/` | Per-run migration state, parsed chat units, value scores, distilled briefs, and the generated copy page | `claude-migrate` |
 
-All JSON writes are atomic (`tmp + fsync + os.replace`) under `fcntl.flock` on a sentinel file, and readers preserve unknown keys — so `clickup` and `gevent` can evolve independently without stepping on each other's fields in `identity.json`.
+All JSON writes are atomic (`tmp + fsync + os.replace`) under `fcntl.flock` on a sentinel file, and readers preserve unknown keys — so `clickup` and `g-event` can evolve independently without stepping on each other's fields in `identity.json`.
 
 This preservation guarantee was verified empirically — a sandboxed `rm -rf + recopy` of the plugin dir (simulating a worst-case update) left every pre-seeded user file intact.
 
-### Migrating from the legacy user-level `create-call` skill (now published as `gevent`)
+### Migrating from the legacy user-level `create-call` skill (now published as `g-event`)
 
-**Important**: the calendar plugin was renamed from `create-call` to `gevent` in this marketplace. If you previously installed `create-call` as a **user-level skill** at `~/.claude/skills/create-call/`, that legacy skill still **wins over the plugin** by Claude Code precedence. The rename to `gevent` doesn't change that — the legacy user-level skill is keyed on the directory name on disk, not the plugin name.
+**Important**: the calendar plugin was renamed from `create-call` to `g-event` in this marketplace. If you previously installed `create-call` as a **user-level skill** at `~/.claude/skills/create-call/`, that legacy skill still **wins over the plugin** by Claude Code precedence. The rename to `g-event` doesn't change that — the legacy user-level skill is keyed on the directory name on disk, not the plugin name.
 
 Migration steps:
 
 1. Back up your legacy contacts (optional): `cp ~/.claude/skills/create-call/contacts.json /tmp/create-call-contacts.bak.json`
 2. Remove the legacy user-level skill: `rm -rf ~/.claude/skills/create-call`
-3. Install the plugin under its new name: `/plugin install gevent@sashamarchuk-plugins` (after `marketplace add SashaMarchuk/claude-plugins`)
-4. Run onboarding: `/gevent:onboard`
+3. Install the plugin under its new name: `/plugin install g-event@sashamarchuk-plugins` (after `marketplace add SashaMarchuk/claude-plugins`)
+4. Run onboarding: `/g-event:onboard`
 5. The identity wizard offers (as a one-time prompt on first run if it detects a leftover legacy contacts file anywhere in common backup locations) to import your `contacts.json` entries as a thin seed into `~/.claude/shared/identity.json`.
 
 The plugin will emit a loud banner on every invocation as long as `~/.claude/skills/create-call/` still exists, so it's hard to miss. (The banner path still points at the legacy directory — that's the shadow source, not the new plugin name.)
+
+### Migrating from `gevent` (the calendar plugin's previous name)
+
+**The calendar plugin was renamed `gevent` → `g-event`** (the old name collided with the well-known Python `gevent` library). A plugin rename changes the registry name, so `/plugin update` treats `g-event` as a new plugin rather than updating `gevent` in place — existing `gevent` users should reinstall:
+
+1. Remove the old plugin: `/plugin uninstall gevent`
+2. Install the new one: `/plugin install g-event@sashamarchuk-plugins`
+3. `/reload-plugins`
+
+What changes for you:
+
+- **Commands move** `/gevent:*` → `/g-event:*` (e.g. `/gevent:schedule` → `/g-event:schedule`).
+- **Your calendar config migrates automatically.** On the first `/g-event` run, the plugin's pre-flight deterministically copies a pre-existing `~/.claude/gevent/config.json` to `~/.claude/g-event/config.json` — only when the old file exists and the new one doesn't; otherwise it's a silent no-op. The old file is left in place so you can roll back; delete it once everything works.
+- **Your teammate roster is untouched** — `~/.claude/shared/identity.json` is shared and does not move.
+- `find-call` keeps working throughout: it reads the new config path and falls back to the legacy one when the new path is absent.
 
 ### Platform support
 
@@ -90,7 +105,7 @@ All plugins are tested on **macOS** and **Linux**. Windows is not currently supp
 
 **"Plugin `<name>` not found in any marketplace"** — the marketplace was added but you're using the wrong identifier after `@`. Inside `marketplace.json` the declared name is `sashamarchuk-plugins`. Use that:
 ```
-/plugin install gevent@sashamarchuk-plugins
+/plugin install g-event@sashamarchuk-plugins
 ```
 Not `@SashaMarchuk/claude-plugins` (that's the GitHub source, which `marketplace add` takes).
 

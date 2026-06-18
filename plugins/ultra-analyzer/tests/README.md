@@ -47,7 +47,7 @@ Baseline (post-WS-9): **68 PASS / 0 FAIL**.
 `/ultra-analyzer` ships actual shell binaries (`bin/state.sh`, `bin/claim.sh`,
 `bin/release.sh`, `bin/requeue.sh`, `bin/launch-terminal.sh`). The runner
 exercises them functionally — initialize fresh runs, claim/release topics,
-attempt path traversal, force jq injection. The `/clickup`, `/gevent`, and
+attempt path traversal, force jq injection. The `/clickup`, `/g-event`, and
 `/ultra` plugins are prose-as-contract; their runners verify SKILL.md /
 references/ greps. /ultra-analyzer's runner does both.
 

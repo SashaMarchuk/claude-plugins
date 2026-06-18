@@ -18,7 +18,7 @@ harnesses do.
 - **Manifest** — valid JSON, `name == find-call`.
 - **Config-driven** — reads `~/.claude/shared/identity.json` (Step 0), uses
   `{user.name}` placeholders, degrades gracefully (no HALT) when the file is
-  missing, treats `~/.claude/gevent/config.json` as an optional soft dependency.
+  missing, treats `~/.claude/g-event/config.json` as an optional soft dependency.
 - **Read-only contract** — declares read-only; never writes `identity.json`,
   Calendar/Drive/Sembly, or time logs.
 - **Universal source model (preference + fallback)** — calendar/docs/transcripts

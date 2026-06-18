@@ -15,7 +15,7 @@ Subcommands:
   --set k=v [k=v ...]          atomically write source preferences (calendar/docs/transcripts)
 
 Writes are atomic (tmp + fsync + os.replace) under fcntl.flock on a sibling
-sentinel file, mirroring the discipline the clickup/gevent shared-identity
+sentinel file, mirroring the discipline the clickup/g-event shared-identity
 helper uses. POSIX only (fcntl) — macOS + Linux, matching the rest of the
 marketplace. The file is find-call-private, so there is no cross-plugin schema
 contract to honor; unknown top-level keys are still preserved on rewrite.

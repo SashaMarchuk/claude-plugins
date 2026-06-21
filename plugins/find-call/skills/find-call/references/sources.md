@@ -62,6 +62,6 @@ Prefer MCP first (an MCP-first setup with no workspace CLI installed) — still 
 { "sources": { "calendar": "mcp", "docs": "mcp", "transcripts": "auto" } }
 ```
 
-## Relationship to `/gevent`
+## Relationship to `/g-event`
 
-`/find-call` still reads `~/.claude/gevent/config.json` `defaults.calendar` (which calendar ID to search) and `always_include[]` (which notes bot appends the Meeting Resources block) when that file is present — see `identity-contract.md`. That's about *which calendar*, not *which provider*. Provider preference lives only in `~/.claude/find-call/config.json`, so `/find-call` never has to write `/gevent`'s file.
+`/find-call` still reads `~/.claude/g-event/config.json` (falling back to the legacy `~/.claude/gevent/config.json` when the new path is absent) `defaults.calendar` (which calendar ID to search) and `always_include[]` (which notes bot appends the Meeting Resources block) when that file is present — see `identity-contract.md`. That's about *which calendar*, not *which provider*. Provider preference lives only in `~/.claude/find-call/config.json`, so `/find-call` never has to write `/g-event`'s file.

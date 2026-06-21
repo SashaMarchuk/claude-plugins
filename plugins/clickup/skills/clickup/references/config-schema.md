@@ -3,7 +3,7 @@
 ## Shared-contract constants
 
 ```python
-# SHARED between /clickup and /gevent. Keep in sync with the gevent helper.
+# SHARED between /clickup and /g-event. Keep in sync with the g-event helper.
 # Cross-plugin contract: both plugins MUST define these identically.
 
 SCHEMA_VERSION_DEPRECATION_DAYS = 90
@@ -23,7 +23,7 @@ PREVIOUS_SCHEMA_VERSION = 1  # supported for SCHEMA_VERSION_DEPRECATION_DAYS
 
 The clickup skill reads **two** JSON files on every invocation:
 
-1. `~/.claude/shared/identity.json` — user profile + teammate roster, shared with `/gevent`.
+1. `~/.claude/shared/identity.json` — user profile + teammate roster, shared with `/g-event`.
 2. `~/.claude/clickup/config.json` — clickup-specific state (workspace, lists, preferences).
 
 Plus a human-editable `~/.claude/clickup/memory.md` (learned rules) and a `drafts/` subdir for idempotency snapshots.
@@ -33,8 +33,8 @@ Plus a human-editable `~/.claude/clickup/memory.md` (learned rules) and a `draft
 These apply to BOTH JSON files, whenever the skill writes them:
 
 1. **Atomic write** — write to `<file>.tmp` in the same dir, `fsync`, then `os.replace(tmp, file)`. Never edit in place.
-2. **`fcntl.flock`** — take an exclusive lock on a sibling sentinel file (`<file>.lock` — NO leading dot on the sibling; e.g. `identity.json` → `identity.json.lock`). For the SHARED `identity.json` file the canonical cross-plugin lock path is **`~/.claude/shared/identity.json.lock`** (matches `/gevent`'s helper exactly — deviation breaks mutual exclusion). Hold the lock for the entire read-modify-write. The kernel releases the lock when the process dies, so stale locks are impossible.
-3. **Preserve unknown keys** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/gevent` may have added fields to a teammate record that this version of `/clickup` does not know about; they must survive a rewrite.
+2. **`fcntl.flock`** — take an exclusive lock on a sibling sentinel file (`<file>.lock` — NO leading dot on the sibling; e.g. `identity.json` → `identity.json.lock`). For the SHARED `identity.json` file the canonical cross-plugin lock path is **`~/.claude/shared/identity.json.lock`** (matches `/g-event`'s helper exactly — deviation breaks mutual exclusion). Hold the lock for the entire read-modify-write. The kernel releases the lock when the process dies, so stale locks are impossible.
+3. **Preserve unknown keys** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/g-event` may have added fields to a teammate record that this version of `/clickup` does not know about; they must survive a rewrite.
 4. **`schemaVersion: 2`** — integer at the top of every file. Writers ALWAYS emit the current version (`CURRENT_SCHEMA_VERSION = 2`). Readers accept both v1 and v2 during the 90-day back-compat window (2026-04-24 → 2026-07-23 — see `SCHEMA_VERSION_DEPRECATION_DAYS`). On read: if `schemaVersion == 1`, fill in v2 defaults silently (migration-on-next-mutation — no eager write). On write: upgrade in place to v2 atomically (single `atomic_update` pass). Quarantine if `"schemaVersion" not in data` OR `not isinstance(data["schemaVersion"], int)`. If the reader sees a HIGHER version it does not understand, refuse to write (read-only fallback) rather than downgrade.
 4a. **`schemaVersion_bumped_at`** — ISO8601 timestamp next to `schemaVersion`. Set once by the writer that performs the N-1 → N upgrade; never overwritten on later writes at the same N.
 4b. **`schemaVersionHistory[]`** — append-only log of version transitions: `[{from: 1, to: 2, at: "<ISO>"}, …]`. Added by the writer on every version bump. Preserved by both plugins on round-trip (unknown-keys rule applies).
@@ -47,7 +47,7 @@ These apply to BOTH JSON files, whenever the skill writes them:
 ```python
 import fcntl, json, os, tempfile, time
 
-# Keep identical in /clickup and /gevent — this is the cross-plugin contract.
+# Keep identical in /clickup and /g-event — this is the cross-plugin contract.
 CURRENT_SCHEMA_VERSION = 2
 PREVIOUS_SCHEMA_VERSION = 1
 SCHEMA_VERSION_DEPRECATION_DAYS = 90  # back-compat window for N-1 readers
@@ -118,7 +118,7 @@ Every write path in this skill must go through `atomic_update` (or a Bash equiva
 
 ---
 
-## `~/.claude/shared/identity.json` (SHARED — /clickup + /gevent)
+## `~/.claude/shared/identity.json` (SHARED — /clickup + /g-event)
 
 Written the first time either skill's onboarding runs. Read on every invocation of either skill.
 
@@ -180,7 +180,7 @@ On-read fill-in defaults for v1 files:
   missing means "never validated", which MUST be treated as inactive
   until `/clickup` workspace-sync verifies the record — closes
   PLG-clickup-13).
-- `trusted_domains[]` — default `[]` when missing. `/gevent` uses this
+- `trusted_domains[]` — default `[]` when missing. `/g-event` uses this
   to gate silent-allow on attendee invites.
 - `schemaVersionHistory[]` — default `[]` when missing; the writer
   appends the v1 → v2 transition row on next mutation.
@@ -197,13 +197,13 @@ upgrade") and refuse auto-migration, to surface stale-plugin mixes.
 - `schemaVersion` — integer. **Current: `2`.** Writers ALWAYS emit `2`. Readers accept `{1, 2}` during the 90-day back-compat window (2026-04-24 → 2026-07-23); after the window, v1 payloads read-but-warn.
 - `schemaVersion_bumped_at` — ISO8601 UTC. Set by the writer that performs the v1 → v2 upgrade; never overwritten on later same-version writes.
 - `schemaVersionHistory[]` — append-only log of version transitions, each entry `{from: <int>, to: <int>, at: "<ISO8601>"}`. Preserved verbatim on round-trip by both plugins.
-- `trusted_domains[]` — array of ASCII domain strings (e.g. `["speedandfunction.com"]`). Consumed by `/gevent` to classify attendee emails as internal vs external; consumed by `/clickup` for the same purpose on ticket assignees. Default `[]` when missing (v1 migration). No leading dot; subdomain-matching semantics.
+- `trusted_domains[]` — array of ASCII domain strings (e.g. `["speedandfunction.com"]`). Consumed by `/g-event` to classify attendee emails as internal vs external; consumed by `/clickup` for the same purpose on ticket assignees. Default `[]` when missing (v1 migration). No leading dot; subdomain-matching semantics.
 - `user.external_ids` — open map. Reserved keys: `clickup`, `google`, `slack`, `jira`. Add more as new plugins need them. Plugin-agnostic key.
 - `teammates[].first_name` — the teammate's first name as they use it (Cyrillic ok). Used by the NFC-fallback branch of the resolver.
 - `teammates[].latin_alias` — ASCII-only short form. Required for every teammate (even if Latin-scripted name = alias). Primary key for the resolver.
 - `teammates[].email` — canonical identity. Upserts are keyed on email.
-- `teammates[].external_ids` — same open map as user. Optional per teammate. `/clickup` populates `clickup`; `/gevent` populates `google` when it has it.
-- `teammates[].active` — boolean. **v2 MUST be present**; missing is treated as `false` on read (blocks assignment until `/clickup` workspace-sync validates — closes PLG-clickup-13). `/clickup` flips to `false` when a teammate disappears from workspace members. `/gevent` still allows scheduling with inactive teammates but surfaces a banner.
+- `teammates[].external_ids` — same open map as user. Optional per teammate. `/clickup` populates `clickup`; `/g-event` populates `google` when it has it.
+- `teammates[].active` — boolean. **v2 MUST be present**; missing is treated as `false` on read (blocks assignment until `/clickup` workspace-sync validates — closes PLG-clickup-13). `/clickup` flips to `false` when a teammate disappears from workspace members. `/g-event` still allows scheduling with inactive teammates but surfaces a banner.
 - `teammates[].sources` — array of origins. A single teammate can carry multiple tags (union across discovery passes). Reserved values:
   - `"clickup-workspace"` — pulled from `mcp__clickup__clickup_get_workspace_members` (current workspace members)
   - `"clickup-tasks"` — pulled from `mcp__clickup__clickup_filter_tasks` assignees on the user's open tasks (catches contractors/external collaborators not in the workspace roster)

@@ -25,7 +25,7 @@ Run this before anything else, in every mode:
 
 1. Read `~/.claude/log-time/config.md`. If present, internalize every section — sources, targets, day rules, output style, plus any free-form rules that don't fit those headings (they are equally binding).
 2. **If absent, onboarding is mandatory.** In every mode except `--status`: tell the user there is no config yet, switch directly into the `## Mode: --onboard` flow, and only after the config file is written resume what they originally asked for. **Never build a time-log without a config on disk**; never silently substitute defaults. (`--status` just reports the missing config.) The wizard's steps remain individually skippable — skipped sections become commented placeholders — so even a minimal pass produces a config and this forced detour happens exactly once.
-3. Read `~/.claude/shared/identity.json` if it exists (read-only — this skill never writes it) to learn the user's name/email for matching calendar attendance and tracker activity. Do not HALT if it is missing — proceed and resolve "me" per-source at runtime. Users of the `clickup` or `gevent` plugins can run their `onboard identity` step to create it.
+3. Read `~/.claude/shared/identity.json` if it exists (read-only — this skill never writes it) to learn the user's name/email for matching calendar attendance and tracker activity. Do not HALT if it is missing — proceed and resolve "me" per-source at runtime. Users of the `clickup` or `g-event` plugins can run their `onboard identity` step to create it.
 
 ## Invocation modes
 

@@ -1,4 +1,4 @@
-# /gevent modes
+# /g-event modes
 
 Detailed flow for each mode. Load only the section for the current invocation.
 
@@ -8,7 +8,7 @@ Detailed flow for each mode. Load only the section for the current invocation.
 - [auto](#auto) — silent create with defaults
 - [onboard](#onboard) — full wizard (identity → calendar)
 - [onboard-identity](#onboard-identity) — shared identity wizard only
-- [onboard-calendar](#onboard-calendar) — gevent-local wizard only
+- [onboard-calendar](#onboard-calendar) — g-event-local wizard only
 - [status](#status) — health check of both files
 - [calendar](#calendar) — switch active calendar
 
@@ -58,7 +58,7 @@ Examples:
 - "move Misha off the call" → update only (remove-attendee sub-intent) → update.
 - "remove the call" → cancel only (no update verb, no new-time) → cancel.
 
-The `/gevent:update <text>` and `/gevent:delete <text>` command shims explicitly bypass this precedence — the user has already chosen the intent at the command level. The skill's intent classifier runs only when the user invokes `/gevent` or `/gevent:schedule` without an explicit sub-command.
+The `/g-event:update <text>` and `/g-event:delete <text>` command shims explicitly bypass this precedence — the user has already chosen the intent at the command level. The skill's intent classifier runs only when the user invokes `/g-event` or `/g-event:schedule` without an explicit sub-command.
 
 If — AFTER applying the precedence rule — intent is still genuinely ambiguous (e.g. "do something with the X meeting"), `AskUserQuestion` once to disambiguate. The precedence rule fires BEFORE the ambiguity prompt, so the cancel+update case never triggers a needless prompt.
 
@@ -138,7 +138,7 @@ Silent create. Skip preview. No interactive prompts beyond the safety-net refusa
 Full wizard. Runs `onboard-identity` → `onboard-calendar` back-to-back. Skips whichever slice is already complete.
 
 1. If `~/.claude/shared/identity.json` missing or `onboarding_complete != true` → run [onboard-identity](#onboard-identity).
-2. If `~/.claude/gevent/config.json` missing or `onboarding_complete != true` → run [onboard-calendar](#onboard-calendar).
+2. If `~/.claude/g-event/config.json` missing or `onboarding_complete != true` → run [onboard-calendar](#onboard-calendar).
 3. If a call seed was carried in, resume [default](#default) with that seed.
 
 ---
@@ -147,7 +147,7 @@ Full wizard. Runs `onboard-identity` → `onboard-calendar` back-to-back. Skips 
 
 Writes `~/.claude/shared/identity.json` — **shared with `/clickup`**. Read-only for every subsequent skill that needs user + teammates.
 
-This flow is **identical in both `/clickup` and `/gevent`** — onboarding from either skill produces the same identity.json populated from the maximum set of sources available on this machine. Running it from either side is equivalent; the other skill just inherits the result.
+This flow is **identical in both `/clickup` and `/g-event`** — onboarding from either skill produces the same identity.json populated from the maximum set of sources available on this machine. Running it from either side is equivalent; the other skill just inherits the result.
 
 ### Flow
 
@@ -442,7 +442,7 @@ Only prompt for teammates where EITHER the proposal differs from the current `la
 - has a legacy alias (strong signal — user picked it once already), OR
 - `calendar_count >= 2` (met in at least two small meetings in 14d)
 
-Sort within the card by `(has_legacy desc, calendar_count desc, first_name asc)`. Hard cap at **20 lines** for fatigue control; remaining teammates keep `latin_alias = first_name`. Document this in a card footer: `"N more teammates defaulted to first_name — re-run /gevent --onboard identity to refine."`.
+Sort within the card by `(has_legacy desc, calendar_count desc, first_name asc)`. Hard cap at **20 lines** for fatigue control; remaining teammates keep `latin_alias = first_name`. Document this in a card footer: `"N more teammates defaulted to first_name — re-run /g-event --onboard identity to refine."`.
 
 ##### Collision pre-pass (MANDATORY — never present a card with built-in collisions)
 
@@ -484,7 +484,7 @@ Leave a right-side blank to skip that teammate (keeps first_name).
 
 1. Parse each line into `{email, proposed_alias}`. Lines with blank right-side → use `first_name`. `accept all` sentinel → use every proposal as shown.
 2. Final-collision recheck (casefolded). If any duplicates remain → re-prompt with a `⚠ alias X used by A and B — disambiguate:` header. Max 2 retry rounds; 3rd attempt → auto-append `last_initial` and proceed with a **banner warning (L-11 — verbatim text, do NOT paraphrase)**:
-   > `⚠ Alias-collision auto-resolved on 3rd attempt: <alias> → <alias>.<L1> (<full_name_1>) and <alias> → <alias>.<L2> (<full_name_2>). Edit ~/.claude/shared/identity.json directly to override, or re-run /gevent:onboard identity to redo aliases.`
+   > `⚠ Alias-collision auto-resolved on 3rd attempt: <alias> → <alias>.<L1> (<full_name_1>) and <alias> → <alias>.<L2> (<full_name_2>). Edit ~/.claude/shared/identity.json directly to override, or re-run /g-event:onboard identity to redo aliases.`
 3. Apply to `teammates[].latin_alias` via the same atomic update as Step 8 (NOT a separate write — merge into Step 8's single atomic commit).
 4. Skip entirely if zero rows qualify (no fatigue on teams where Latin-first-name defaults are already good).
 
@@ -496,7 +496,7 @@ Re-running `--onboard identity` diffs EACH teammate's current `latin_alias` agai
 
 Via the `atomic_update` helper (see `config-schema.md` → "Reference write helper"). `fcntl.flock` on `~/.claude/shared/identity.json.lock` is held for the **ENTIRE read-modify-write** — NOT just for the final tempfile-rename. Set `schemaVersion: 2`, `onboarding_complete: true`, `updated_at: <now>`.
 
-**Stale-read guard (M-5 — protects against concurrent /clickup or /gevent writers).** Steps 5/7/7b above run AskUserQuestion review cards based on a pre-lock snapshot. If a concurrent `/clickup` or `/gevent` invocation in another terminal mutates `identity.json` while the user is mid-prompt (a slow review-card cycle can take minutes — e.g. confirming Cyrillic aliases for 30 teammates), naively committing the user's accept/reject decisions on the stale snapshot would silently overwrite the other plugin's fresh mutation. The Step 8 commit therefore re-reads inside the flock and compares a stable hash of MATERIAL fields against the snapshot hash captured at the start of the prompt-cycle:
+**Stale-read guard (M-5 — protects against concurrent /clickup or /g-event writers).** Steps 5/7/7b above run AskUserQuestion review cards based on a pre-lock snapshot. If a concurrent `/clickup` or `/g-event` invocation in another terminal mutates `identity.json` while the user is mid-prompt (a slow review-card cycle can take minutes — e.g. confirming Cyrillic aliases for 30 teammates), naively committing the user's accept/reject decisions on the stale snapshot would silently overwrite the other plugin's fresh mutation. The Step 8 commit therefore re-reads inside the flock and compares a stable hash of MATERIAL fields against the snapshot hash captured at the start of the prompt-cycle:
 
 ```python
 import hashlib, json
@@ -517,17 +517,17 @@ def step_8_commit(identity_path, prompt_cycle_snapshot, user_decisions):
         # Re-read happens automatically — atomic_update opens the file inside the lock.
         # Compare material-field hash from the pre-prompt snapshot vs the freshly-read data.
         if material_hash(data) != material_hash(prompt_cycle_snapshot):
-            # A concurrent /clickup or /gevent write changed a material field
+            # A concurrent /clickup or /g-event write changed a material field
             # (e.g. user.email) while the AskUserQuestion review card was open.
             # Refuse the silent overwrite. In interactive mode: re-prompt the user
             # with a "config drifted while you were reviewing — re-confirm?" card.
             # In --auto / non-interactive paths: abort the commit and surface
             # a one-line reason ("identity.json drifted under flock during onboarding;
-            # re-run /gevent:onboard identity").
+            # re-run /g-event:onboard identity").
             raise SystemExit(
                 "identity.json material fields drifted during onboarding "
-                "(concurrent /clickup or /gevent write detected on flock re-acquire). "
-                "Re-prompt or re-run `/gevent:onboard identity` — refusing silent overwrite."
+                "(concurrent /clickup or /g-event write detected on flock re-acquire). "
+                "Re-prompt or re-run `/g-event:onboard identity` — refusing silent overwrite."
             )
         # Hash matched: apply the user's decisions onto the freshly-read data
         # (NOT onto the stale snapshot — last-writer-wins on UNKNOWN fields,
@@ -555,7 +555,7 @@ If the user interrupts mid-flow, `onboarding_complete` stays `false` in identity
 
 ## onboard-calendar
 
-Writes `~/.claude/gevent/config.json`. Assumes `~/.claude/shared/identity.json` is complete; if not, redirects to [onboard-identity](#onboard-identity) first.
+Writes `~/.claude/g-event/config.json`. Assumes `~/.claude/shared/identity.json` is complete; if not, redirects to [onboard-identity](#onboard-identity) first.
 
 ### Flow
 
@@ -590,7 +590,7 @@ Writes `~/.claude/gevent/config.json`. Assumes `~/.claude/shared/identity.json` 
    - `past_time_check`: `true`
    - `notes_bot_decided`: `true` (already set by step 2 — never editable here; surfaced for transparency only).
 
-5. **Write config** to `~/.claude/gevent/config.json` via atomic helper + flock on `~/.claude/gevent/.config.json.lock`. Fields: `schemaVersion: 2`, `onboarding_complete: true`, `updated_at: <now>`, `defaults`, `behavior` (including `notes_bot_decided: true`), `always_include[]`.
+5. **Write config** to `~/.claude/g-event/config.json` via atomic helper + flock on `~/.claude/g-event/.config.json.lock`. Fields: `schemaVersion: 2`, `onboarding_complete: true`, `updated_at: <now>`, `defaults`, `behavior` (including `notes_bot_decided: true`), `always_include[]`.
 
 6. **If a call seed was carried in**, resume [default](#default) now.
 
@@ -603,15 +603,15 @@ Health check across BOTH files. Read-only.
 ### Output
 
 ```
-/gevent status
+/g-event status
 ─────────────────────────────────────
 identity.json    (~/.claude/shared/)
   User:          Sashko Marchuk <sasha@…>
   Teammates:     18
   Schema:        v1  ✓
-  Shared with:   /clickup, /gevent
+  Shared with:   /clickup, /g-event
 
-gevent/config.json
+g-event/config.json
   Calendar:      primary
   Timezone:      America/New_York
   Duration:      30 min default
@@ -628,12 +628,12 @@ Never mutates state. Safe to run any time.
 
 ## calendar
 
-Switch the active default calendar. Only mutates `~/.claude/gevent/config.json` (`defaults.calendar`).
+Switch the active default calendar. Only mutates `~/.claude/g-event/config.json` (`defaults.calendar`).
 
 ### Flow
 
 1. `npx @googleworkspace/cli calendar calendarList list --params '{}' 2>/dev/null` to fetch all calendars the current auth has access to.
 2. `AskUserQuestion` (single-select) with the list.
 3. **L-12 — validate the picked ID against `calendars[]` registry (and against `CALENDAR_ID_RE` from M-4) BEFORE writing.** If the chosen ID is not in the freshly-fetched `calendarList` AND not in `config.calendars[]`, refuse with a banner: `"Calendar <id> not in your accessible list — Google would reject. Re-pick from the list above."`. Also revalidate `CALENDAR_ID_RE` (M-4) — defense-in-depth in case a malformed ID slipped past auto-detection.
-4. On pick + validation pass, atomic-write `defaults.calendar` in `~/.claude/gevent/config.json` AND upsert into `calendars[]` registry (so `--status` output reflects the canonical name + timezone).
+4. On pick + validation pass, atomic-write `defaults.calendar` in `~/.claude/g-event/config.json` AND upsert into `calendars[]` registry (so `--status` output reflects the canonical name + timezone).
 5. Confirm: "Active calendar is now `<name>` (id: `<id>`). Future events default here unless overridden."

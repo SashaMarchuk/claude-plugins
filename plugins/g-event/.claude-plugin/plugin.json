@@ -1,0 +1,11 @@
+{
+  "name": "g-event",
+  "version": "1.3.0",
+  "description": "Universal /g-event skill for scheduling, updating, and cancelling Google Calendar events with Google Meet. Reads teammates from ~/.claude/shared/identity.json (same file /clickup uses). Two-step onboarding (identity + calendar defaults), always-include attendees (e.g. notes bot), conflict detection, past-time guard, and atomic config writes.",
+  "author": {
+    "name": "Sasha Marchuk",
+    "url": "https://github.com/SashaMarchuk"
+  },
+  "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/g-event",
+  "license": "MIT"
+}

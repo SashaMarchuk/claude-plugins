@@ -38,14 +38,14 @@
       "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/ultra-analyzer"
     },
     {
-      "name": "gevent",
-      "description": "Universal /gevent skill for scheduling, updating, and cancelling Google Calendar events with Google Meet — always attaches a configurable notes bot, conflict detection, past-time guard, two-step onboarding (identity + calendar defaults). Reads teammates from ~/.claude/shared/identity.json, the same file the `clickup` plugin uses, so names resolve the same way in both.",
+      "name": "g-event",
+      "description": "Universal /g-event skill for scheduling, updating, and cancelling Google Calendar events with Google Meet — always attaches a configurable notes bot, conflict detection, past-time guard, two-step onboarding (identity + calendar defaults). Reads teammates from ~/.claude/shared/identity.json, the same file the `clickup` plugin uses, so names resolve the same way in both.",
       "author": {
         "name": "Sasha Marchuk"
       },
-      "source": "./plugins/gevent",
+      "source": "./plugins/g-event",
       "category": "productivity",
-      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/gevent"
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/g-event"
     },
     {
       "name": "claude-migrate",
@@ -59,7 +59,7 @@
     },
     {
       "name": "find-call",
-      "description": "(beta) Universal /find-call skill — pull deep, cited context from your past Google Calendar meetings. Searches Calendar + optional transcripts (Sembly or any connected notetaker) in parallel, reads the notes-bot \"Meeting Resources\" block (Transcription, Meeting Notes, Video, Parent Folder), disambiguates matches, and spawns sonnet sub-agents per call for transcript-depth. Uses whatever calendar/doc/transcript tools are available by default — set a preferred provider per source via `/find-call:config` (always with fallback, so the data is retrieved by any working method) and inspect resolution via `/find-call:status`. Resolves teammate names against ~/.claude/shared/identity.json, the same roster `clickup` and `gevent` use. Investigation is read-only — never modifies Calendar, Drive, or transcripts.",
+      "description": "(beta) Universal /find-call skill — pull deep, cited context from your past Google Calendar meetings. Searches Calendar + optional transcripts (Sembly or any connected notetaker) in parallel, reads the notes-bot \"Meeting Resources\" block (Transcription, Meeting Notes, Video, Parent Folder), disambiguates matches, and spawns sonnet sub-agents per call for transcript-depth. Uses whatever calendar/doc/transcript tools are available by default — set a preferred provider per source via `/find-call:config` (always with fallback, so the data is retrieved by any working method) and inspect resolution via `/find-call:status`. Resolves teammate names against ~/.claude/shared/identity.json, the same roster `clickup` and `g-event` use. Investigation is read-only — never modifies Calendar, Drive, or transcripts.",
       "author": {
         "name": "Sasha Marchuk"
       },

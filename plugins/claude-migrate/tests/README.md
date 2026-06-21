@@ -11,7 +11,7 @@ bash plugins/claude-migrate/tests/run.sh
 ```
 
 Exit 0 = all PASS. Exit 1 = at least one FAIL. The plugin is registered in the root master runner
-(`tests/run-all.sh` `PLUGINS=(clickup gevent ultra ultra-analyzer claude-migrate)`); the master harness must
+(`tests/run-all.sh` `PLUGINS=(clickup g-event ultra ultra-analyzer claude-migrate)`); the master harness must
 stay green with `claude-migrate` included.
 
 ## Why this runner exercises real binaries

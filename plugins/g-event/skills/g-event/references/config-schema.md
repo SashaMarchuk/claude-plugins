@@ -3,7 +3,7 @@
 ## Shared-contract constants
 
 ```python
-# SHARED between /gevent and /clickup. Keep in sync with the clickup helper.
+# SHARED between /g-event and /clickup. Keep in sync with the clickup helper.
 # Cross-plugin contract: both plugins MUST define these identically.
 
 SCHEMA_VERSION_DEPRECATION_DAYS = 90
@@ -30,10 +30,10 @@ PREVIOUS_SCHEMA_VERSION = 1  # supported for SCHEMA_VERSION_DEPRECATION_DAYS
 - **Schema bumps DO require a plugin-version bump** (minor at minimum) — the writer code that emits the new schema must ship as a tagged release. The reverse is not true.
 - Audit trail: every schema bump appends a `{from, to, at}` row to `schemaVersionHistory[]` (see schema example) AND bumps `plugin.json:version`. Future drift is detectable by walking commit history and joining `schemaVersionHistory` against tagged `plugin.json` versions.
 
-The gevent skill reads **two** JSON files on every invocation:
+The g-event skill reads **two** JSON files on every invocation:
 
 1. `~/.claude/shared/identity.json` — user profile + teammate roster, shared with `/clickup`.
-2. `~/.claude/gevent/config.json` — gevent-specific calendar defaults + always-include attendees.
+2. `~/.claude/g-event/config.json` — g-event-specific calendar defaults + always-include attendees.
 
 ## Non-negotiable file rules
 
@@ -41,7 +41,7 @@ These apply to BOTH JSON files, whenever the skill writes them:
 
 1. **Atomic write** — write to `<file>.tmp` in the same dir, `fsync`, then `os.replace(tmp, file)`. Never edit in place.
 2. **`fcntl.flock`** — take an exclusive lock on a sibling sentinel file (`<file>.lock` — NO leading dot on the sibling; e.g. `identity.json` → `identity.json.lock`). For the SHARED `identity.json` file the canonical cross-plugin lock path is **`~/.claude/shared/identity.json.lock`** (matches `/clickup`'s helper exactly — deviation breaks mutual exclusion). Hold the lock for the entire read-modify-write. The kernel releases the lock when the process dies, so stale locks are impossible.
-3. **Preserve unknown keys (mechanical, not aspirational)** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/clickup` may have added fields to a teammate record that this version of `/gevent` does not know about; they must survive a rewrite. **The `atomic_update` helper enforces this with a key-set diff inside the flocked block**: snapshot recursive key-set BEFORE the closure runs; compare AFTER. Any key present in pre-read but missing in post-write triggers refusal to commit the tempfile-rename — UNLESS the closure declared the deletion via `mutate.__explicit_deletes__ = {"some.key.path"}`. This makes "preserve unknown keys" a runtime guarantee, not an emergent property of closure discipline. A `future_field` written by a newer plugin will survive every round-trip through this helper; a closure that wholesale-replaces a sub-object and accidentally drops a key will fail-loud rather than silent-stripping the field.
+3. **Preserve unknown keys (mechanical, not aspirational)** — when rewriting, round-trip any top-level or nested keys the skill does not recognize. `/clickup` may have added fields to a teammate record that this version of `/g-event` does not know about; they must survive a rewrite. **The `atomic_update` helper enforces this with a key-set diff inside the flocked block**: snapshot recursive key-set BEFORE the closure runs; compare AFTER. Any key present in pre-read but missing in post-write triggers refusal to commit the tempfile-rename — UNLESS the closure declared the deletion via `mutate.__explicit_deletes__ = {"some.key.path"}`. This makes "preserve unknown keys" a runtime guarantee, not an emergent property of closure discipline. A `future_field` written by a newer plugin will survive every round-trip through this helper; a closure that wholesale-replaces a sub-object and accidentally drops a key will fail-loud rather than silent-stripping the field.
 4. **`schemaVersion: 2`** — integer at the top of every file. Writers ALWAYS emit the current version (`CURRENT_SCHEMA_VERSION = 2`). Readers accept both v1 and v2 during the 90-day back-compat window (2026-04-24 → 2026-07-23 — see `SCHEMA_VERSION_DEPRECATION_DAYS`). On read: if `schemaVersion == 1`, fill in v2 defaults silently (migration-on-next-mutation — no eager write). On write: upgrade in place to v2 atomically (single `atomic_update` pass). Quarantine if `"schemaVersion" not in data` OR `not isinstance(data["schemaVersion"], int)`. If the reader sees a HIGHER version it does not understand, refuse to write (read-only fallback) rather than downgrade.
 4a. **`schemaVersion_bumped_at`** — ISO8601 timestamp next to `schemaVersion`. Set once by the writer that performs the N-1 → N upgrade; never overwritten on later writes at the same N.
 4b. **`schemaVersionHistory[]`** — append-only log of version transitions: `[{from: 1, to: 2, at: "<ISO>"}, …]`. Added by the writer on every version bump. Preserved by both plugins on round-trip (unknown-keys rule applies).
@@ -54,7 +54,7 @@ These apply to BOTH JSON files, whenever the skill writes them:
 ```python
 import fcntl, json, os, tempfile, time
 
-# Keep identical in /gevent and /clickup — this is the cross-plugin contract.
+# Keep identical in /g-event and /clickup — this is the cross-plugin contract.
 CURRENT_SCHEMA_VERSION = 2
 PREVIOUS_SCHEMA_VERSION = 1
 SCHEMA_VERSION_DEPRECATION_DAYS = 90  # back-compat window for N-1 readers
@@ -164,7 +164,7 @@ Every write path in this skill must go through `atomic_update` (or a Bash equiva
 
 ---
 
-## `~/.claude/shared/identity.json` (SHARED — /clickup + /gevent)
+## `~/.claude/shared/identity.json` (SHARED — /clickup + /g-event)
 
 Written the first time either skill's onboarding runs. Read on every invocation of either skill.
 
@@ -217,7 +217,7 @@ On-read fill-in defaults for v1 files:
 - `teammates[].active` — default `false` when missing (NEVER `true`;
   missing means "never validated", which MUST be treated as inactive
   until `/clickup` workspace-sync verifies the record).
-- `trusted_domains[]` — default `[]` when missing. `/gevent` uses this
+- `trusted_domains[]` — default `[]` when missing. `/g-event` uses this
   to gate silent-allow on attendee invites; without it, every external
   domain falls through to the homoglyph + IDN gate for prompt.
 - `schemaVersionHistory[]` — default `[]` when missing; the writer
@@ -227,13 +227,13 @@ On-read fill-in defaults for v1 files:
 
 After 2026-07-23, readers on plugin versions that have passed the
 deprecation window MUST warn the user on a v1 payload ("identity.json
-is still on schemaVersion 1 — run `/gevent:onboard identity` or
+is still on schemaVersion 1 — run `/g-event:onboard identity` or
 `/clickup:onboard identity` to upgrade") and refuse auto-migration, to
 surface stale-plugin mixes.
 
 ### `trusted_domains[]` (L-14)
 
-Initialized at identity-onboarding Step 3 with the user's own email domain. Used by `/gevent` to gate the silent-allow-vs-prompt decision on attendee invites: an external-domain email that lands in `trusted_domains[]` (because the user said "trust this domain forever" via the [T] action in Step 5 flag review) is silently accepted; otherwise it falls through to the homoglyph + IDN gate for prompt. Schema example above includes `"trusted_domains": ["speedandfunction.com"]` — a previously-undocumented field rule that this section makes explicit. Both plugins MUST round-trip the array on rewrite (unknown-keys rule applies even though this field is now known).
+Initialized at identity-onboarding Step 3 with the user's own email domain. Used by `/g-event` to gate the silent-allow-vs-prompt decision on attendee invites: an external-domain email that lands in `trusted_domains[]` (because the user said "trust this domain forever" via the [T] action in Step 5 flag review) is silently accepted; otherwise it falls through to the homoglyph + IDN gate for prompt. Schema example above includes `"trusted_domains": ["speedandfunction.com"]` — a previously-undocumented field rule that this section makes explicit. Both plugins MUST round-trip the array on rewrite (unknown-keys rule applies even though this field is now known).
 
 ### `teammates[].sources` vocabulary
 
@@ -248,14 +248,14 @@ A single teammate can carry multiple tags (union across discovery passes during 
 - `"clickup"` — **deprecated** alias for `"clickup-workspace"`. Still recognized on read.
 - `"create-call"` — **deprecated** alias for `"manual"`. Still recognized on read.
 
-### What `/gevent` uses from identity.json
+### What `/g-event` uses from identity.json
 
 - `user.email` — the organizer (auto-excluded from attendee arrays).
 - `user.name` — shown in preview headers.
 - `teammates[].first_name`, `latin_alias`, `email`, `active`, `full_name` — the attendee resolver input.
 - `teammates[].external_ids.google` — if present, not strictly required (email is enough for Calendar invites). Future Google People API integration can populate this.
 
-### What `/gevent` writes to identity.json
+### What `/g-event` writes to identity.json
 
 - **Upserts a new teammate** when the resolver sees zero matches and the user provides a valid full email (see SKILL.md → Resolution rules for validation regex + IDNA mixed-script rejection). Record shape: `{first_name: <typed>, latin_alias: <typed or ASCII>, full_name: <typed if provided>, email: <confirmed>, external_ids: {}, active: true, sources: ["manual"], last_validated_at: null}`.
 - **Never touches `user.*`** — identity wizard owns that slice.
@@ -264,7 +264,7 @@ A single teammate can carry multiple tags (union across discovery passes during 
 
 ---
 
-## `~/.claude/gevent/config.json` (gevent-only)
+## `~/.claude/g-event/config.json` (g-event-only)
 
 Written by `--onboard calendar`. Read on every invocation.
 
@@ -333,14 +333,14 @@ Written by `--onboard calendar`. Read on every invocation.
 
 ### What `/clickup` should NOT do with this file
 
-`/clickup` must NOT read or write `~/.claude/gevent/config.json`. It's gevent-private. The boundary: shared state lives in `identity.json`; everything else is plugin-local.
+`/clickup` must NOT read or write `~/.claude/g-event/config.json`. It's g-event-private. The boundary: shared state lives in `identity.json`; everything else is plugin-local.
 
 ### Validation on load
 
 - Missing `schemaVersion` OR non-integer `schemaVersion` → quarantine to `<file>.corrupt-<epoch>`, refuse write (see the `atomic_update` helper gate above).
 - `schemaVersion > CURRENT_SCHEMA_VERSION` (i.e. > 2) → refuse to write; run read-only fallback (older plugin saw a file written by a newer plugin; user must upgrade).
 - `schemaVersion == 1` during the 90-day back-compat window → accept, fill v2 defaults in memory, upgrade on next mutation.
-- `schemaVersion == 1` AFTER the back-compat window (past 2026-07-23) → read-only + warn banner "run `/gevent:onboard identity` to migrate".
+- `schemaVersion == 1` AFTER the back-compat window (past 2026-07-23) → read-only + warn banner "run `/g-event:onboard identity` to migrate".
 - Missing `defaults` or `always_include` → treat as incomplete onboarding.
 - Missing OR `false` `behavior.notes_bot_decided` → treat as incomplete onboarding (SKILL.md pre-flight step 3a HALTs; interactive mode redirects to `--onboard calendar`).
 - Corrupt JSON → rename to `config.json.corrupt-<epoch>`, surface banner, re-onboard.
@@ -361,7 +361,7 @@ The shadow check uses a broadened glob (see `SKILL.md` step 1) covering the cano
 If any of those globs match a directory, the plugin emits a banner on every invocation enumerating every hit. **L-5 + L-16: single source of truth — every reference (SKILL.md step 1, modes.md status output, this section) uses the same `⚠` emoji and verbatim wording. Do not duplicate or paraphrase elsewhere.**
 
 ```
-⚠ Legacy user-level create-call skill detected at: <hit_1>, <hit_2>, … — this plugin is now called gevent. Remove with: rm -rf <each path>. Backups under ~/.claude.backup-*, ~/.claude.bak, ~/.claude.old*, ~/.claude-backup-* are caught here too.
+⚠ Legacy user-level create-call skill detected at: <hit_1>, <hit_2>, … — this plugin is now called g-event. Remove with: rm -rf <each path>. Backups under ~/.claude.backup-*, ~/.claude.bak, ~/.claude.old*, ~/.claude-backup-* are caught here too.
 ```
 
 The plugin does NOT auto-delete the legacy directory. The user may still have `contacts.json` data there they want to copy over. Removal is their decision.

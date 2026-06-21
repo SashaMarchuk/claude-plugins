@@ -1,19 +1,19 @@
 ---
-name: gevent
-description: Google Calendar event management with Google Meet. Creates, updates, and cancels events via `npx @googleworkspace/cli`. Always attaches a configurable notes bot, checks for conflicts before creating, guards against past-time typos, and resolves attendee names against the shared `~/.claude/shared/identity.json` teammate roster (same file `/clickup` uses). Two-step onboarding writes `~/.claude/gevent/config.json` (calendar defaults + always-include list) and shares user + teammates with `/clickup`. Use when the user types `/gevent`, `/gevent:schedule`, `/gevent:schedule --auto`, `/gevent:onboard`, `/gevent:status`, `/gevent:calendar`, or says "schedule a call", "set up a meeting", "book a call with X", "move the meeting to Y", "cancel the Z call", or references a Google Meet / Calendar event.
+name: g-event
+description: Google Calendar event management with Google Meet. Creates, updates, and cancels events via `npx @googleworkspace/cli`. Always attaches a configurable notes bot, checks for conflicts before creating, guards against past-time typos, and resolves attendee names against the shared `~/.claude/shared/identity.json` teammate roster (same file `/clickup` uses). Two-step onboarding writes `~/.claude/g-event/config.json` (calendar defaults + always-include list) and shares user + teammates with `/clickup`. Use when the user types `/g-event`, `/g-event:schedule`, `/g-event:schedule --auto`, `/g-event:onboard`, `/g-event:status`, `/g-event:calendar`, or says "schedule a call", "set up a meeting", "book a call with X", "move the meeting to Y", "cancel the Z call", or references a Google Meet / Calendar event.
 user-invocable: false
 ---
 
-# /gevent
+# /g-event
 
 Universal skill for scheduling, updating, and cancelling Google Calendar events. Enforces consistent title conventions, always attaches configured notes-bot attendees, and pulls teammates from the same shared roster `/clickup` uses — so names you've already taught `/clickup` just work here too.
 
 Invocation forms (sub-commands map directly to the mode flags below):
-- `/gevent` or `/gevent:schedule <seed>` — interactive create / update / cancel
-- `/gevent:schedule --auto <seed>` — silent create with defaults
-- `/gevent:onboard [identity|calendar]` — run the wizard
-- `/gevent:status` — health-check both config files
-- `/gevent:calendar` — switch active default calendar
+- `/g-event` or `/g-event:schedule <seed>` — interactive create / update / cancel
+- `/g-event:schedule --auto <seed>` — silent create with defaults
+- `/g-event:onboard [identity|calendar]` — run the wizard
+- `/g-event:status` — health-check both config files
+- `/g-event:calendar` — switch active default calendar
 
 ## Step 1: Parse $ARGUMENTS
 
@@ -25,7 +25,7 @@ Invocation forms (sub-commands map directly to the mode flags below):
 | `--auto` | Silent create with defaults | `references/modes.md#auto` |
 | `--onboard` | Full wizard (identity + calendar) | `references/modes.md#onboard` |
 | `--onboard identity` | Re-run shared identity wizard only | `references/modes.md#onboard-identity` |
-| `--onboard calendar` | Re-run gevent-local wizard only | `references/modes.md#onboard-calendar` |
+| `--onboard calendar` | Re-run g-event-local wizard only | `references/modes.md#onboard-calendar` |
 | `--status` | Config health check (both files) | `references/modes.md#status` |
 | `--calendar` | Switch active calendar (primary ↔ other) | `references/modes.md#calendar` |
 
@@ -34,20 +34,20 @@ Invocation forms (sub-commands map directly to the mode flags below):
 **L-10 — `--auto` + non-create verb early reject.** `--auto` is silent-create only. If the seed text matches the cancel-verb set (`cancel`, `delete`, `remove`) OR the update-verb set (`move`, `reschedule`, `change`, `update`, `add attendee`, `remove attendee`) — applying the M-7 precedence rule — refuse at parse time with a clear message rather than falling through to the safety-net "Title missing or empty" refuse:
 
 ```
-/gevent:schedule --auto cancel the Sync
-→ "--auto is create-only. For cancel use `/gevent:delete <event>`. For update use `/gevent:update <change>`. Refusing rather than silently dropping the verb."
+/g-event:schedule --auto cancel the Sync
+→ "--auto is create-only. For cancel use `/g-event:delete <event>`. For update use `/g-event:update <change>`. Refusing rather than silently dropping the verb."
 ```
 
 Reject BEFORE attempting title extraction so the error message names the actual class of mistake.
 
 ## Step 2: Pre-flight (every invocation, in order)
 
-**L-19 — mechanical pre-flight via `scripts/preflight.py` (REQUIRED first action).** Before evaluating ANY of the prose pre-flight steps below, run `python scripts/preflight.py` (resolved relative to the plugin root, e.g. `python plugins/gevent/scripts/preflight.py`). The script ships three mechanical invariants matching the prose:
+**L-19 — mechanical pre-flight via `scripts/preflight.py` (REQUIRED first action).** Before evaluating ANY of the prose pre-flight steps below, run `python scripts/preflight.py` (resolved relative to the plugin root, e.g. `python plugins/g-event/scripts/preflight.py`). The script first runs `migrate_legacy_config()` — a one-time, deterministic copy-forward of a pre-1.3.0 `~/.claude/gevent/config.json` to `~/.claude/g-event/config.json` (only when the new file is absent and the old one exists; otherwise a no-op). It then runs three mechanical invariants matching the prose:
 - `detect_shadow_dirs()` — broad glob (canonical + `~/.claude.backup-*`, `~/.claude.bak/`, `~/.claude.old*/`, `~/.claude-backup-*`, `~/.claude-plugins-backup-*`).
 - `validate_schema()` — `schemaVersion` int, `behavior.notes_bot_decided` strict bool, `always_include` array, `defaults.calendar` matches `CALENDAR_ID_RE` (M-4), `defaults.send_updates` / `duration_minutes` / `conference_type` (L-6).
 - `auth_probe()` — runs `npx @googleworkspace/cli calendar calendars get` and applies the SKILL.md step 5 classifier (schema check + broadened error regex).
 
-Exit codes: `0` all pass; `1` shadow hit (banner — non-fatal); `2` schema failed (HALT); `3` auth failed (HALT — re-auth); `4` script crashed. Run `python plugins/gevent/scripts/preflight.py` BEFORE step 1 below; if it exits non-zero, surface the script's stderr to the user and act per the exit code. The prose steps below are the fallback semantics for environments where Python is unavailable AND the documentation source-of-truth that the script implements.
+Exit codes: `0` all pass; `1` shadow hit (banner — non-fatal); `2` schema failed (HALT); `3` auth failed (HALT — re-auth); `4` script crashed. Run `python plugins/g-event/scripts/preflight.py` BEFORE step 1 below; if it exits non-zero, surface the script's stderr to the user and act per the exit code. The prose steps below are the fallback semantics for environments where Python is unavailable AND the documentation source-of-truth that the script implements.
 
 1. **Shadow check FIRST (broadened glob — Migration Assistant / Time Machine / chezmoi / yadm dotfile-restore paths all covered).** Detect a shadowing legacy `create-call` skill via the union of these glob patterns AND the canonical path. The author already globs backup dirs for the legacy contacts loader at `references/modes.md` Step 7b — the shadow check uses the SAME globbing discipline so the two stay in lockstep:
    ```python
@@ -71,16 +71,16 @@ Exit codes: `0` all pass; `1` shadow hit (banner — non-fatal); `2` schema fail
        shadow_hits += [p for p in glob.glob(pat) if pathlib.Path(p).is_dir()]
    ```
    If `shadow_hits` is non-empty, prepend a loud banner on every invocation until ALL hits are removed (banner enumerates every hit path, not just the first):
-   > `⚠ Legacy user-level create-call skill detected at: <hit_1>, <hit_2>, … — this plugin is now called gevent. Remove with: rm -rf <each path>. Backups under ~/.claude.backup-*, ~/.claude.bak, ~/.claude.old*, ~/.claude-backup-* are caught here too.`
+   > `⚠ Legacy user-level create-call skill detected at: <hit_1>, <hit_2>, … — this plugin is now called g-event. Remove with: rm -rf <each path>. Backups under ~/.claude.backup-*, ~/.claude.bak, ~/.claude.old*, ~/.claude-backup-* are caught here too.`
    
    Do not HALT — the plugin can still function (the user may have intentionally disabled model-invocation on the legacy skill). But the warning is non-dismissible until every hit directory is gone. Match `pathlib.is_dir()` rather than `is_file()` to avoid following stray symlinks. Glob expansion is intentionally NOT recursive (`**`) — bounded to one nested level to keep the pre-flight cheap on machines with deep `~/.claude.backup-*` trees.
 
 2. **Read shared identity** from `~/.claude/shared/identity.json`. If missing or `onboarding_complete != true`:
-   - **In `--auto` mode**: HALT with "identity missing — run `/gevent:onboard` first" (don't drag the user into interactive onboarding mid-auto).
+   - **In `--auto` mode**: HALT with "identity missing — run `/g-event:onboard` first" (don't drag the user into interactive onboarding mid-auto).
    - In interactive mode: redirect to `--onboard identity` with one-line explanation; carry the original request as a call seed to resume after onboarding.
 
-3. **Read gevent config** from `~/.claude/gevent/config.json`. If missing or `onboarding_complete != true`:
-   - **In `--auto` mode**: HALT with "config missing — run `/gevent:onboard calendar` first".
+3. **Read g-event config** from `~/.claude/g-event/config.json`. If missing or `onboarding_complete != true`:
+   - **In `--auto` mode**: HALT with "config missing — run `/g-event:onboard calendar` first".
    - In interactive mode: redirect to `--onboard calendar`; carry the seed.
 
 3a. **Notes-bot preference gate (MANDATORY — strict JSON-schema type check, NOT a prose `!= true` substring read).** After the config loads, evaluate `behavior.notes_bot_decided` and `always_include` with explicit Python-level type assertions, NOT natural-language truthiness. The check below is load-bearing: migration tools (chezmoi, yadm, dotbot) routinely re-encode booleans as strings during dotfile sync, so a stringified `"true"` would slip past a prose `!= true` evaluation — but it MUST HALT.
@@ -88,14 +88,14 @@ Exit codes: `0` all pass; `1` shadow hit (banner — non-fatal); `2` schema fail
    v = data.get("behavior", {}).get("notes_bot_decided")
    if not (isinstance(v, bool) and v is True):
        fail("notes_bot_decided type-mismatch — must be JSON boolean true, "
-            f"got {type(v).__name__}={v!r}; run `/gevent:onboard calendar`")
+            f"got {type(v).__name__}={v!r}; run `/g-event:onboard calendar`")
    ai = data.get("always_include")
    if not isinstance(ai, list):
        fail("always_include type-mismatch — must be JSON array, "
-            f"got {type(ai).__name__}={ai!r}; run `/gevent:onboard calendar`")
+            f"got {type(ai).__name__}={ai!r}; run `/g-event:onboard calendar`")
    ```
    String `"true"`, integer `1`, float `1.0`, list `[true]`, or any other non-bool value HALTs with the type-mismatch message above. Likewise, a non-array `always_include` (object, string, null) HALTs even if `notes_bot_decided` is a valid bool.
-   - **In `--auto` mode**: HALT with "notes-bot preference missing or wrong type — run `/gevent:onboard calendar` first".
+   - **In `--auto` mode**: HALT with "notes-bot preference missing or wrong type — run `/g-event:onboard calendar` first".
    - In interactive mode: redirect to `--onboard calendar` (carry the seed). The wizard's notes-bot step (see `references/modes.md#onboard-calendar`) loops until the user picks one of three options and sets `behavior.notes_bot_decided: true` (JSON boolean, NOT string).
    - `always_include: []` (empty JSON array) is a valid state ONLY when `behavior.notes_bot_decided` passes the bool-true check (user explicitly chose "no bot"). An empty array without the flag, or a stringified `"[]"`, is NOT valid and triggers this gate.
 
@@ -133,7 +133,7 @@ Full rules + worked examples in `references/event-format.md`. Enforce:
 
 **Timezone** — always use IANA names (`America/New_York`, `Europe/Kyiv`). Never hardcode `-04:00` / `-05:00` UTC offsets — Google handles DST.
 
-**Attendees** — always start with the `always_include` list from `~/.claude/gevent/config.json` (typically the notes bot). Append user-requested attendees. **Never add the organizer** (`user.email` from identity.json) to the attendee list — Google auto-includes the organizer.
+**Attendees** — always start with the `always_include` list from `~/.claude/g-event/config.json` (typically the notes bot). Append user-requested attendees. **Never add the organizer** (`user.email` from identity.json) to the attendee list — Google auto-includes the organizer.
 
 **Conference** — create Google Meet (`conferenceSolutionKey.type = "hangoutsMeet"`) unless user explicitly says "no video" or "phone only".
 
@@ -145,7 +145,7 @@ Full rules + worked examples in `references/event-format.md`. Enforce:
 
 ## Defaults (applied unless user overrides in preview)
 
-All values read from `~/.claude/gevent/config.json` → `defaults` + `always_include`.
+All values read from `~/.claude/g-event/config.json` → `defaults` + `always_include`.
 
 | Field | Default source | Override signal |
 |---|---|---|
@@ -178,7 +178,7 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/clic
 
 ### Calendar
 
-Default is `primary` (the user's own Google account). Override via `--calendar` switch or per-invocation "on the team calendar." Calendar list lives in `~/.claude/gevent/config.json` → `defaults.calendar` and the optional `calendars[]` registry.
+Default is `primary` (the user's own Google account). Override via `--calendar` switch or per-invocation "on the team calendar." Calendar list lives in `~/.claude/g-event/config.json` → `defaults.calendar` and the optional `calendars[]` registry.
 
 **`calendarId` validation regex (load-bearing — applied at pre-flight, BEFORE the value enters any `--params` JSON envelope, read-path or write-path).** Pin the regex:
 
@@ -191,7 +191,7 @@ def validate_calendar_id(cal):
         raise SystemExit(
             f"calendarId rejected at pre-flight: {cal!r} does not match "
             r"^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$|^primary$|^[a-f0-9]{24,}@group\.calendar\.google\.com$. "
-            "Run `/gevent:calendar` to pick a valid calendar."
+            "Run `/g-event:calendar` to pick a valid calendar."
         )
 ```
 
@@ -248,7 +248,7 @@ Derive `requestId` = `<title-slug>-<unix-millis>-<6-char-random>` (e.g. `weekly-
 Refuse creation with a one-line reason when any of these hold:
 
 - `~/.claude/shared/identity.json` missing or incomplete (pre-flight step 2 HALT)
-- `~/.claude/gevent/config.json` missing or incomplete (pre-flight step 3 HALT)
+- `~/.claude/g-event/config.json` missing or incomplete (pre-flight step 3 HALT)
 - Notes-bot preference not yet decided (`behavior.notes_bot_decided != true` — pre-flight step 3a HALT)
 - Google Workspace CLI not authenticated
 - Title missing or empty after extraction
@@ -285,7 +285,7 @@ After any edit, redraw the preview and repeat. Cancel abandons the draft.
 ## Files (user state, OUTSIDE the plugin dir — survives `/plugin update`)
 
 - `~/.claude/shared/identity.json` — **SHARED with `/clickup`**. User profile + teammate roster. Both skills read and append.
-- `~/.claude/gevent/config.json` — gevent-local. Calendar defaults, always-include attendees, behavior flags.
+- `~/.claude/g-event/config.json` — g-event-local. Calendar defaults, always-include attendees, behavior flags.
 
 All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file. The canonical identity.json lock is **`~/.claude/shared/identity.json.lock`** (NO leading dot — sibling of `identity.json`, not a dotfile). This path is the cross-plugin contract shared with `/clickup`; any deviation breaks mutual exclusion. See the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/clickup` fields this plugin doesn't know about).
 
@@ -310,4 +310,4 @@ Schemas + examples in `references/config-schema.md`.
 
 - `references/modes.md` — detailed flow for every mode
 - `references/event-format.md` — title, time parsing, attendee conventions with examples
-- `references/config-schema.md` — identity.json + gevent/config.json formats + atomic-write helper
+- `references/config-schema.md` — identity.json + g-event/config.json formats + atomic-write helper

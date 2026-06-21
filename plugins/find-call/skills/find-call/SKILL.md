@@ -1,6 +1,6 @@
 ---
 name: find-call
-description: Pulls deep, cited context from the user's past Google Calendar meetings when they want to investigate, summarize, recall, or extract decisions/action-items from a past call. Reads the canonical "Meeting Resources" block (Transcription, Meeting Notes, Video, Parent Folder) that notes/transcription bots auto-append to event descriptions, plus optional transcripts (Sembly or any connected notetaker) in parallel; spawns sonnet sub-agents per matched call when transcript-depth is warranted. Uses whatever calendar/doc/transcript tools are available by default, configurable per source via ~/.claude/find-call/config.json. Resolves teammate names against the shared ~/.claude/shared/identity.json roster (same file /clickup and /gevent use). Read-only — never modifies Calendar/Drive/transcripts. Use when the user says things like "find the call about X", "summarize my call with <name>", "what did I commit to in the Y meeting", "recap the Z call", "what did <name> say about <topic>", "did we decide anything in the <project> meeting", "pull context from the <project> call", or otherwise references a past meeting with investigative intent. DO NOT trigger on: casual narration ("btw, in our call yesterday I told Tom..."), scheduling phrases ("set up a call with X" — that's /gevent), or generic summaries unrelated to a specific past call.
+description: Pulls deep, cited context from the user's past Google Calendar meetings when they want to investigate, summarize, recall, or extract decisions/action-items from a past call. Reads the canonical "Meeting Resources" block (Transcription, Meeting Notes, Video, Parent Folder) that notes/transcription bots auto-append to event descriptions, plus optional transcripts (Sembly or any connected notetaker) in parallel; spawns sonnet sub-agents per matched call when transcript-depth is warranted. Uses whatever calendar/doc/transcript tools are available by default, configurable per source via ~/.claude/find-call/config.json. Resolves teammate names against the shared ~/.claude/shared/identity.json roster (same file /clickup and /g-event use). Read-only — never modifies Calendar/Drive/transcripts. Use when the user says things like "find the call about X", "summarize my call with <name>", "what did I commit to in the Y meeting", "recap the Z call", "what did <name> say about <topic>", "did we decide anything in the <project> meeting", "pull context from the <project> call", or otherwise references a past meeting with investigative intent. DO NOT trigger on: casual narration ("btw, in our call yesterday I told Tom..."), scheduling phrases ("set up a call with X" — that's /g-event), or generic summaries unrelated to a specific past call.
 user-invocable: false
 ---
 
@@ -32,14 +32,14 @@ Precedence on conflict: `--status` > `--config` > default. Positional text with 
 
 ## Step 0 — Load identity (every invocation, before searching)
 
-Read `~/.claude/shared/identity.json` — the same file `/clickup` and `/gevent` write. This skill is a **read-only consumer**; it never writes this file. Extract:
+Read `~/.claude/shared/identity.json` — the same file `/clickup` and `/g-event` write. This skill is a **read-only consumer**; it never writes this file. Extract:
 
 - `user.name` — used in sub-agent prompts and output ("the user's commitments"). Substitute it wherever this doc says **{user.name}**.
 - `user.email` — the organizer; auto-excluded from attendee lists; its domain is the implicit "internal" domain.
 - `teammates[]` (`first_name`, `latin_alias`, `full_name`, `email`, `active`) — the attendee-name resolver input. When the user names someone by first name, match against these.
 - `trusted_domains[]` — internal-org domains; used only to label attendees as internal vs external in output. Has no security gate here (read-only skill).
 
-**Optional, soft dependency on `/gevent`:** if `~/.claude/gevent/config.json` exists, read `defaults.calendar` (use it as the calendar ID instead of `primary`) and `always_include[]` (the `notes_bot` entry's email tells you which bot appends the Meeting Resources block). If the file is absent, default the calendar to `primary` and treat the notes bot as unknown — neither is required.
+**Optional, soft dependency on `/g-event`:** if `~/.claude/g-event/config.json` exists — or, for users who have not yet migrated from the old plugin name, the legacy `~/.claude/gevent/config.json` (read the new path first; fall back to the legacy one only when the new path is absent) — read `defaults.calendar` (use it as the calendar ID instead of `primary`) and `always_include[]` (the `notes_bot` entry's email tells you which bot appends the Meeting Resources block). If neither file is present, default the calendar to `primary` and treat the notes bot as unknown — neither is required.
 
 ### Resolve source providers (preference + fallback)
 
@@ -54,7 +54,7 @@ Read `~/.claude/find-call/config.json` if it exists, section `sources`. This is 
 **If `~/.claude/shared/identity.json` is missing or has no `user`:** degrade gracefully. Calendar search still works against `primary`; attendee-name resolution falls back to matching the literal name against event attendee `displayName`/`email`. Surface a one-line banner once:
 
 ```
-ℹ No ~/.claude/shared/identity.json found — teammate-name resolution is limited. Run `/clickup:onboard identity` or `/gevent:onboard identity` once to set up your profile + roster (shared across all three plugins).
+ℹ No ~/.claude/shared/identity.json found — teammate-name resolution is limited. Run `/clickup:onboard identity` or `/g-event:onboard identity` once to set up your profile + roster (shared across all three plugins).
 ```
 
 Do not HALT — this skill is useful even with zero config.
@@ -266,7 +266,7 @@ On Yes → append to `references/aliases.md` (plugin-local) with `learned: <ISO 
 - **Never load a transcript directly into main context.** Always go through a sub-agent that returns ≤1500 tokens of cited summary.
 - **Never invent action items, decisions, or quotes.** If the source doesn't say it, you don't say it.
 - **Never auto-pick a match when scores are close** (top/second ratio ≤ 1.5×) — disambiguate via AskUserQuestion.
-- **Never write to `~/.claude/shared/identity.json`** (or `gevent/config.json`, or `clickup/config.json`). This skill is a read-only consumer of shared/other-plugin state; `/clickup` and `/gevent` own those writes. The ONLY file this skill ever writes is its own `~/.claude/find-call/config.json`, and ONLY via the `--config` wizard through `scripts/config_io.py`.
+- **Never write to `~/.claude/shared/identity.json`** (or `g-event/config.json` — including the legacy `gevent/config.json` — or `clickup/config.json`). This skill is a read-only consumer of shared/other-plugin state; `/clickup` and `/g-event` own those writes. The ONLY file this skill ever writes is its own `~/.claude/find-call/config.json`, and ONLY via the `--config` wizard through `scripts/config_io.py`.
 
 ## Examples
 
@@ -313,7 +313,7 @@ Skill:
 
 ## Sub-skill boundaries
 
-- **`/gevent`** owns event creation/modification. If the query is "schedule" / "move" / "cancel", hand off.
+- **`/g-event`** owns event creation/modification. If the query is "schedule" / "move" / "cancel", hand off.
 - **`/clickup`** owns task creation. If the query asks to create a follow-up ticket from a call, return the call context but DO NOT call `/clickup` directly — let the user initiate.
 - **Time-logging** is a separate concern. If the query is "what did I do" with hour-counting intent, this skill is the wrong tool — say so.
 
@@ -323,7 +323,7 @@ Skill:
 
 1. Run `python <plugin-root>/scripts/config_io.py --show` (e.g. `python plugins/find-call/scripts/config_io.py --show`). It returns JSON: current `sources` preferences, whether the config file exists, any corruption error, and whether the `npx` CLI binary is present (`cli_binary_available`). Auth is NOT probed here — note that the CLI may be present but unauthenticated.
 2. Detect connected providers from THIS session's tool list: a Google Calendar MCP (`mcp__*Google_Calendar*`), a Drive MCP, and notetakers (`mcp__sembly-ai__*`). The script can't see session MCPs — this step is yours.
-3. Check `~/.claude/shared/identity.json` exists (identity inherited from `/clickup` or `/gevent`) and `~/.claude/gevent/config.json` (calendar default).
+3. Check `~/.claude/shared/identity.json` exists (identity inherited from `/clickup` or `/g-event`) and `~/.claude/g-event/config.json` — falling back to the legacy `~/.claude/gevent/config.json` when the new path is absent — (calendar default).
 4. Print a resolution table — for each source: preference → which provider it resolves to first + what's available as fallback (✓/✗). If the config is unset, show `auto` and say "not set — all auto".
 
 ```
@@ -331,14 +331,14 @@ Skill:
   calendar   : auto → cli (googleworkspace CLI present ✓; auth not probed)
   docs       : auto → cli ✓
   transcripts: auto → sembly connected ✓
-  identity   : inherited from gevent ✓ (~/.claude/shared/identity.json)
-  calendar id: primary (no gevent defaults.calendar)
+  identity   : inherited from g-event ✓ (~/.claude/shared/identity.json)
+  calendar id: primary (no g-event defaults.calendar)
   config     : ~/.claude/find-call/config.json — not set (all auto)
 ```
 
 ## Mode: --config
 
-Interactive wizard. **This is the ONLY write this skill performs** — and it writes ONLY `~/.claude/find-call/config.json`, via the guarded helper. Never touches `identity.json`, `gevent/config.json`, or `clickup/config.json`.
+Interactive wizard. **This is the ONLY write this skill performs** — and it writes ONLY `~/.claude/find-call/config.json`, via the guarded helper. Never touches `identity.json`, `g-event/config.json` (or the legacy `gevent/config.json`), or `clickup/config.json`.
 
 1. Read current preferences: `python <plugin-root>/scripts/config_io.py --show`. Pre-select the current value for each source.
 2. Ask via `AskUserQuestion` — one question per source, marking the current value. Make clear these are *preferences*, not restrictions — the skill always falls back to whatever works (except `off`):

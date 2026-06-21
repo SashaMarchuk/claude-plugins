@@ -59,7 +59,7 @@ else fail "MANIFEST: name" "name is not find-call"; fi
 
 # ============================================================ Skill frontmatter
 
-if grep -q "^user-invocable: false" "$SKILL"; then pass "SKILL: user-invocable: false (matches clickup/gevent pattern)"
+if grep -q "^user-invocable: false" "$SKILL"; then pass "SKILL: user-invocable: false (matches clickup/g-event pattern)"
 else fail "SKILL: user-invocable" "expected 'user-invocable: false'"; fi
 
 if grep -q "^name: find-call" "$SKILL"; then pass "SKILL: frontmatter name == find-call"
@@ -76,12 +76,12 @@ else fail "SKILL: Step 0" "no Step 0 identity load"; fi
 if grep -qi "Do not HALT" "$SKILL"; then pass "SKILL: degrades gracefully when identity.json missing (no HALT)"
 else fail "SKILL: graceful degrade" "no 'Do not HALT' degrade path"; fi
 
-if grep -q "onboard identity" "$SKILL"; then pass "SKILL: points user to clickup/gevent onboard for identity setup"
+if grep -q "onboard identity" "$SKILL"; then pass "SKILL: points user to clickup/g-event onboard for identity setup"
 else fail "SKILL: onboard hint" "no onboard-identity hint"; fi
 
-if grep -q "gevent/config.json" "$SKILL" && grep -qi "soft dependency\|optional" "$SKILL"; then
-  pass "SKILL: gevent config is a SOFT/optional dependency (defaults.calendar)"
-else fail "SKILL: soft dep" "gevent config not documented as optional"; fi
+if grep -q "g-event/config.json" "$SKILL" && grep -qi "soft dependency\|optional" "$SKILL"; then
+  pass "SKILL: g-event config is a SOFT/optional dependency (defaults.calendar)"
+else fail "SKILL: soft dep" "g-event config not documented as optional"; fi
 
 if grep -q "{user.name}" "$SKILL"; then pass "SKILL: uses {user.name} placeholder instead of a hardcoded name"
 else fail "SKILL: placeholder" "no {user.name} placeholder"; fi

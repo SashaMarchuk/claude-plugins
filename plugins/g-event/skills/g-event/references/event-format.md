@@ -81,7 +81,7 @@ Reasons:
 - A hardcoded `-04:00` will be wrong half the year (DST).
 - A user saying "in Kyiv time" maps to `Europe/Kyiv`, not `+03:00`.
 
-If the user says "my time" without specifying, use `defaults.timezone` from `~/.claude/gevent/config.json`.
+If the user says "my time" without specifying, use `defaults.timezone` from `~/.claude/g-event/config.json`.
 
 ### DST resolution — spring-forward (non-existent) AND fall-back (ambiguous)
 

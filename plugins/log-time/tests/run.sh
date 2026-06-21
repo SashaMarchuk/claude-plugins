@@ -65,7 +65,7 @@ else fail "MANIFEST: beta flag" "description missing (beta)"; fi
 
 # ============================================================ Skill frontmatter
 
-if grep -q "^user-invocable: false" "$SKILL"; then pass "SKILL: user-invocable: false (matches clickup/gevent/find-call pattern)"
+if grep -q "^user-invocable: false" "$SKILL"; then pass "SKILL: user-invocable: false (matches clickup/g-event/find-call pattern)"
 else fail "SKILL: user-invocable" "expected 'user-invocable: false'"; fi
 
 if grep -q "^name: log-time" "$SKILL"; then pass "SKILL: frontmatter name == log-time"

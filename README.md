@@ -26,7 +26,7 @@ In Claude Code:
 
 | Plugin | What it does |
 |---|---|
-| [clickup](plugins/clickup) | `/clickup:create` / `:onboard` / `:status` / `:workspace` / `:memory` — create and manage ClickUp tickets with enforced Connextra user stories, fuzzy list aliases, teammate auto-resolution, duplicate detection, and a two-step onboarding wizard (identity + workspace). |
+| [clickup](plugins/clickup) | `/clickup:create` / `:onboard` / `:connect` / `:status` / `:workspace` / `:memory` — create and manage ClickUp tickets with enforced Connextra user stories, fuzzy list aliases, teammate auto-resolution, duplicate detection, and a two-step onboarding wizard (identity + workspace). Works over **any ClickUp transport** — the ClickUp MCP, the `clickup-cli` binary, or the raw REST API — through one configurable connection layer: first use investigates what's available, asks which transport to use, and remembers the choice (`/clickup:connect`); nothing about the transport is hardcoded. |
 | [g-event](plugins/g-event) | `/g-event:schedule` / `:onboard` / `:status` / `:calendar` — create/update/cancel Google Calendar events with Google Meet. Always attaches a configurable notes bot, conflict + past-time guards, two-step onboarding (identity + calendar defaults). Shares the teammate roster with `clickup`. |
 | [ultra](plugins/ultra) | `/ultra:run` / `:resume` — multi-agent swarm with adversarial validation, structured debates, devil's advocate, and anti-AI-slop checks. Tiers `--small` / `--medium` / `--large` / `--xl`; wraps other skills for maximum-rigor runs. |
 | [ultra-analyzer](plugins/ultra-analyzer) *(beta)* | `/ultra-analyzer` skill set — rigorous data/corpus pipeline (discover → analyze → validate → synthesize) with resume-able state and `/ultra` gates at critical boundaries. Source-agnostic: MongoDB, filesystem, PDF, web scrapes, JSON/CSV, SQLite. **Requires the `ultra` plugin.** |
@@ -56,7 +56,7 @@ All user state lives **outside** the plugin directory by design, so `/plugin upd
 | Location | Contents | Used by |
 |---|---|---|
 | `~/.claude/shared/identity.json` | User profile + teammate roster (name, email, `external_ids`, `active`, `last_validated_at`) — single source of truth for "who is on the team" | `clickup`, `g-event` (read+write) · `find-call` (read-only) |
-| `~/.claude/clickup/{config.json, memory.md, drafts/}` | Workspace + lists + aliases + learned memory rules + idempotency drafts | `clickup` |
+| `~/.claude/clickup/{config.json, memory.md, drafts/}` | Workspace + lists + aliases + learned memory rules + idempotency drafts + the `connection` block (chosen transport — MCP / clickup-cli / REST — fallback order, and a REST token **pointer only**, never the token value) | `clickup` |
 | `~/.claude/g-event/config.json` | Calendar defaults + always-include attendees (notes bot) + behavior flags | `g-event` |
 | `~/.claude/find-call/config.json` *(optional)* | Per-source provider *preference* (`calendar`/`docs`/`transcripts` → `auto`/`cli`/`mcp`/`off`) — preference + fallback, not a hard pin. Absent = universal auto-detect. Written by `/find-call:config` (guarded atomic write) or hand-edited | `find-call` |
 | `~/.claude/log-time/{config.md, runs/}` | Free-form markdown config (evidence sources, tracker targets, day rules, output style) + per-run evidence/audit artifacts. Written by `/log-time:onboard` / `:config` (confirm-before-write) or hand-edited — it's just text | `log-time` |

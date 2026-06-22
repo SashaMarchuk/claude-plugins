@@ -205,8 +205,8 @@ upgrade") and refuse auto-migration, to surface stale-plugin mixes.
 - `teammates[].external_ids` — same open map as user. Optional per teammate. `/clickup` populates `clickup`; `/g-event` populates `google` when it has it.
 - `teammates[].active` — boolean. **v2 MUST be present**; missing is treated as `false` on read (blocks assignment until `/clickup` workspace-sync validates — closes PLG-clickup-13). `/clickup` flips to `false` when a teammate disappears from workspace members. `/g-event` still allows scheduling with inactive teammates but surfaces a banner.
 - `teammates[].sources` — array of origins. A single teammate can carry multiple tags (union across discovery passes). Reserved values:
-  - `"clickup-workspace"` — pulled from `mcp__clickup__clickup_get_workspace_members` (current workspace members)
-  - `"clickup-tasks"` — pulled from `mcp__clickup__clickup_filter_tasks` assignees on the user's open tasks (catches contractors/external collaborators not in the workspace roster)
+  - `"clickup-workspace"` — pulled from `op.get_members` (current workspace members; realization per `references/connection.md`)
+  - `"clickup-tasks"` — pulled from `op.find_tasks` assignees on the user's open tasks (catches contractors/external collaborators not in the workspace roster)
   - `"google-calendar"` — pulled from Google Calendar event attendees in the last 14 days where the user participated AND attendees ≤ 15 (filters out all-hands noise)
   - `"custom:<label>"` — user-supplied during onboarding (paste JSON, name an MCP tool, etc.). `<label>` is free-form.
   - `"manual"` — user typed name + email directly (during onboarding or lookup-miss upsert).
@@ -243,9 +243,9 @@ Written by `--onboard workspace`. Read on every invocation.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "onboarding_complete": true,
-  "updated_at": "2026-04-22T12:15:00Z",
+  "updated_at": "2026-06-22T12:15:00Z",
   "workspace": {
     "id": "90151491867",
     "name": "Speed&Functions"
@@ -258,7 +258,7 @@ Written by `--onboard workspace`. Read on every invocation.
       "space_id": "…",
       "folder_id": "…",
       "archived": false,
-      "last_validated_at": "2026-04-22T12:15:00Z"
+      "last_validated_at": "2026-06-22T12:15:00Z"
     }
   ],
   "defaults": {
@@ -267,9 +267,25 @@ Written by `--onboard workspace`. Read on every invocation.
     "status": "backlog",
     "task_type": "task"
   },
-  "behavior": {}
+  "behavior": {},
+  "connection": {
+    "configured": true,
+    "primary": "mcp",
+    "fallback_order": ["mcp", "rest", "cli"],
+    "auto_borrow": false,
+    "investigated_at": "2026-06-22T12:15:00Z",
+    "last_resolved": "mcp",
+    "rest_token_ref": null,
+    "last_probe": {
+      "mcp":  { "rc": "auth-ok", "at": "2026-06-22T12:15:00Z" },
+      "rest": { "rc": "absent",  "at": "2026-06-22T12:15:00Z" },
+      "cli":  { "rc": "auth-ok", "at": "2026-06-22T12:15:00Z" }
+    }
+  }
 }
 ```
+
+The example shows `schemaVersion: 2` with a `connection` block because writing `connection` goes through `atomic_update` (see `/clickup:connect`), which upgrades a `schemaVersion 1` file to `2` and appends the `schemaVersionHistory` row in the same atomic pass — `connect` is a migration-on-mutation event. A pre-1.5.0 config on disk simply has no `connection` key (and may still read `schemaVersion: 1` until its next mutation); absence forces the connect wizard.
 
 ### Field rules
 
@@ -293,6 +309,25 @@ Readers MUST tolerate both illegal combinations on read (e.g. from a hand-edited
 
 **Removed from older schemas:** `user`, `teammates[]`, `preferences` (split into `defaults` + `behavior`).
 
+### `connection` block — which transport `/clickup` uses
+
+The single source of truth for transport selection. Written ONLY by `/clickup:connect` (and the `## connect` step of `--onboard`) through the same `atomic_update` helper as the rest of `config.json` — no separate writer, no separate file. The per-transport realization of every operation lives in `references/connection.md`; this block only records the CHOICE. Added in 1.5.0; additive and optional, handled exactly like `lists_archive[]` was — **no `schemaVersion` bump** (`CURRENT_SCHEMA_VERSION` stays `2`).
+
+| Field | Type | Rule |
+|---|---|---|
+| `connection.configured` | bool | The gate. `false` OR the whole `connection` block absent ⇒ the transport has never been investigated ⇒ preflight Step 2.5 forces the connect detour (interactive) or HALTs (`--auto`). Set `true` ONLY after investigate → ask → remember completes. Mirrors log-time's "config absent ⇒ mandatory onboarding". A transport is **never** synthesized silently. |
+| `connection.primary` | enum `mcp\|cli\|rest\|auto` | The transport the user CHOSE to try first. The wizard always writes a concrete value; `auto` (use the default availability order) exists only for hand-edits / back-compat. |
+| `connection.fallback_order` | array of enum | Ordered transports to try, preference first. Default = `primary` then remaining-available ranked `mcp > rest > cli`. Removing a transport from this array is the only hard opt-out (the find-call `off` analog); `[primary]` alone means "primary only, fail loud". |
+| `connection.auto_borrow` | bool | Default `false`. Gates whether `--auto` may cross transports to satisfy a capability gap (e.g. `task_type` on `clickup-cli`). With `false`, `--auto` refuses rather than borrowing silently (the unattended user can't see the hop). Interactive mode always shows a borrow in the preview `Degrades:` row regardless. |
+| `connection.investigated_at` | ISO8601 UTC | When the auto-detect probe last ran. `/clickup:status` flags `>30d` as stale. |
+| `connection.last_resolved` | enum | The transport that actually served the last successful operation (diagnostic; surfaced in status). May differ from `primary` after a capability borrow or a fallback. |
+| `connection.rest_token_ref` | string\|null | A **POINTER, never the token value**: `"env:<NAME>"` or `"cli-config"` (read `[auth].token` from clickup-cli's config.toml at call time). `null` ⇒ REST unavailable. MUST match `^(env:[A-Z_][A-Z0-9_]*\|cli-config)$` on read; anything else ⇒ REST treated as `absent` (it is user-writable and round-trips unvalidated, so an unvalidated name must never reach a shell). |
+| `connection.last_probe` | object | Cache of the last per-transport probe: `{<transport>: {rc, at}}`, `rc` ∈ the four-bucket vocabulary `auth-ok\|auth-fail\|retryable-network\|other` plus `absent`. Advisory only — the live resolver probe (SKILL.md Step 6) is authoritative. |
+
+**Secret invariant (pinned by test).** No field in `connection` (nor anywhere this plugin writes — `config.json`, `drafts/`, `.snapshots/`, status output, chat) ever holds a token VALUE. `rest_token_ref` holds a pointer only; `last_probe` holds rc enums only. The runtime write closures (the `connection` `atomic_update`, the drafts writer, the status renderer) explicitly exclude any resolved token. A negative grep (`CONN-10`) asserts no `pk_`/`tk_`-shaped literal exists anywhere under `plugins/clickup/`. Full rules in `references/connection.md` → Secret handling.
+
+**Invariant — `connection` ↔ `configured`.** `configured: true` requires `primary` set to a concrete enum value and a non-empty `fallback_order` (at least `[primary]`). `configured: false` (or absent block) ⇒ all other connection fields are advisory and the connect wizard runs before any `op.*` call.
+
 ### Back-compat reader (clickup config — same v1 → v2 window)
 
 Readers MUST accept `schemaVersion ∈ {1, 2}` for the same 90-day window as identity.json (2026-04-24 → 2026-07-23). On v1 read, fill in defaults in memory:
@@ -301,6 +336,7 @@ Readers MUST accept `schemaVersion ∈ {1, 2}` for the same 90-day window as ide
 - `lists[].removed_at` — default absent (do not synthesize).
 - `lists[].last_validated_at` — default absent (do not synthesize; let `/clickup:reload` populate on first run).
 - `lists_archive[]` — default `[]` when missing.
+- `connection` — default `{configured: false}` in memory when the block is absent. Absence forces `## connect` on the next interactive ClickUp-touching invocation (and HALTs `--auto`). **Never synthesize a transport silently** — a 1.4.0 config that worked over MCP still requires the user to confirm `mcp` once at the connect prompt (a one-tap migration). The connect write upgrades the file to `schemaVersion: 2` in the same `atomic_update` pass.
 
 Writers always emit `schemaVersion: 2` and persist these new fields where applicable. Old v2 readers that don't know about the new fields preserve them on rewrite per the unknown-key rule (M-6).
 

@@ -1,7 +1,7 @@
 {
   "name": "clickup",
-  "version": "1.4.0",
-  "description": "Universal /clickup skill for creating and managing ClickUp tickets with enforced quality standards \u2014 Connextra user stories, evidence-only descriptions, fuzzy list aliases, first-name teammate resolution, duplicate detection, idempotent create, and a two-step onboarding wizard.",
+  "version": "1.5.0",
+  "description": "Universal /clickup skill for creating and managing ClickUp tickets with enforced quality standards \u2014 Connextra user stories, evidence-only descriptions, fuzzy list aliases, first-name teammate resolution, duplicate detection, idempotent create, and a two-step onboarding wizard. Works over any ClickUp transport (ClickUp MCP, the clickup-cli binary, or the raw REST API) through one configurable connection layer: on first use it investigates what's available, asks which transport to use, and remembers the choice (/clickup:connect) \u2014 nothing about the transport is hardcoded.",
   "author": {
     "name": "Sasha Marchuk",
     "url": "https://github.com/SashaMarchuk"

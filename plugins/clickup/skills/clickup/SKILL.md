@@ -18,13 +18,17 @@ Universal skill for creating and managing ClickUp tickets. Enforces consistent t
 | `--onboard identity` | Re-run shared identity wizard only | `references/modes.md#onboard-identity` |
 | `--onboard workspace` | Re-run clickup-local wizard only | `references/modes.md#onboard-workspace` |
 | `--memory [add\|list\|remove\|clear]` | Manage learned patterns | `references/modes.md#memory` |
-| `--status` | Config health check (both files) | `references/modes.md#status` |
+| `--status` | Config health check (both files + connection) | `references/modes.md#status` |
+| `--connect` | Investigate transports, pick one, remember it | `references/modes.md#connect` |
+| `--connect show` | Read-only connection view (alias for status block) | `references/modes.md#connect` |
 | `--workspace` | Switch active ClickUp workspace | `references/modes.md#workspace` |
 | `--reload` | Reconcile config.lists with workspace state | `references/modes.md#reload` |
 | `--reload --mode=incremental` | Force incremental even on large diff | `references/modes.md#reload` |
 | `--reload --mode=full` | Force route to onboard-workspace with archive carry-forward | `references/modes.md#reload` |
 
-**Precedence on conflict:** `--onboard` > `--status` > `--memory` > `--workspace` > `--reload` > `--auto` > default. Flag arguments are space-separated (`--onboard identity`, not `--onboard=identity`). Positional args after flags are the ticket-seed text.
+**Precedence on conflict:** `--onboard` > `--status` > `--connect` > `--memory` > `--workspace` > `--reload` > `--auto` > default. Flag arguments are space-separated (`--onboard identity`, not `--onboard=identity`). Positional args after flags are the ticket-seed text.
+
+**Transport is never hardcoded.** Every ClickUp side-effect goes through a named capability operation (`op.*`) whose per-transport realization (ClickUp MCP / `clickup-cli` / REST) lives ONLY in `references/connection.md`. Which transport runs is whatever `config.connection` resolves to (Step 2.5). This file never names a transport primitive.
 
 **`--onboard --auto` is REJECTED at parse time.** If `$ARGUMENTS` contains BOTH `--onboard` AND `--auto` (in any order, with or without a sub-arg like `--onboard identity`), HALT BEFORE any pre-flight step with the one-liner:
 
@@ -42,6 +46,14 @@ refusing --reload --auto: list-reconciliation requires interactive confirm. Run 
 
 Rationale: reload's diff is presented in a confirm card (`[1] Apply / [2] Cancel / [3] Pick aliases for new lists first`). `--auto` bans interactive prompts. Silently rewriting the user's `lists[]` + aliases is a data-loss vector. Mirrors the parse-time refuse for `--onboard --auto` immediately above.
 
+**`--connect --auto` is REJECTED at parse time.** If `$ARGUMENTS` contains BOTH `--connect` AND `--auto` (in any order), HALT BEFORE any pre-flight step with the one-liner:
+
+```
+refusing --connect --auto: choosing a transport requires interactive investigation (AskUserQuestion required). Run `/clickup:connect` alone first, then retry `/clickup --auto "<seed>"`.
+```
+
+Rationale: `## connect` investigates all three transports and the user must CHOOSE one (`AskUserQuestion`) — the choice is never silent. `--auto` bans interactive prompts. The combined invocation has no valid execution; the only safe behaviour is a parse-time refuse. Mirrors `--onboard --auto` / `--reload --auto`.
+
 **Seed-text 4 KB cap (pre-extract truncation).** Any seed text — pasted transcript, previous-turn context carried forward, positional args — longer than **4096 bytes** (UTF-8 encoded) is truncated BEFORE the extract step. Truncation point: the nearest **sentence boundary** (period, question mark, exclamation mark, or newline) at or before the 4096-byte mark. If no sentence boundary exists in the first 4096 bytes, fall back to the nearest whitespace; if none, hard-cut at 4096 bytes. After truncation, show the user an explicit banner:
 
 ```
@@ -58,16 +70,24 @@ Where `<N>` is the byte count of the dropped tail. The banner is load-bearing �
 2. **Read clickup config** from `~/.claude/clickup/config.json`. If missing or `onboarding_complete != true`:
    - **In `--auto` mode**: HALT with "config missing — run `/clickup --onboard workspace` first".
    - In interactive mode: redirect to `--onboard workspace`; carry the ticket seed.
-3. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `1`). On higher version: refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard.
+
+**Step 2.5 — Resolve connection (which transport to use).** Read `config.connection`. This runs for EVERY ClickUp-touching mode (default create, `--auto`, `--reload`, `--workspace`, `--onboard workspace` — anything that calls an `op.*`). If `connection` is absent OR `connection.configured != true` (connection has never been investigated — the gate, see `references/config-schema.md` → `connection`):
+   - **In `--auto` mode**: HALT with "connection not configured — run `/clickup:connect` first" (never drag `--auto` into `AskUserQuestion`; mirrors the identity/config auto-halts above). No write, no data touched.
+   - In interactive mode: redirect to `references/modes.md#connect` with a one-line explanation; carry the ticket seed forward (same pattern as the identity/workspace redirects). **Never create or mutate a ticket without an investigated, chosen connection on disk** — and never silently pick a transport.
+   - In `--status` mode: report "connection: not configured" and do NOT detour.
+
+   When `configured == true`, run the resolver in `references/connection.md` → Resolver: build the available list (preference first, then `fallback_order`), bind `ACTIVE` for the whole invocation, and surface a banner if a fallback is used instead of the preferred transport. The resolved transport is what Step 6's probe and every later `op.*` dispatch through.
+
+3. **Validate schemaVersion** — both files must have integer `schemaVersion` ≤ the version this skill understands (currently `2`; readers accept `{1, 2}` during the v1 → v2 back-compat window — see `references/config-schema.md` → Shared-contract constants). Writers always emit `2`, and `/clickup:connect` / `--onboard` upgrade a v1 file to `2` on mutation, so a v2 file written by this skill must NOT be treated as "higher version". On a genuinely higher version (`> 2`): refuse to write, degrade to read-only with a banner. On corrupt JSON: quarantine to `<file>.corrupt-<epoch>` and re-onboard.
 4. **Read memory** from `~/.claude/clickup/memory.md`. Apply rules. If any rule is unused >60 days or applied >20 times, prepend a one-line review banner: "`💡 N memory rules may be stale — run /clickup --memory list`".
 5. **Check config freshness.** If `config.updated_at` > 30 days ago, prepend: "`💡 Config is 30+ days old — run /clickup --onboard to refresh`". Non-blocking.
-6. **Verify ClickUp MCP auth with a specific named probe.** Call `mcp__clickup__clickup_get_workspace_hierarchy` (low-cost, returns a small workspace-tree payload — matches the existing call pattern in the workspace-switch flow at `references/modes.md` → `workspace`). Classify the return via named dispatch — DO NOT collapse into a single "fail" bucket:
-   - **`auth-ok`** — call returns a workspace list (any non-empty result, even a single workspace). Proceed.
-   - **`auth-fail`** — HTTP 401 / 403, MCP reports "not authenticated" / "invalid token" / "disconnected" / any explicit credential-rejection error. HALT with re-auth instructions: "ClickUp MCP auth failed (rc=auth-fail). Run `mcp__clickup__authenticate` then retry /clickup."
-   - **`retryable-network`** — timeout, connection refused, DNS failure, HTTP 5xx, or MCP server process unreachable. Retry ONCE after 2s backoff; on second failure HALT with "ClickUp MCP unreachable (rc=retryable-network). Check network/MCP server, then retry /clickup." Do NOT escalate to `auth-fail` — a transient network error is not a credential problem.
+6. **Verify the resolved transport's auth with `op.probe()`.** Run `op.probe()` against the transport bound in Step 2.5 (the realization per transport — MCP / `clickup-cli` / REST — lives in `references/connection.md` → Realization; this file never names it). Classify the return via named dispatch — DO NOT collapse into a single "fail" bucket:
+   - **`auth-ok`** — probe returns a usable result (a non-empty workspace tree, or `clickup-cli auth check` exit 0, or a 200 from the REST user endpoint). Proceed.
+   - **`auth-fail`** — HTTP 401 / 403, "not authenticated" / "invalid token" / "disconnected" / any explicit credential-rejection. Try the next transport in `fallback_order` (per the resolver); if none reaches `auth-ok`, HALT with the per-transport re-auth fix hint from `references/connection.md` → Fix hints (e.g. the MCP re-auth step, `clickup-cli setup`, or the REST token hint).
+   - **`retryable-network`** — timeout, connection refused, DNS failure, HTTP 5xx, or the transport process unreachable. Retry ONCE after 2s backoff; on second failure try the next transport in `fallback_order`, else HALT with "ClickUp unreachable (rc=retryable-network). Check network/transport, then retry /clickup." Do NOT escalate to `auth-fail` — a transient network error is not a credential problem.
    - **`other`** — any unclassified error (malformed response, unexpected shape). HALT with the raw error and rc=other; never silently proceed.
 
-   **Never fabricate a success URL.** The probe MUST fire on EVERY invocation — do not skip under context pressure. If you cannot name the probe call or classify its return in your own words, you have not verified auth.
+   **Never fabricate a success URL.** The probe MUST fire on EVERY invocation — do not skip under context pressure. If you cannot name the resolved transport's probe call or classify its return in your own words, you have not verified auth.
 7. **Re-validate teammates lazily.** If any `teammates[].last_validated_at` > 7 days (or `null`), silently fetch workspace members; diff against identity; surface significant changes (removed users, renames) as a banner. Updates go to `~/.claude/shared/identity.json` via the atomic helper in `references/config-schema.md`.
 
 ## Step 3: Route by flag
@@ -133,13 +153,13 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/g-ev
 ### List (alias → fuzzy hierarchy)
 
 1. Match user-named list (case-insensitive) against `config.lists[].aliases`.
-2. **Alias hit** → resolve to stored `list_id`; verify still exists and not archived via `mcp__clickup__clickup_get_list`. If renamed, update alias silently. If `archived: true` on the stored record, refuse with `"list <name> archived — re-onboard or pick a different list"`. If the `id` is not present in the MCP response and the stored record does NOT have `archived: true`, refuse with `"list not found — run /clickup:reload to reconcile (id may have been deleted) or re-onboard"`. If renamed (id present, name differs), update the stored `name` silently — alias resolution is by id, not name.
-3. **No alias hit** → call `mcp__clickup__clickup_get_workspace_hierarchy`, fuzzy-match top 3 candidates, surface for user confirm.
+2. **Alias hit** → resolve to stored `list_id`; verify still exists and not archived via `op.get_list`. If renamed, update alias silently. If `archived: true` on the stored record, refuse with `"list <name> archived — re-onboard or pick a different list"`. If the `id` is not present in the `op.get_list` response and the stored record does NOT have `archived: true`, refuse with `"list not found — run /clickup:reload to reconcile (id may have been deleted) or re-onboard"`. If renamed (id present, name differs), update the stored `name` silently — alias resolution is by id, not name.
+3. **No alias hit** → call `op.get_hierarchy`, fuzzy-match top 3 candidates, surface for user confirm.
 4. In `--auto`: if no alias hit AND no single high-confidence fuzzy match → refuse.
 
 ### Duplicate detection (before create)
 
-1. Search open tickets in target list via `mcp__clickup__clickup_filter_tasks` (include_closed=false).
+1. Search open tickets in target list via `op.find_tasks` (include_closed=false).
 2. **Pinned similarity metric — deterministic under identical inputs.** Compute the **Jaccard coefficient** on **casefolded, NFKC-normalised word tokens** between the candidate title and each open ticket's title:
    - **Tokenise**: split on Unicode whitespace + ASCII punctuation `[\s\.,;:!?\(\)\[\]\{\}"'`\-/\\]+`. Drop empty tokens.
    - **Normalise each token**: `unicodedata.normalize("NFKC", tok).casefold()`. (Casefold — NOT `.lower()` — handles Turkish İ/i and German ß correctly; NFKC collapses compatibility variants like fullwidth digits.)
@@ -160,9 +180,10 @@ The roster lives in `~/.claude/shared/identity.json` under `teammates[]`. `/g-ev
    ```
 
    This is load-bearing: it rejects path-traversal payloads like `../../etc/passwd`, empty strings, shell-metachar injection, and non-v4 UUIDs (v1/v3/v5) in one check. A value that fails this regex MUST NOT be used to compose any path under `~/.claude/clickup/drafts/` — HALT with "invalid UUID — refusing to compose draft path". Today the UUID is LLM-generated so traversal is not immediately exploitable, but this gate is the load-bearing defense for any future feature that accepts a user-provided UUID (command-line retry flag, crash-recovery path, etc.).
-2. **Before** calling `mcp__clickup__clickup_create_task`, write draft to `~/.claude/clickup/drafts/<uuid>.json` — ONLY after the UUID passed the regex gate above.
-3. Include the key as a marker in the ticket description (hidden HTML comment: `<!-- ck:<uuid> -->`) so retries can find partial successes.
-4. On create timeout/error, search the list for the key before re-creating.
+2. **Before** calling `op.create_task`, write draft to `~/.claude/clickup/drafts/<uuid>.json` — ONLY after the UUID passed the regex gate above.
+3. Include the key as a marker in the ticket description (hidden HTML comment: `<!-- ck:<uuid> -->`) so retries can find partial successes under any transport.
+4. **The moment `op.create_task` returns, record the new `task_id` + `url` into the draft** (`api_response` / `task_url`). This is the transport-independent retry anchor — it does not depend on the marker surviving in the stored description (which is unverified for `clickup-cli` — see `references/connection.md` → VERIFY-AT-IMPL).
+5. **A create error is "outcome unknown", never "failed".** On timeout / 5xx / dropped connection, the task may exist. Before ANY retry OR fallback create — including a create on a *different* transport per the resolver's `fallback_order` — run `op.find_by_marker(uuid, list_id)` on the transport about to be used. If the marker (or the draft-recorded id) is found, adopt that task and return its url; do NOT create a duplicate. This closes the cross-transport double-create window.
 
 ---
 
@@ -174,6 +195,8 @@ Refuse creation with a one-line reason when any of these hold:
 - Assignee missing AND no memory rule resolves it
 - List ambiguous (no alias hit AND no single high-confidence fuzzy match)
 - Resolved assignee is deactivated
+- **Connection not configured** (`config.connection.configured != true`) — HALT with "connection not configured — run `/clickup:connect` first" (per Step 2.5; never silently pick a transport in `--auto`).
+- **Capability gap with no silent fix** — the ticket needs a field the resolved transport can't set (e.g. `task_type=bug` on `clickup-cli`) AND no more-capable transport is available to borrow AND `connection.auto_borrow != true`. `--auto` does NOT borrow across transports silently (the unattended user can't see the hop). Refuse with the one-liner in `references/connection.md` → Degradation tier 3. (Interactive mode instead surfaces the borrow in the preview `Degrades:` row.)
 
 The spirit of `--auto` is "save with whatever exists." If what exists is too little to produce a non-garbage ticket, it's better to refuse than to fabricate.
 
@@ -191,7 +214,10 @@ Priority: <priority>
 Status:   <status>
 Type:     <task|bug|...>
 Tag:      <tag or "none">
+Degrades: <only if a capability borrow/degradation applies, e.g. "clickup-cli can't set task_type=bug → will borrow mcp for this create">
 ```
+
+The `Degrades:` line is rendered ONLY when the resolved transport cannot natively satisfy a requested field (see `references/connection.md` → Degradation) — it makes any cross-transport borrow visible before the create. Omit the line entirely when the active transport satisfies everything.
 
 Offer: `[1] Confirm & create  [2] Edit field(s)  [3] Cancel`.
 
@@ -204,9 +230,11 @@ After any edit, redraw the preview and repeat. Cancel deletes the draft snapshot
 ## Files (user state, OUTSIDE the plugin dir — survives `/plugin update`)
 
 - `~/.claude/shared/identity.json` — **SHARED with `/g-event`**. User profile + teammate roster (first_name, latin_alias, full_name, email, external_ids, active, sources, last_validated_at). Both skills read and append.
-- `~/.claude/clickup/config.json` — clickup-local. Workspace, lists + aliases, defaults, behavior flags. No `user` or `teammates` here.
+- `~/.claude/clickup/config.json` — clickup-local. Workspace, lists + aliases, defaults, behavior flags, and the **`connection` block** (chosen transport + fallback order + probe cache + `rest_token_ref` POINTER — never a token value). No `user` or `teammates` here. See `references/config-schema.md` → `connection`.
 - `~/.claude/clickup/memory.md` — learned patterns + corrections (markdown, human-editable).
-- `~/.claude/clickup/drafts/` — per-invocation idempotency snapshots.
+- `~/.claude/clickup/drafts/` — per-invocation idempotency snapshots (also hold the post-create `task_id`/`url` retry anchor).
+
+**Secrets:** a ClickUp token (for REST or referenced from `clickup-cli`) is NEVER written to any file, draft, snapshot, status output, or chat — `config.connection.rest_token_ref` holds only a pointer (`env:<NAME>` or `cli-config`). See `references/connection.md` → Secret handling.
 
 All JSON writes use atomic `tmp + fsync + os.replace` under `fcntl.flock` on a sentinel file. The canonical identity.json lock is **`~/.claude/shared/identity.json.lock`** (NO leading dot — sibling of `identity.json`, not a dotfile). This path is the cross-plugin contract shared with `/g-event`; any deviation breaks mutual exclusion. See the reference helper in `references/config-schema.md`. Readers preserve unknown keys on rewrite (forward-compat with `/g-event` fields this plugin doesn't know about).
 
@@ -216,6 +244,7 @@ Schemas + examples in `references/config-schema.md`.
 
 ## See also
 
-- `references/modes.md` — detailed flow for every mode
+- `references/connection.md` — transports, the `op.*` capability contract, per-transport realization, capability/degradation matrix, the resolver, and secret handling. **The only file that names a transport primitive.**
+- `references/modes.md` — detailed flow for every mode (including `## connect`)
 - `references/ticket-format.md` — title + description rules with examples and anti-patterns
-- `references/config-schema.md` — config.json and memory.md formats
+- `references/config-schema.md` — config.json (incl. the `connection` block) and memory.md formats

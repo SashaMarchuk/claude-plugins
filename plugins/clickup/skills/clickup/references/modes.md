@@ -10,7 +10,8 @@ Detailed flow for each mode. Load only the section for the current invocation.
 - [onboard-identity](#onboard-identity) — shared identity wizard only
 - [onboard-workspace](#onboard-workspace) — clickup-local wizard only
 - [memory](#memory) — manage learned patterns
-- [status](#status) — health check of both files
+- [status](#status) — health check of both files + connection
+- [connect](#connect) — investigate transports, pick one, remember it
 - [workspace](#workspace) — switch active ClickUp workspace
 - [reload](#reload) — reconcile config.lists with the active workspace
 
@@ -55,7 +56,7 @@ Interactive ticket creation. Required-field gating. Preview confirmation.
 
 9. **Preview** in the format from `SKILL.md` → Preview + edit.
 
-10. **User confirms** → call `mcp__clickup__clickup_create_task` with:
+10. **User confirms** → call `op.create_task` (per `references/connection.md`; dispatches to the resolved transport) with:
     - `list_id` (from resolved list)
     - `name` (title)
     - `markdown_description` (full description with hidden idempotency marker)
@@ -86,7 +87,7 @@ Silent create. Skip gating. No preview.
 
 4. **Compose title + description** exactly as in `default`.
 
-5. **Create immediately** via `mcp__clickup__clickup_create_task`.
+5. **Create immediately** via `op.create_task` (resolved transport per `references/connection.md`; `--auto` never borrows across transports — see the `--auto` capability-gap refuse in SKILL.md).
 
 6. **Return task URL** + 2-line summary (title + resolved fields).
 
@@ -100,7 +101,8 @@ Full wizard. Runs `onboard-identity` → `onboard-workspace` back-to-back. Skips
 
 1. If `~/.claude/shared/identity.json` missing or `onboarding_complete != true` → run [onboard-identity](#onboard-identity).
 2. If `~/.claude/clickup/config.json` missing or `onboarding_complete != true` → run [onboard-workspace](#onboard-workspace).
-3. If a ticket seed was carried in, resume [default](#default) with that seed.
+3. If `config.connection.configured != true` → run [connect](#connect) (investigate transports → choose → remember).
+4. If a ticket seed was carried in, resume [default](#default) with that seed.
 
 ---
 
@@ -128,7 +130,7 @@ Seed the skeleton: `{schemaVersion: 1, user: {name, email, external_ids: {}}, te
 
 Probe every available source for the user's own identity and echo back what was found:
 
-- **ClickUp MCP** (best-effort): `mcp__clickup__clickup_resolve_assignees` with the email. If a single match → capture `clickup_user_id`. If multiple matches → `AskUserQuestion` to pick. If zero → note "ClickUp didn't find this email" and continue without `clickup_user_id`.
+- **ClickUp** (best-effort): `op.resolve_assignees` with the email (resolved transport per `references/connection.md`). If a single match → capture `clickup_user_id`. If multiple matches → `AskUserQuestion` to pick. If zero → note "ClickUp didn't find this email" and continue without `clickup_user_id`.
 - **Google Workspace CLI** (best-effort): `npx @googleworkspace/cli calendar calendars get --params '{"calendarId":"primary"}' 2>/dev/null` — the primary calendar's `id` IS the authed user's email. If it matches the user-supplied email → good; if not → warn "Primary Google account is `<other>` — may not see your calendar events in teammate discovery. Continue anyway?".
 
 Show a single confirmation `AskUserQuestion`:
@@ -151,15 +153,15 @@ If user picks "Fix email" → re-prompt email, re-probe. If "Skip" → continue 
 
 Every source that is live contributes. None are required. Run all in parallel; collect per-email.
 
-**Source A — ClickUp workspace members** (needs ClickUp MCP):
+**Source A — ClickUp workspace members** (needs a resolved ClickUp connection):
 
-`mcp__clickup__clickup_get_workspace_members` on default workspace. For each member: `first_name` (split on first whitespace), `full_name`, `email`, `clickup_user_id`. Tag sources entry: `"clickup-workspace"`.
+`op.get_members` on default workspace. For each member: `first_name` (split on first whitespace), `full_name`, `email`, `clickup_user_id`. Tag sources entry: `"clickup-workspace"`.
 
-**Source B — ClickUp task collaborators** (needs ClickUp MCP + `user.external_ids.clickup`):
+**Source B — ClickUp task collaborators** (needs a resolved ClickUp connection + `user.external_ids.clickup`):
 
 Rationale: the user asked to use "usi tasks de ya → usi assignees → ce moyi teammates." This catches contractors and cross-workspace collaborators who aren't in the current workspace's member roster.
 
-`mcp__clickup__clickup_filter_tasks` with `assignees=[user.external_ids.clickup]`, `include_closed=false`, page size 100. For each returned task, collect `assignees[]` (and `creator` if surfaced). Union by `user_id`. Enrich missing fields with a second `clickup_get_workspace_members`-style lookup if needed. Tag sources: `"clickup-tasks"`.
+`op.find_tasks` with `assignees=[user.external_ids.clickup]`, `include_closed=false`, page size 100. For each returned task, collect `assignees[]` (and `creator` if surfaced). Union by `user_id`. Enrich missing fields with a second `op.get_members` lookup if needed. Tag sources: `"clickup-tasks"`.
 
 If API returns ≥100 tasks, warn: "Found 100+ tasks; teammate roster may be incomplete. Re-run later to capture more." (Avoid infinite pagination in onboarding.)
 
@@ -185,7 +187,7 @@ npx @googleworkspace/cli calendar events list \
 rc=$?; err=$(cat /tmp/gws_err.$$); rm -f /tmp/gws_err.$$
 ```
 
-On non-zero `rc`, classify `err` the same way as pre-flight step 5 (auth / rate-limit / other); never silently swallow.
+On non-zero `rc`, classify `err` the same way pre-flight Step 6 classifies a transport probe (`auth-ok` / `auth-fail` / `retryable-network` / `other`); never silently swallow.
 
 For each returned event:
 
@@ -497,7 +499,7 @@ Writes `~/.claude/clickup/config.json` (clickup-local). Assumes `~/.claude/share
 
 ### Flow
 
-1. **List workspaces** via `mcp__clickup__clickup_get_workspace_hierarchy`. If >1, `AskUserQuestion` to pick. Store `workspace.id` + `workspace.name`.
+1. **List workspaces** via `op.get_hierarchy`. If >1, `AskUserQuestion` to pick. Store `workspace.id` + `workspace.name`.
 
 2. **Fetch recent lists** for the chosen workspace. Offer the top 10 most-used lists (inferred from user's recent task activity if available; otherwise all lists in spaces user has touched).
    - First consolidated `AskUserQuestion` round: user picks which of the top 10 they want aliased (multi-select).
@@ -580,11 +582,62 @@ clickup/config.json
   Schema:        v1  ✓
 
 Memory rules:    5 active, 1 stale (unused >60 days)
-MCP auth:        OK (last verified: 12s ago)
+
+ClickUp connection
+  Preferred:     mcp   (configured 2026-06-22)
+  Fallback:      mcp → rest → cli
+  Resolves to:   mcp ✓  (probe: auth-ok)
+  Available now: mcp ✓ auth-ok · cli ✓ auth-ok · rest ✗ (no token)
+  Capabilities:  task_type ✓ · multi-assignee ✓ · markdown ✓   (via mcp)
+  REST token:    not configured (set during /clickup:connect if you want REST)
+
 Drafts:          2 pending (cleanup with /clickup --memory clear-drafts)
 ```
 
-Never mutates state. Safe to run any time.
+The **ClickUp connection** block runs the live `op.probe()` on every transport (read-only) and reports each one's rc with its fix hint from `references/connection.md` → Fix hints. It shows where the preferred transport **Resolves to** (which may differ from `Preferred` after a fallback or a capability borrow — `connection.last_resolved`). REST token state is **presence-only**: `configured (clickup-cli config)` or `configured (env var)` — never the token value and never the specific env-var NAME. If `connection.configured != true`, the whole block collapses to: `ClickUp connection: NOT CONFIGURED — run /clickup:connect (or just /clickup:create, it sets up automatically).` Each unavailable transport prints its fix hint (e.g. `cli → clickup-cli setup`).
+
+Never mutates state. Safe to run any time. `/clickup:connect show` renders exactly this Connection block and nothing else.
+
+---
+
+## connect
+
+Investigate which ClickUp transports are available, let the user CHOOSE one (never silently pick), and remember the choice in `config.connection`. Entered explicitly via `/clickup:connect`, or automatically by preflight Step 2.5 when `connection.configured != true`. Transports + per-transport realization are defined in `references/connection.md`; this section is the UX flow only. **`--connect --auto` is refused at parse time** (SKILL.md Step 1) — choosing a transport requires `AskUserQuestion`.
+
+### Flow
+
+1. **Investigate (parallel, read-only).** Probe all three transports; classify each rc (`auth-ok` / `auth-fail` / `retryable-network` / `other` / `absent`):
+   - `mcp` — `op.probe()` via the MCP adapter.
+   - `cli` — `command -v clickup-cli` (and the `clkup` alias), then `clickup-cli auth check` (exit code only).
+   - `rest` — check `$CLICKUP_API_TOKEN` presence; if absent, check (presence ONLY, never read/echo the value) whether clickup-cli's `config.toml` carries `[auth].token`. If a token source exists, `GET /api/v2/user`; else `absent`.
+   This step writes nothing and never prints a token.
+
+2. **Present findings** (monospace table — ground truth before the choice):
+
+   ```
+   Investigating ClickUp connectivity...
+     Transport    Detected           Auth probe   Capabilities
+     ───────────────────────────────────────────────────────────────
+     MCP          connected          auth-ok      full: task_type, multi-assignee, markdown
+     clickup-cli  installed (0.13)   auth-ok      no task_type / single assignee on create
+     REST API     reachable          no token     full, but needs a token (walk-through)
+     Most capable available now: MCP.
+   ```
+
+3. **Ask (`AskUserQuestion`, single round — never silently pick).**
+   - **Q1 (required, single-select):** "Which transport should /clickup use first?" Options are built dynamically from the transports that probed `auth-ok`, each labelled with its capability tradeoff. The most-capable-available is offered first as the recommended default (for an existing MCP user migrating from 1.4.0, that is MCP — a one-tap confirm), **but the user must confirm**. Even when only ONE transport is available, the one-option question is still shown so the choice is recorded as the user's — the plugin never auto-adopts a transport.
+   - **Q2 (optional, only if ≥2 are available):** "Fallback order if your first choice is down?" Default = preferred-first, then the rest by capability richness (`mcp > rest > cli`); the user may reorder or remove a transport (removal = hard opt-out for that transport).
+   - **REST token sub-question** (only if the user picks REST and no token is configured): `[Use the token already in your clickup-cli config (full scope)] / [I'll set $CLICKUP_API_TOKEN myself] / [Pick a different transport]`. The recommendation steers to MCP/CLI to avoid the plugin touching a token at all. The resulting `rest_token_ref` is a POINTER (`cli-config` or `env:<NAME>`), validated against `^(env:[A-Z_][A-Z0-9_]*|cli-config)$` — never the token value. See `references/connection.md` → Secret handling.
+
+4. **Remember.** Write the `connection` block via the EXISTING `atomic_update` helper (flock on `~/.claude/clickup/.config.json.lock`, tmp + fsync + os.replace, unknown-key preservation) in ONE atomic pass that round-trips every other key (`workspace`, `lists`, `aliases`, `defaults`). Set `configured: true`, `primary`, `fallback_order`, `auto_borrow: false` (unless the user opted into cross-transport borrow in `--auto`), `investigated_at: <now>`, `rest_token_ref`, and cache `last_probe`. Because this goes through `atomic_update`, a `schemaVersion 1` file is upgraded to `2` (and the `schemaVersionHistory` row appended) in the SAME pass — `connect` is a legitimate migration-on-mutation event. **This writes ONLY `~/.claude/clickup/config.json` — it MUST NOT write `~/.claude/shared/identity.json`** (transport choice is clickup-local; identity is cross-plugin, shared with `/g-event`). This and `/clickup:connect` are the ONLY write paths for the `connection` block; the token value is never persisted.
+
+5. **Resume.** If a ticket seed was carried in from Step 2.5, resume `## default` with the now-resolved transport.
+
+### Re-run + onboard integration
+
+- `/clickup:connect` is re-runnable: it pre-selects the current `primary` and shows the latest probe. Use it to switch transports, add REST, or refresh after installing `clickup-cli` / connecting the MCP.
+- The `## onboard` chain gains a final step: after `onboard-workspace`, if `connection.configured != true`, run `## connect` before returning.
+- `/clickup:connect show` is read-only — it renders the `## status` Connection block and exits.
 
 ---
 
@@ -594,7 +647,7 @@ Switch the active ClickUp workspace. Only mutates `~/.claude/clickup/config.json
 
 ### Flow
 
-1. Call `mcp__clickup__clickup_get_workspace_hierarchy` to list all workspaces the current auth has access to.
+1. Call `op.get_hierarchy` to list all workspaces the current auth has access to.
 2. Present as an `AskUserQuestion` (single-select).
 3. On pick, atomically update `~/.claude/clickup/config.json` with new `workspace.id` + `workspace.name`. Re-fetch lists for the new workspace; replace `lists[]`.
 4. **Fetch new workspace members**. For each teammate in `~/.claude/shared/identity.json`:
@@ -617,11 +670,11 @@ Incremental reconciliation of `~/.claude/clickup/config.json` `lists[]` against 
 
 ### Flow
 
-1. **Pre-flight**: inherits SKILL.md → Step 2 (identity, config, schemaVersion, MCP auth probe with the 4-bucket classification — `auth-ok` / `auth-fail` / `retryable-network` / `other`). Reload does NOT duplicate these checks.
+1. **Pre-flight**: inherits SKILL.md → Step 2 (identity, config, schemaVersion, **connection resolution at Step 2.5**, and `op.probe()` on the resolved transport with the 4-bucket classification — `auth-ok` / `auth-fail` / `retryable-network` / `other`). Reload does NOT duplicate these checks; it calls `op.get_hierarchy` through whatever transport Step 2.5 resolved.
 
 2. **Parse `--mode`**: accept `--mode=incremental` or `--mode=full`. If neither, threshold decides.
 
-3. **Fetch workspace hierarchy** via `mcp__clickup__clickup_get_workspace_hierarchy`. Filter to the workspace whose `id` matches `config.workspace.id`. **Empirical question for executor**: confirm whether the call returns archived lists by default; if so, filter them out (`mcp_lists = [l for l in mcp_lists if not l.get("archived")]`) before the diff. Document the empirical answer in a comment.
+3. **Fetch workspace hierarchy** via `op.get_hierarchy` (resolved transport per `references/connection.md`). Filter to the workspace whose `id` matches `config.workspace.id`. **Empirical question for executor**: confirm whether the call returns archived lists by default; if so, filter them out (`lists = [l for l in lists if not l.get("archived")]`) before the diff. Document the empirical answer in a comment.
 
 4. **Defensive halts** (each is a one-line refusal; do NOT mutate config):
    - If MCP returns 0 workspaces → `"workspace ${name} not visible to current MCP auth — re-onboard"`.
@@ -768,9 +821,9 @@ Incremental reconciliation of `~/.claude/clickup/config.json` `lists[]` against 
 
 Computed as `max(lists[].last_validated_at)` for the headline duration, with min/max teammate names for context. If max > 30 days, append the recommendation `→ run /clickup:reload`.
 
-### Updating to 1.4.0 / discovering the new command
+### Updating to 1.5.0 / discovering the new command
 
-The `/clickup` plugin is shipped via the user's marketplace clone. To pick up `/clickup:reload` (or any future `/clickup` change) without losing data:
+The `/clickup` plugin is shipped via the user's marketplace clone. To pick up `/clickup:connect` (or any future `/clickup` change) without losing data:
 
 1. **Pull the marketplace clone** (the local checkout of `claude-plugins` that `/plugin` reads from):
 
@@ -788,8 +841,9 @@ The `/clickup` plugin is shipped via the user's marketplace clone. To pick up `/
    `<marketplace-name>` is whatever name the user registered (run `/plugin marketplace list` to see it — typically `claude-plugins`).
 
 3. **Verify**:
-   - `/plugin list` shows `clickup` at version `1.4.0`.
-   - Typing `/clickup:` autocompletes `reload` as one of the options.
+   - `/plugin list` shows `clickup` at version `1.5.0`.
+   - Typing `/clickup:` autocompletes `connect` (and `reload`) as options.
+   - First `/clickup:create` opens the one-tap connect prompt (pre-selects your prior transport); a scripted `--auto` halts once with "connection not configured — run /clickup:connect first" until you choose a transport interactively.
 
 **File-state guarantees during the update**:
 
@@ -808,4 +862,4 @@ The `/clickup` plugin is shipped via the user's marketplace clone. To pick up `/
 | Last `/clickup:onboard workspace` was > 30 days ago | Run `/clickup:status` first; it surfaces the staleness banner with a recommendation. Then `/clickup:reload`. |
 | Just onboarded yesterday and nothing has changed | Don't bother. Next `/clickup:create` works as-is. Reload would be a no-op. |
 | `~/.claude/clickup/config.json` is from before this PR (no `last_validated_at` fields) | First `/clickup:create` succeeds normally; first `/clickup:reload` populates the new fields. Existing aliases are NOT lost — `atomic_update` preserves unknown keys and `lists[].id` is the join key. |
-| MCP auth scope changed (workspace not visible) | `/clickup:reload` refuses with the "auth scope changed" halt — re-authenticate via `mcp__clickup__authenticate`, then rerun. |
+| Auth scope changed (workspace not visible) | `/clickup:reload` refuses with the "auth scope changed" halt — re-authenticate via the resolved transport's re-auth step (`references/connection.md` → Fix hints), then rerun. |

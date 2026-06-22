@@ -16,6 +16,9 @@ SKILL="$PLUGIN_DIR/skills/clickup/SKILL.md"
 MODES="$PLUGIN_DIR/skills/clickup/references/modes.md"
 SCHEMA="$PLUGIN_DIR/skills/clickup/references/config-schema.md"
 TICKET="$PLUGIN_DIR/skills/clickup/references/ticket-format.md"
+CONNECTION="$PLUGIN_DIR/skills/clickup/references/connection.md"
+CONNECT_CMD="$PLUGIN_DIR/commands/connect.md"
+RELOAD_CMD_F="$PLUGIN_DIR/commands/reload.md"
 
 PASS=0
 FAIL=0
@@ -96,15 +99,25 @@ fi
 # This is a no-op verification — just register coverage of the gap.
 pass "WS-skip-F6: PLG-clickup-6 explicitly out-of-scope per task brief"
 
-# ---------- F7: MCP auth probe named with rc classification ----------
-# Acceptance: specific named probe call + 4 named buckets.
-if grep -q "mcp__clickup__clickup_get_workspace_hierarchy" "$SKILL" \
-   && grep -q "auth-ok" "$SKILL" \
+# ---------- F7 (re-pointed for 1.5.0 de-hardcode): rc classification stays in SKILL.md;
+#            the literal probe tool moves to connection.md's MCP adapter ----------
+# Acceptance: the four rc buckets remain pinned in SKILL.md (the contract), AND the
+# concrete MCP probe literal is asserted in connection.md (its new sole home), AND
+# SKILL.md probes the RESOLVED transport via op.probe (not a hardcoded MCP call).
+if grep -q "auth-ok" "$SKILL" \
    && grep -q "auth-fail" "$SKILL" \
-   && grep -q "retryable-network" "$SKILL"; then
-  pass "WS6-F7: named MCP probe + rc classification (auth-ok/fail/retryable)"
+   && grep -q "retryable-network" "$SKILL" \
+   && grep -q '`other`' "$SKILL" \
+   && grep -q "op.probe" "$SKILL"; then
+  pass "WS6-F7: four rc buckets + op.probe(resolved transport) pinned in SKILL.md"
 else
-  fail "WS6-F7: named MCP probe + rc classification" "missing probe name or buckets"
+  fail "WS6-F7: rc buckets + op.probe in SKILL.md" "missing one of: auth-ok/auth-fail/retryable-network/other/op.probe"
+fi
+if grep -q "op.probe" "$CONNECTION" \
+   && grep -q "mcp__clickup__clickup_get_workspace_hierarchy" "$CONNECTION"; then
+  pass "WS6-F7: MCP probe literal relocated to connection.md adapter (op.probe -> get_workspace_hierarchy)"
+else
+  fail "WS6-F7: MCP probe literal in connection.md" "connection.md missing op.probe -> MCP probe mapping"
 fi
 
 # ---------- F8: @mention / auto-link / image sanitisation ----------
@@ -211,13 +224,15 @@ else
   fail "WSR-4: --reload --auto parse-time refuse" "missing prose"
 fi
 
-# ---------- WSR-5: modes.md has ## reload section ----------
+# ---------- WSR-5 (re-pointed for 1.5.0): modes.md ## reload uses op.get_hierarchy ----------
+# The concrete clickup_get_workspace_hierarchy literal moved to connection.md; modes.md
+# now references the OPERATION. Assert the reload section + the op + the Jaccard metric.
 if grep -q "^## reload$" "$MODES" \
-   && grep -q "clickup_get_workspace_hierarchy" "$MODES" \
+   && grep -q "op.get_hierarchy" "$MODES" \
    && grep -q "Jaccard" "$MODES"; then
-  pass "WSR-5: modes.md ## reload section with hierarchy + Jaccard anchors"
+  pass "WSR-5: modes.md ## reload section with op.get_hierarchy + Jaccard anchors"
 else
-  fail "WSR-5: modes.md ## reload section" "missing one of: header / hierarchy / Jaccard"
+  fail "WSR-5: modes.md ## reload section" "missing one of: header / op.get_hierarchy / Jaccard"
 fi
 
 # ---------- WSR-6: small-N guard documented ----------
@@ -314,6 +329,155 @@ if grep -q "archived: true" "$SCHEMA" \
   pass "WSR-16: archived↔removed_at invariant pinned in config-schema.md"
 else
   fail "WSR-16: archived↔removed_at invariant" "invariant prose not found"
+fi
+
+# ============================================================================
+# CONN-1..CONN-14 — 1.5.0 unified connection layer (MCP / clickup-cli / REST)
+# ============================================================================
+
+# ---------- CONN-FILES: new files exist ----------
+if [[ -f "$CONNECTION" ]]; then pass "CONN-FILES: references/connection.md exists"
+else fail "CONN-FILES: connection.md" "missing"; fi
+if [[ -f "$CONNECT_CMD" ]] && grep -q "clickup:clickup" "$CONNECT_CMD" && grep -q -- "--connect" "$CONNECT_CMD"; then
+  pass "CONN-FILES: commands/connect.md exists and dispatches --connect to clickup:clickup"
+else fail "CONN-FILES: connect.md" "missing file or wiring"; fi
+
+# ---------- CONN-1: all 12 capability operations named in connection.md ----------
+conn1_missing=""
+for op in op.probe op.get_hierarchy op.get_list op.get_members op.resolve_assignees \
+          op.find_tasks op.find_by_marker op.get_task op.create_task op.update_task \
+          op.create_comment op.get_custom_fields; do
+  grep -q "$op" "$CONNECTION" || conn1_missing="$conn1_missing $op"
+done
+if [[ -z "$conn1_missing" ]]; then
+  pass "CONN-1: all 12 op.* capability operations defined in connection.md"
+else
+  fail "CONN-1: capability ops" "connection.md missing:$conn1_missing"
+fi
+
+# ---------- CONN-2: three transport adapter columns present in connection.md ----------
+if grep -q "clickup-cli task create" "$CONNECTION" \
+   && grep -q "markdown_description" "$CONNECTION" \
+   && grep -q "/api/v2/" "$CONNECTION"; then
+  pass "CONN-2: connection.md realization names all three transports (cli / mcp / rest)"
+else
+  fail "CONN-2: three adapters" "missing one of: 'clickup-cli task create' / markdown_description / /api/v2/"
+fi
+
+# ---------- CONN-3 (anti-hardcode guard): no mcp__clickup__ literal OUTSIDE connection.md ----------
+# connection.md is the sole legitimate home for transport literals. SKILL.md, modes.md,
+# config-schema.md, and every command wrapper must name op.* only.
+conn3_leak=$(grep -rl "mcp__clickup__" "$SKILL" "$MODES" "$SCHEMA" "$PLUGIN_DIR/commands/" 2>/dev/null || true)
+if [[ -z "$conn3_leak" ]]; then
+  pass "CONN-3: no mcp__clickup__ literal outside connection.md (de-hardcode complete)"
+else
+  fail "CONN-3: hardcode leak" "mcp__clickup__ still in: $(echo "$conn3_leak" | tr '\n' ' ')"
+fi
+
+# ---------- CONN-4: canonical priority map pinned in connection.md ----------
+if grep -q "urgent=1" "$CONNECTION" && grep -q "low=4" "$CONNECTION" && grep -qi "string" "$CONNECTION"; then
+  pass "CONN-4: canonical priority map (urgent=1..low=4; MCP string) pinned in connection.md"
+else
+  fail "CONN-4: priority map" "missing urgent=1 / low=4 / string in connection.md"
+fi
+
+# ---------- CONN-5: capability degradation policy ----------
+if grep -q "task_type" "$CONNECTION" \
+   && grep -q "clickup-cli" "$CONNECTION" \
+   && grep -qi "never silently drop" "$CONNECTION" \
+   && grep -q -- "--assignee" "$CONNECTION"; then
+  pass "CONN-5: degradation policy (task_type / single --assignee / never silently drop) in connection.md"
+else
+  fail "CONN-5: degradation policy" "missing one of: task_type / clickup-cli / 'never silently drop' / --assignee"
+fi
+
+# ---------- CONN-6: ## connect mode in modes.md, investigate->ask->remember, never silent ----------
+if grep -q "^## connect$" "$MODES" \
+   && grep -qi "investigate" "$MODES" \
+   && grep -q "AskUserQuestion" "$MODES" \
+   && grep -qi "never silently pick\|never silent-pick\|the plugin never auto-adopts" "$MODES"; then
+  pass "CONN-6: modes.md ## connect (investigate + AskUserQuestion + never-silent) present"
+else
+  fail "CONN-6: connect mode" "missing one of: ## connect / investigate / AskUserQuestion / never-silent"
+fi
+
+# ---------- CONN-7: forced connect detour + never-create-unconfigured (SKILL.md Step 2.5) ----------
+if grep -qi "connection not configured" "$SKILL" \
+   && grep -q "configured != true" "$SKILL" \
+   && grep -qi "never create or mutate a ticket without an investigated, chosen connection" "$SKILL"; then
+  pass "CONN-7: SKILL.md Step 2.5 forces connect when unconfigured (never run unconfigured)"
+else
+  fail "CONN-7: forced detour" "missing 'connection not configured' / 'configured != true' / never-create anchor"
+fi
+
+# ---------- CONN-8: --connect --auto parse-time refuse + --auto capability-gap refuse ----------
+if grep -q "refusing --connect --auto" "$SKILL" \
+   && grep -qi "Capability gap with no silent fix\|--auto does NOT borrow" "$SKILL"; then
+  pass "CONN-8: --connect --auto refused + --auto never borrows silently (capability-gap refuse)"
+else
+  fail "CONN-8: --auto guards" "missing '--connect --auto' refuse or '--auto' capability-gap refuse"
+fi
+
+# ---------- CONN-9: connection block documented in config-schema.md ----------
+conn9_missing=""
+for k in "connection" "configured" "primary" "fallback_order" "rest_token_ref" "auto_borrow"; do
+  grep -q "$k" "$SCHEMA" || conn9_missing="$conn9_missing $k"
+done
+if [[ -z "$conn9_missing" ]] && grep -q "mcp" "$SCHEMA" && grep -q "rest" "$SCHEMA" && grep -q "cli" "$SCHEMA"; then
+  pass "CONN-9: config-schema.md documents the connection block + transport enum"
+else
+  fail "CONN-9: connection schema" "config-schema.md missing:$conn9_missing (or transport enum)"
+fi
+
+# ---------- CONN-10 (secret hygiene): pointer-not-value prose + NEGATIVE token-shape grep ----------
+if grep -qi "pointer, never a value\|token value is never written\|never the token\|never a token value" "$CONNECTION" \
+   && grep -q "rest_token_ref" "$CONNECTION"; then
+  conn10_prose=1
+else
+  conn10_prose=0
+fi
+# No real token literal anywhere under the plugin (pk_/tk_ + 20+ base62 chars).
+TOKEN_LEAK=$(grep -rnE "(pk_|tk_)[A-Za-z0-9]{20,}" "$PLUGIN_DIR" 2>/dev/null || true)
+if [[ "$conn10_prose" -eq 1 && -z "$TOKEN_LEAK" ]]; then
+  pass "CONN-10: secret pointer-not-value rule + no token-shaped literal under plugins/clickup/"
+else
+  fail "CONN-10: secret hygiene" "prose=$conn10_prose tokenleak=$(echo "$TOKEN_LEAK" | head -1)"
+fi
+
+# ---------- CONN-11: /clickup:status Connection block in modes.md ----------
+if grep -q "Resolves to" "$MODES" \
+   && grep -q "Available now" "$MODES" \
+   && grep -q "clickup-cli setup" "$MODES"; then
+  pass "CONN-11: status Connection block (Resolves to / Available now / fix hints) present"
+else
+  fail "CONN-11: status connection block" "missing one of: 'Resolves to' / 'Available now' / 'clickup-cli setup'"
+fi
+
+# ---------- CONN-12: rest_token_ref format guard regex pinned (connection.md + schema) ----------
+if grep -q "env:\[A-Z_\]\[A-Z0-9_\]\*" "$CONNECTION" \
+   && grep -q "cli-config" "$CONNECTION" \
+   && grep -q "cli-config" "$SCHEMA"; then
+  pass "CONN-12: rest_token_ref validated against ^(env:NAME|cli-config)\$ (connection.md + schema)"
+else
+  fail "CONN-12: rest_token_ref guard" "missing env:NAME regex or cli-config anchor"
+fi
+
+# ---------- CONN-13: connect writes ONLY config.json (never identity.json) + shell/URL hygiene ----------
+if grep -qi "MUST NOT write .*identity.json" "$MODES" \
+   && grep -q -- "--data-urlencode" "$CONNECTION" \
+   && grep -qi "single-quote" "$CONNECTION"; then
+  pass "CONN-13: connect writes only config.json; curl url-encode + cli single-quote hygiene pinned"
+else
+  fail "CONN-13: write-scope + hygiene" "missing identity.json no-write OR --data-urlencode OR single-quote"
+fi
+
+# ---------- CONN-14: NO schemaVersion bump (connection is additive) ----------
+if grep -q "CURRENT_SCHEMA_VERSION = 2" "$SCHEMA" \
+   && ! grep -q "CURRENT_SCHEMA_VERSION = 3" "$SCHEMA" \
+   && grep -qi "no .schemaVersion. bump\|additive" "$SCHEMA"; then
+  pass "CONN-14: connection added with NO schemaVersion bump (CURRENT stays 2, additive)"
+else
+  fail "CONN-14: no schema bump" "CURRENT_SCHEMA_VERSION changed OR connection not documented as additive"
 fi
 
 # ---------- Summary ----------

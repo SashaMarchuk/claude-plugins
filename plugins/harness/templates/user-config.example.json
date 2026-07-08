@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "_comment": "~/.claude/harness/config.json — machine/person-level defaults. Project config overrides per key. Every key shown here has a sensible built-in default; delete what you don't need.",
+
+  "terminal": {
+    "app": "auto",
+    "_app_options": "auto | iterm2 | terminal | tmux — 'auto' picks iTerm2 if installed, else Terminal.app, else tmux",
+    "fullscreen": false,
+    "windows": {
+      "control": ["orchestrator", "watch"],
+      "work": ["worker", "validator", "question"]
+    },
+    "_windows_note": "role → window-group map. Groups become OS windows; sessions in a group become tabs. Two groups = the 'orchestrators in one screen, execution in the other' layout."
+  },
+
+  "accounts": {
+    "env_command": "",
+    "label": "",
+    "_note": "OPTIONAL — leave empty to use your normal claude login (the default; one account is fine). If you manage multiple Claude accounts (e.g. work vs personal via a switcher like cloak), set env_command to any command that PRINTS export-style env vars for the account the harness should use, e.g. \"cloak switch --print-env work\". The generated launchers eval it before starting claude and fail loudly (exit 9) if it breaks. No rotation, no headroom-chasing — one identity per role at most."
+  },
+
+  "models": {
+    "orchestrator": "opus",
+    "worker": "opus",
+    "validator": "fable|mythos|opus",
+    "question": "opus",
+    "_note": "'|' means OR: try left first, fall back automatically if the model is unavailable/restricted at boot. Aliases: fable, mythos, opus, sonnet, or full claude-* ids. haiku is rejected by policy. Sonnet is reserved for command validation and big-context summarization."
+  },
+
+  "limits": {
+    "pause_next_spawn_at": 90,
+    "weekly_pause_at": null,
+    "resume_margin_seconds": 90,
+    "stop_at": null,
+    "on_unreadable": "proceed",
+    "_note": "Pause, don't stop: at/above pause_next_spawn_at% of the 5h window, NEW spawns wait for the reset (running sessions are never touched). weekly_pause_at/stop_at null = never pause on weekly / never hard-stop. on_unreadable: proceed|hold when the usage API can't be read."
+  },
+
+  "session": {
+    "permissions": "bypass",
+    "_permissions_options": "bypass (--dangerously-skip-permissions, classic unattended) | auto | acceptEdits | dontAsk",
+    "boot_grace_seconds": 45,
+    "close_timeout_seconds": 90
+  },
+
+  "guardrails": {
+    "sonnet_validation": true,
+    "_note": "Every spawn's generated launcher is reviewed by a sonnet validator before the terminal opens (second net after the deterministic guards). Costs one small -p call per spawn."
+  },
+
+  "run": {
+    "caffeinate": true,
+    "watch_interval_seconds": 60,
+    "stall_minutes": 20
+  }
+}

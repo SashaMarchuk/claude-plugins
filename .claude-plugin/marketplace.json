@@ -76,6 +76,16 @@
       "source": "./plugins/log-time",
       "category": "productivity",
       "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/log-time"
+    },
+    {
+      "name": "harness",
+      "description": "(beta) Universal autonomous orchestration harness — runs Claude Code sessions in real terminals to execute your ticket queue end-to-end (GSD-flavored by default), unattended. Deterministic bash engine: user + project config, model fallback chains with '|' OR syntax (fable|mythos|opus), GitHub-issues or local-file tickets with a mandatory readiness grill gate, rate-limit PAUSE (never stop) with API-timed auto-resume, tty-keyed session registry, and a graceful /exit-then-close terminal lifecycle. One account by default; any account switcher pluggable via one config key.",
+      "author": {
+        "name": "Sasha Marchuk"
+      },
+      "source": "./plugins/harness",
+      "category": "development",
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/harness"
     }
   ]
 }

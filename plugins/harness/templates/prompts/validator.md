@@ -24,5 +24,5 @@ Lane tickets:
      concerns to the tickets (`{{HBIN}}/harness-tickets.sh comment`), recommending `review`.
    - FAIL → do NOT set the marker. Write exactly what fails (file:line, failing command output)
      to `{{RUN_DIR}}/state/validator-{{LANE}}-fail.md` and comment on the tickets.
-5. Heartbeat as `v-{{LANE}}`; never AskUserQuestion; exit with `/exit` when your verdict is
-   recorded.
+5. Heartbeat as `v-{{LANE}}`; never AskUserQuestion. When your verdict is recorded (marker set
+   or fail file written), stop — you cannot `/exit` yourself; the orchestrator closes you.

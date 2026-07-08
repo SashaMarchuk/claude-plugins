@@ -8,7 +8,10 @@ HARNESS_USER_DIR="${HARNESS_USER_DIR:-$HOME/.claude/harness}"
 HARNESS_USER_CONFIG="$HARNESS_USER_DIR/config.json"
 
 # ---------------------------------------------------------------- project root
-# Walk up from $PWD (or $HARNESS_PROJECT if exported) to the nearest .harness/config.json.
+# Resolution order: $HARNESS_PROJECT (exported by every generated launcher) → walk up from
+# $PWD to a .harness/config.json → walk up to a .harness-project pointer file (dropped into
+# each worktree at spawn). Sibling worktrees have no .harness/, so the env var / pointer are
+# how workers reach the engine (DESIGN.md L-worktree).
 hproject_root() {
   if [ -n "${HARNESS_PROJECT:-}" ]; then
     [ -f "$HARNESS_PROJECT/.harness/config.json" ] && { printf '%s\n' "$HARNESS_PROJECT"; return 0; }
@@ -17,23 +20,39 @@ hproject_root() {
   local d="$PWD"
   while [ "$d" != "/" ]; do
     [ -f "$d/.harness/config.json" ] && { printf '%s\n' "$d"; return 0; }
+    if [ -f "$d/.harness-project" ]; then
+      local p; p=$(cat "$d/.harness-project" 2>/dev/null)
+      [ -n "$p" ] && [ -f "$p/.harness/config.json" ] && { printf '%s\n' "$p"; return 0; }
+    fi
     d=$(dirname "$d")
   done
-  echo "ERROR: no .harness/config.json found from $PWD upward — run /harness:init first" >&2
+  echo "ERROR: cannot locate the harness project from $PWD." >&2
+  echo "  If you are in a worktree, export HARNESS_PROJECT=<project-root> (the launcher sets this automatically)." >&2
+  echo "  If this is a new project, run /harness:init first." >&2
   return 1
 }
 
 # ------------------------------------------------------------------ config: cfg
 # cfg <jq-path> <default>  → project value, else user value, else default.
 # jq-path example: '.limits.pause_next_spawn_at'
+# A present-but-false / present-but-0 value is honored (NOT overridden by the default) — the
+# only thing that falls through to the next layer is a MISSING key or an explicit JSON null.
+_cfg_read() { # _cfg_read <file> <path> — echoes the scalar; returns 1 if absent/null
+  # Deliberately NOT `jq -e`: -e sets exit status from truthiness, which would treat a valid
+  # `false`/`0`/`null` value as failure. We read raw and only reject the literal null.
+  local file="$1" path="$2" v
+  v=$(jq -r "$path" "$file" 2>/dev/null) || return 1
+  [ "$v" = "null" ] && return 1
+  printf '%s\n' "$v"
+}
 cfg() {
   local path="${1:?jq path required}" def="${2-}"
-  local v proj
+  local proj v
   if proj=$(hproject_root 2>/dev/null); then
-    v=$(jq -er "$path // empty" "$proj/.harness/config.json" 2>/dev/null) && [ -n "$v" ] && { printf '%s\n' "$v"; return 0; }
+    v=$(_cfg_read "$proj/.harness/config.json" "$path") && { printf '%s\n' "$v"; return 0; }
   fi
   if [ -f "$HARNESS_USER_CONFIG" ]; then
-    v=$(jq -er "$path // empty" "$HARNESS_USER_CONFIG" 2>/dev/null) && [ -n "$v" ] && { printf '%s\n' "$v"; return 0; }
+    v=$(_cfg_read "$HARNESS_USER_CONFIG" "$path") && { printf '%s\n' "$v"; return 0; }
   fi
   printf '%s\n' "$def"
 }
@@ -77,10 +96,17 @@ assert_safe_cwd() { # assert_safe_cwd <dir> — absolute, exists, not $HOME, not
   proj=$(cd "$proj" && pwd -P)
   case "$d/" in
     "$proj"/*) return 0 ;;
-    *) # worktrees may live next to the project dir (sibling convention) — allow siblings of project
-       case "$d/" in "$(dirname "$proj")"/*) return 0 ;; esac
-       echo "ERROR: cwd $d is outside the project ($proj) and its parent" >&2; return 65 ;;
   esac
+  # Outside the project tree: allow ONLY a real git worktree whose main repo lives inside the
+  # project (the sibling-worktree convention) — not every unrelated project under the parent dir.
+  local common main
+  if common=$(git -C "$d" rev-parse --git-common-dir 2>/dev/null); then
+    case "$common" in /*) ;; *) common=$(cd "$d" && cd "$common" && pwd -P) ;; esac
+    main=$(cd "$common/.." 2>/dev/null && pwd -P || true)
+    case "$main/" in "$proj"/*) return 0 ;; esac
+  fi
+  echo "ERROR: cwd $d is neither inside the project ($proj) nor a git worktree of a repo in it" >&2
+  return 65
 }
 
 # -------------------------------------------------------------------- utilities

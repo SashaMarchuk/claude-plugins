@@ -87,15 +87,20 @@ Input: free text after `--add` (e.g. "implement CSV export for reports").
 
 ## --run
 
-1. Preflight is the engine's job: `bash "${CLAUDE_PLUGIN_ROOT}/bin/harness-run.sh" start` runs
-   config/auth/terminal/env-command checks and refuses with specific messages — relay failures
-   verbatim and help fix them (missing user config → offer --onboard; missing project → --init).
-2. Before starting, show the operator a 5-line brief: tickets that will run (from
+1. Before starting, show the operator a 5-line brief: tickets that will run (from
    `harness-tickets.sh list ready`), limits right now (`harness-limits.sh verdict`), terminal
    layout, and whether the queue is empty (empty → suggest /harness:add first; starting an
    empty run is allowed but pointless).
-3. Start it. Report the run id and how to watch: `/harness:status`, STOP semantics
-   (`/harness:stop`), and where artifacts land (`.harness/runs/<id>/RUN-REPORT.md`).
+2. Start it with `bash "${CLAUDE_PLUGIN_ROOT}/bin/harness-run.sh" start`. This legitimately
+   takes several minutes (terminal probe + usage-API call + sonnet spawn-validation up to 120s +
+   boot-verification poll), and if the account is rate-paused at launch it waits for the reset —
+   so **run it with a 600000 ms Bash timeout, or `run_in_background: true` and tail
+   `.harness/runs/<id>/logs/harness.log`**. Never let the default 2-minute tool timeout kill it.
+   Preflight is inside `start`; it refuses with specific messages — relay them verbatim and help
+   fix (missing user config → offer --onboard; missing project → --init; Automation permission →
+   point at System Settings → Privacy & Security → Automation).
+3. Report the run id and how to watch: `/harness:status`, STOP semantics (`/harness:stop`), and
+   where artifacts land (`.harness/runs/<id>/RUN-REPORT.md`).
 
 ## --status
 

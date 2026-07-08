@@ -92,15 +92,18 @@ l_add() {
 l_comment() { { printf '\n---\n%s harness log:\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; cat "${2:?body}"; } >> "$(l_file "${1:?id}")"; echo "OK logged on $1"; }
 l_claim()  { [ "$(l_status_get "$1")" = "ready" ] || { echo "ERROR: ticket $1 is not ready" >&2; return 65; }; l_status_set "$1" in-progress; echo "OK claimed $1"; }
 
+# if/else per verb — NEVER `gh_x && ... || l_x`: a transient gh failure must propagate as an
+# error, not silently fall through to the (empty) local source and look like an empty queue (review HIGH).
+is_gh() { [ "$SOURCE" = github ]; }
 case "${1:?usage: tickets.sh bootstrap|list|show|add|claim|comment|done|block|review}" in
-  bootstrap) [ "$SOURCE" = github ] && gh_labels_bootstrap || l_bootstrap ;;
-  list)    shift; [ "$SOURCE" = github ] && gh_list "$@" || l_list "$@" ;;
-  show)    shift; [ "$SOURCE" = github ] && gh_show "$@" || cat "$(l_file "${1:?id}")" ;;
-  add)     shift; [ "$SOURCE" = github ] && gh_add "$@" || l_add "$@" ;;
-  claim)   shift; [ "$SOURCE" = github ] && gh_claim "$@" || l_claim "$@" ;;
-  comment) shift; [ "$SOURCE" = github ] && gh_comment "$@" || l_comment "$@" ;;
-  done)    shift; [ "$SOURCE" = github ] && gh_done "$@" || { l_status_set "${1:?}" "done"; echo "OK done $1"; } ;;
-  block)   shift; [ "$SOURCE" = github ] && gh_block "$@" || { l_status_set "${1:?}" blocked; l_comment "$1" "${2:?why-file}"; } ;;
-  review)  shift; [ "$SOURCE" = github ] && gh_review "$@" || { l_status_set "${1:?}" needs-review; echo "OK needs-review $1"; } ;;
+  bootstrap) if is_gh; then gh_labels_bootstrap; else l_bootstrap; fi ;;
+  list)    shift; if is_gh; then gh_list "$@"; else l_list "$@"; fi ;;
+  show)    shift; if is_gh; then gh_show "$@"; else cat "$(l_file "${1:?id}")"; fi ;;
+  add)     shift; if is_gh; then gh_add "$@"; else l_add "$@"; fi ;;
+  claim)   shift; if is_gh; then gh_claim "$@"; else l_claim "$@"; fi ;;
+  comment) shift; if is_gh; then gh_comment "$@"; else l_comment "$@"; fi ;;
+  done)    shift; if is_gh; then gh_done "$@"; else l_status_set "${1:?}" "done"; echo "OK done $1"; fi ;;
+  block)   shift; if is_gh; then gh_block "$@"; else l_status_set "${1:?}" blocked; l_comment "$1" "${2:?why-file}"; fi ;;
+  review)  shift; if is_gh; then gh_review "$@"; else l_status_set "${1:?}" needs-review; echo "OK needs-review $1"; fi ;;
   *) echo "usage: tickets.sh bootstrap|list|show|add|claim|comment|done|block|review" >&2; exit 64 ;;
 esac

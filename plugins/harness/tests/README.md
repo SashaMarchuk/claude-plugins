@@ -7,7 +7,7 @@ Each test pins an invariant from `docs/DESIGN.md`; the L-numbers reference its l
 |---|---|---|
 | Engine scripts parse / lint clean | quality bar | H-1, H-2 |
 | Version discipline (plugin.json ↔ CHANGELOG) | house convention | H-3 |
-| No "night" naming anywhere user-visible | naming requirement | H-4 |
+| No banned legacy run-name user-visible | naming requirement | H-4 |
 | haiku never used; sonnet/opus-only agents | model policy | H-5, H-17 |
 | Config templates valid JSON | onboarding | H-6 |
 | PATH-collision-proof `harness-` script names | multi-plugin machines | H-7 |

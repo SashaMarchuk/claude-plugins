@@ -13,7 +13,12 @@ set -euo pipefail
 
 BACKEND=$(cfg '.terminal.app' 'auto')
 if [ "$BACKEND" = "auto" ]; then
+  # Prefer iTerm2 (full send/key/capture/close), else tmux (also full-featured & OS-agnostic).
+  # Terminal.app is NOT auto-selected: it has no send/key, so stop/watch/auto-resume degrade to
+  # silent no-ops (review HIGH). Users may still set "app":"terminal" explicitly, with the
+  # limitations documented, but auto never lands there when tmux is available.
   if [ -d "/Applications/iTerm.app" ]; then BACKEND=iterm2
+  elif command -v tmux >/dev/null 2>&1; then BACKEND=tmux
   elif [ "$(uname)" = "Darwin" ]; then BACKEND=terminal
   else BACKEND=tmux; fi
 fi

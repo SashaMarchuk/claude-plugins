@@ -46,10 +46,13 @@ The parts people ask about:
   terminal text); running sessions are never touched; `stop_at: null` means the harness never
   voluntarily stops. The watch loop also clears the interactive limit banner after reset —
   only when the session is idle.
-- **Terminal.** `auto` detects iTerm2 → Terminal.app → tmux; two-window layout by default
-  (control: orchestrator + watch · work: everything else); sessions are tracked by tty and
-  closed one at a time via `/exit`-then-close — the harness never closes a window and never
-  touches sessions it didn't start.
+- **Terminal.** `auto` detects iTerm2 → tmux → Terminal.app (Terminal.app is never auto-picked
+  when tmux exists, because it can't deliver `/exit`/nudges — so graceful stop and auto-resume
+  need iTerm2 or tmux). Sessions are tracked by tty and by the claude pid, and closed one at a
+  time via `/exit`-then-close — the harness never closes a window and never touches sessions it
+  didn't start. The two-window control/work layout is delivered on **iTerm2** (tabs grouped into
+  two windows); on tmux it's one session with a window per role; on Terminal.app, one window per
+  session.
 
 ## Tickets
 
@@ -78,4 +81,9 @@ generations that these rules encode, is in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 macOS (iTerm2/Terminal.app backends; tmux backend is OS-agnostic), `jq`, `gh` (only for the
 GitHub ticket source), Claude Code ≥ 2.1. First iTerm2 spawn triggers a one-time macOS
-Automation permission prompt.
+Automation permission prompt (System Settings → Privacy & Security → Automation).
+
+With the default `session.permissions: bypass`, **accept "Bypass Permissions" once per account**
+before the first run — run `claude --dangerously-skip-permissions` interactively and accept, or
+set `session.permissions` to `auto`/`acceptEdits`. Otherwise the first spawned session hangs on
+the acceptance dialog (preflight warns when it can't confirm prior acceptance).

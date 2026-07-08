@@ -10,7 +10,24 @@ set -uo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hlib.sh"
 
 token() {
-  local blob t
+  # Meter the ACTIVE account, not just the machine default (review MEDIUM). If an account
+  # switcher is configured, apply its env first so CLAUDE_CONFIG_DIR points at that account's
+  # credentials; then prefer the config-dir file, then the Keychain (fresh after a switch),
+  # then the default file. Any provided CLAUDE_CODE_OAUTH_TOKEN wins outright.
+  local ec blob t cfgdir="${CLAUDE_CONFIG_DIR:-}"
+  ec=$(cfg '.accounts.env_command' '')
+  if [ -n "$ec" ]; then
+    local envout; envout=$($ec 2>/dev/null || true)
+    case "$envout" in
+      *CLAUDE_CODE_OAUTH_TOKEN=*) t=$(printf '%s\n' "$envout" | sed -n 's/.*CLAUDE_CODE_OAUTH_TOKEN=["'\'']\{0,1\}\([^"'\'' ]*\).*/\1/p' | head -1); [ -n "$t" ] && { printf '%s\n' "$t"; return 0; } ;;
+    esac
+    case "$envout" in *CLAUDE_CONFIG_DIR=*) cfgdir=$(printf '%s\n' "$envout" | sed -n 's/.*CLAUDE_CONFIG_DIR=["'\'']\{0,1\}\([^"'\'' ]*\).*/\1/p' | head -1) ;; esac
+  fi
+  [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && { printf '%s\n' "$CLAUDE_CODE_OAUTH_TOKEN"; return 0; }
+  if [ -n "$cfgdir" ] && [ -f "$cfgdir/.credentials.json" ]; then
+    t=$(jq -r '.claudeAiOauth.accessToken // empty' "$cfgdir/.credentials.json" 2>/dev/null)
+    [ -n "$t" ] && { printf '%s\n' "$t"; return 0; }
+  fi
   blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
   t=$(printf '%s' "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
   [ -n "$t" ] && { printf '%s\n' "$t"; return 0; }
@@ -41,9 +58,12 @@ verdict() {
   weekly_reset=$(printf '%s' "$j"| jq -r '[.limits[] | select(.group=="weekly")]  | sort_by(.percent) | reverse | .[0].resets_at // empty')
   p_sess=$(cfg '.limits.pause_next_spawn_at' '90')
   p_week=$(cfg '.limits.weekly_pause_at' 'null')
+  # percent is a JSON number and may be fractional (e.g. 91.7); integer `[ -ge ]` would error and,
+  # with 2>/dev/null, silently take the no-pause branch (review MEDIUM). Compare numerically.
+  ge() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a+0>=b+0)}'; }
   v=OK; until=""; reason=""
-  if [ "$p_sess" != "null" ] && [ "$sess" -ge "$p_sess" ] 2>/dev/null; then v=PAUSE; reason=session; until="$sess_reset"; fi
-  if [ "$p_week" != "null" ] && [ "$weekly" -ge "$p_week" ] 2>/dev/null; then
+  if [ "$p_sess" != "null" ] && ge "$sess" "$p_sess"; then v=PAUSE; reason=session; until="$sess_reset"; fi
+  if [ "$p_week" != "null" ] && ge "$weekly" "$p_week"; then
     # weekly pause wins only if it is the tighter constraint (session pause already implies waiting)
     if [ "$v" = "OK" ]; then v=PAUSE; reason=weekly; until="$weekly_reset"; fi
   fi

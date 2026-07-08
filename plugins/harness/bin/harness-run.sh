@@ -18,9 +18,22 @@ preflight() {
     gh auth status >/dev/null 2>&1 || { echo "MISSING: gh auth (tickets.source=github)" >&2; fails=1; }
   fi
   "$BIN/harness-term.sh" probe >/dev/null || { echo "FAILED: terminal automation probe (grant Automation permission?)" >&2; fails=1; }
+  # Terminal.app can't drive stop/watch/auto-resume (no send/key) — warn if it's the resolved backend.
+  local be; be=$(cfg '.terminal.app' 'auto')
+  if [ "$be" = "terminal" ]; then
+    echo "WARN: terminal.app=terminal — graceful stop, stall nudges, and rate-limit auto-resume are unavailable on Terminal.app. Prefer iterm2 or tmux." >&2
+  fi
   local ec; ec=$(cfg '.accounts.env_command' '')
   if [ -n "$ec" ]; then
     $ec >/dev/null 2>&1 || { echo "FAILED: accounts.env_command preflight: $ec (L7)" >&2; fails=1; }
+  fi
+  # First-run bypass-permissions acceptance: --dangerously-skip-permissions blocks on an interactive
+  # "I accept" dialog the first time per account. Boot verification would still pass (process exists)
+  # while the session sits on the dialog. Warn if we can't confirm prior acceptance (review MEDIUM).
+  if [ "$(cfg '.session.permissions' 'bypass')" = "bypass" ]; then
+    if ! grep -q 'bypassPermissionsModeAccepted"[[:space:]]*:[[:space:]]*true' "$HOME/.claude.json" 2>/dev/null; then
+      echo "WARN: could not confirm 'Bypass Permissions' was accepted for this account. Run 'claude --dangerously-skip-permissions' once interactively and accept, or set session.permissions to 'auto'/'acceptEdits' — otherwise the first spawned session may hang on the acceptance dialog." >&2
+    fi
   fi
   for s in "$BIN"/harness-*.sh; do bash -n "$s" || fails=1; done
   [ "$fails" -eq 0 ]
@@ -61,10 +74,21 @@ do_start() {
   nohup "$BIN/harness-run.sh" watch >> "$run/logs/watch.log" 2>&1 &
   printf '%s\n' "$!" > "$run/state/watch.pid"
 
-  # orchestrator
-  "$BIN/harness-spawn.sh" spawn --role orchestrator --name orchestrator \
-    --cwd "$PROJ" --prompt "$run/prompts/orchestrator.md" || {
-      echo "ERROR: orchestrator failed to boot — stopping run" >&2; do_stop; exit 69; }
+  # orchestrator — if the account is rate-paused at start (exit 75), WAIT for the reset and retry
+  # rather than aborting: starting a run at 91% is the exact go-to-sleep case (pause-not-stop, review HIGH).
+  local rc
+  while :; do
+    stop_requested && { echo "STOP requested during startup" >&2; do_stop; exit 65; }
+    "$BIN/harness-spawn.sh" spawn --role orchestrator --name orchestrator \
+      --cwd "$PROJ" --prompt "$run/prompts/orchestrator.md"; rc=$?
+    [ "$rc" -eq 0 ] && break
+    if [ "$rc" -eq 75 ]; then
+      hlog "run $id: rate-paused at start — waiting for reset before spawning the orchestrator"
+      "$BIN/harness-limits.sh" wait || { echo "wait aborted (STOP?) — stopping run" >&2; do_stop; exit 65; }
+      continue
+    fi
+    echo "ERROR: orchestrator failed to boot (rc=$rc) — stopping run" >&2; do_stop; exit "$rc"
+  done
   hlog "run $id: started (watch pid $(cat "$run/state/watch.pid"))"
   echo "OK run=$id — watch it with: harness-run.sh status"
 }
@@ -117,11 +141,11 @@ do_resume() {
     nohup "$BIN/harness-run.sh" watch >> "$run/logs/watch.log" 2>&1 &
     printf '%s\n' "$!" > "$run/state/watch.pid"
   fi
-  local f name sid role cwd tty
+  local f name sid role cwd pid
   for f in "$run"/state/registry/*.json; do
     [ -f "$f" ] || continue
-    tty=$(jq -r '.tty' "$f")
-    if ps -t "$tty" -o comm= 2>/dev/null | grep -Eq 'claude|node'; then continue; fi
+    pid=$(jq -r '.pid // empty' "$f")
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then continue; fi   # tracked claude pid alive
     name=$(jq -r '.name' "$f"); sid=$(jq -r '.session_id' "$f")
     role=$(jq -r '.role' "$f"); cwd=$(jq -r '.cwd' "$f")
     hlog "resume: $name is dead — respawning with --resume $sid"
@@ -144,14 +168,27 @@ watch_tick() {
     hlog "watch: caffeinate respawned"
   fi
 
-  local f name tty role age tail
+  # opt-in hard stop (default null = never — the harness pauses, it does not stop, unless told).
+  local stop_at vline s w
+  stop_at=$(cfg '.limits.stop_at' 'null')
+  if [ "$stop_at" != "null" ]; then
+    vline=$("$BIN/harness-limits.sh" verdict)
+    s=$(printf '%s' "$vline" | sed -n 's/.*SESSION=\([0-9]*\).*/\1/p')
+    w=$(printf '%s' "$vline" | sed -n 's/.*WEEKLY=\([0-9]*\).*/\1/p')
+    if { [ -n "$s" ] && [ "$s" -ge "$stop_at" ] 2>/dev/null; } || { [ -n "$w" ] && [ "$w" -ge "$stop_at" ] 2>/dev/null; }; then
+      hlog "watch: limits.stop_at=$stop_at reached ($vline) — winding down the run"
+      touch "$(hstop_file)"
+    fi
+  fi
+
+  local f name tty role pid age tail
   for f in "$run"/state/registry/*.json; do
     [ -f "$f" ] || continue
-    name=$(jq -r '.name' "$f"); tty=$(jq -r '.tty' "$f"); role=$(jq -r '.role' "$f")
+    name=$(jq -r '.name' "$f"); tty=$(jq -r '.tty' "$f"); role=$(jq -r '.role' "$f"); pid=$(jq -r '.pid // empty' "$f")
 
-    # liveness: process on tty
-    if ! ps -t "$tty" -o comm= 2>/dev/null | grep -Eq 'claude|node'; then
-      echo "DEAD: $name (tty $tty) — resume with: harness-run.sh resume" >> "$run/state/attention.tmp"
+    # liveness: the tracked claude pid (not "any node on the tty" — review MEDIUM)
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+      echo "DEAD: $name (pid ${pid:-?}) — resume with: harness-run.sh resume" >> "$run/state/attention.tmp"
       continue
     fi
 

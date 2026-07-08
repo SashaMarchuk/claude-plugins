@@ -230,3 +230,24 @@ Shipped in `templates/prompts/`, copied per-run, substituted from config:
 | L22 | "ignore all limits" override must not unlock prod writes | owner-gated list survives every override |
 | L23 | interactive GSD entry points hang all night | headless `--auto` GSD only, listed explicitly in worker prompts |
 | L24 | 2 CRITICAL prod bugs found only by the independent final pass | validator role re-verifies against code, never status files |
+
+### Review-wave hardening (Opus + Fable adversarial review of this plugin)
+
+| # | Latent defect the review caught | Fix |
+|---|---|---|
+| R1 | `if ! validate; then rc=$?` captures the `!`-negation (0), not the validator's 65 → REJECT silently ignored | capture `$?` directly; 65 → return 65, other non-zero → infra-error/proceed |
+| R2 | worker in a sibling worktree can't find `.harness/` (walk-up fails) → every engine call dies | launcher exports `HARNESS_PROJECT`; a `.harness-project` pointer is dropped into the worktree |
+| R3 | `github && gh_verb \|\| l_verb` silently ran the empty local queue on any gh hiccup | strict `if/else` per verb — gh failures propagate |
+| R4 | `do_start` treated rate-pause (75) as fatal → the harness stops itself at 91% | catch 75, `limits.sh wait`, retry the orchestrator spawn |
+| R5 | resumed sessions sit idle (restored transcript, no prompt re-trigger); bare Enter is a no-op | after resume boot-verify, `term.sh send "continue"` |
+| R6 | liveness/job-end keyed on any `node` on the tty (MCP/dev-server children mask it) | track the claude pid at boot; `kill -0 $pid` is the liveness signal |
+| R7 | `cfg`'s `// empty` erased a real `false`/`0` config value | read raw, reject only literal `null` |
+| R8 | integer `[ -ge ]` on a fractional percent errored silently → brake never engaged | `awk` numeric compare, no error suppression |
+| R9 | Terminal.app auto-selected but can't send `/exit`/nudges → silent no-op stop/watch | auto prefers tmux over Terminal.app; preflight warns if Terminal.app is forced |
+| R10 | orchestrator could leave `{{LANE}}` literals in a worker prompt → marker/name rejects | explicit fill+grep contract in the prompt; engine refuses a `--prompt` containing `{{` |
+| R11 | `limits.sh wait` (hours) told to run foreground, but the Bash tool caps at ~10 min | orchestrator runs the wait with `run_in_background` |
+| R12 | model can't `/exit` itself (assistant text ≠ CLI command) | prompts say "stop working"; the engine's `close` delivers `/exit` to the tty |
+| R13 | rate reader metered the machine-default account, not the switched one | `token()` applies `accounts.env_command`, prefers its `CLAUDE_CONFIG_DIR`/`CLAUDE_CODE_OAUTH_TOKEN` |
+| R14 | first-run `--dangerously-skip-permissions` hangs on the one-time acceptance dialog | preflight warns unless prior acceptance is confirmed; documented in README |
+| R15 | cwd with shell metacharacters would execute inside the generated `cd "$cwd"` | screen cwd for metacharacters before generating the launcher |
+| R16 | sibling-cwd allowance admitted every unrelated project under the parent dir | allow a sibling only if it is a git worktree whose main repo is inside the project |

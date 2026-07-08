@@ -52,7 +52,9 @@ default_chain_for_role() {
 launcher_home() { # space-free path for launchers (AppleScript embeds it verbatim)
   local run; run=$(hcurrent_run)
   case "$run" in
-    *[!A-Za-z0-9._/:@=-]*) mkdir -p "$HARNESS_USER_DIR/launchers"; printf '%s\n' "$HARNESS_USER_DIR/launchers" ;;
+    # run path has chars AppleScript can't embed (spaces etc.): fall back to a per-run subdir of
+    # the shared launchers dir — run-id-scoped so concurrent runs/projects never collide (review LOW).
+    *[!A-Za-z0-9._/:@=-]*) local d; d="$HARNESS_USER_DIR/launchers/$(basename "$run")"; mkdir -p "$d"; printf '%s\n' "$d" ;;
     *) printf '%s/launchers\n' "$run" ;;
   esac
 }
@@ -77,14 +79,24 @@ do_spawn() {
   case "$role" in orchestrator|worker|validator|question) ;; *) echo "ERROR: unknown role $role" >&2; return 65 ;; esac
 
   # -- deterministic guards (L2/L3) --
-  local run; run=$(hcurrent_run) || return 66
+  local run PROJ; run=$(hcurrent_run) || return 66
+  PROJ=$(hproject_root) || return 66
   stop_requested && { echo "REJECTED: STOP file present" >&2; return 65; }
   assert_safe_cwd "$cwd" || return 65
+  # cwd is embedded into the generated launcher as `cd "$cwd"`; a real dir name containing a
+  # command substitution would execute at launcher runtime. Screen it (belt for the resolved path).
+  case "$cwd" in *['`$;&|<>()!*?']*|*'"'*) echo "ERROR: cwd contains shell metacharacters — refusing: $cwd" >&2; return 65 ;; esac
   if [ -z "$resume" ]; then
     [ -n "$prompt" ] || { echo "ERROR: --prompt required unless --resume" >&2; return 64; }
     assert_abs "$prompt" "prompt file" || return 65
     [ -s "$prompt" ] || { echo "ERROR: prompt file missing/empty: $prompt" >&2; return 65; }
     case "$prompt" in *"'"*) echo "ERROR: prompt path may not contain single quotes" >&2; return 65 ;; esac
+    # An unfilled template placeholder ({{LANE}} etc.) would poison every engine call the
+    # session makes (marker names, heartbeat names). Refuse before spawning (review HIGH).
+    if grep -q '{{' "$prompt"; then
+      echo "ERROR: prompt still contains an unfilled {{placeholder}}: $prompt" >&2
+      grep -n '{{' "$prompt" | head -3 >&2; return 65
+    fi
   fi
   [ -f "$(registry_dir)/$name.json" ] && { echo "ERROR: session '$name' already registered" >&2; return 65; }
 
@@ -127,6 +139,9 @@ do_spawn() {
     echo "LOG=\"$run/logs/launcher.log\""
     echo "note(){ printf '[%s %s] %s\\n' \"\$(date -u '+%H:%M:%S')\" \"$name\" \"\$*\" | tee -a \"\$LOG\" >&2; }"
     echo "export PATH=\"$PATH\""
+    # workers/validators run in sibling worktrees with no .harness/ — hand them the project root
+    # so every engine call they make resolves (CRITICAL: worktree can't reach the engine otherwise).
+    echo "export HARNESS_PROJECT=\"$PROJ\""
     echo "cd \"$cwd\" || { note 'FATAL: cd failed — refusing to start claude (L3)'; sleep 30; exit 66; }"
     if [ -n "$env_cmd" ]; then
       echo "if envout=\$($env_cmd 2>>\"\$LOG\"); then eval \"\$envout\"; note 'account env applied'; else note 'FATAL: accounts.env_command failed (L7)'; sleep 30; exit 9; fi"
@@ -151,12 +166,19 @@ do_spawn() {
   chmod +x "$launcher"
   bash -n "$launcher" || { echo "ERROR: generated launcher failed bash -n (bug — report this)" >&2; return 65; }
 
+  # pointer so a worker in a sibling worktree can find the project even without the env var
+  [ -e "$cwd/.harness-project" ] || printf '%s\n' "$PROJ" > "$cwd/.harness-project" 2>/dev/null || true
+
   # -- sonnet validation (second net; deterministic guards already passed) --
+  # NOTE: capture the validator's exit status DIRECTLY. `if ! cmd; then rc=$?` would capture the
+  # status of the `!` negation (always 0), silently swallowing a REJECT (review CRITICAL).
   if [ "$(cfg '.guardrails.sonnet_validation' 'true')" = "true" ]; then
-    if ! "$BIN/harness-validate.sh" "$launcher" "$cwd" "$role"; then
-      local vrc=$?
-      if [ "$vrc" -eq 65 ]; then echo "REJECTED by spawn-validator — see message above" >&2; return 65; fi
-      hlog "spawn $name: validator errored (rc=$vrc) — proceeding on deterministic guards"
+    local vrc
+    "$BIN/harness-validate.sh" "$launcher" "$cwd" "$role"; vrc=$?
+    if [ "$vrc" -eq 65 ]; then
+      echo "REJECTED by spawn-validator — see message above" >&2; return 65
+    elif [ "$vrc" -ne 0 ]; then
+      hlog "spawn $name: validator infra error (rc=$vrc) — proceeding on deterministic guards"
     fi
   fi
 
@@ -184,21 +206,31 @@ do_spawn() {
   mkdir -p "$(registry_dir)"
   jq -n --arg name "$name" --arg role "$role" --arg group "$group" --arg tty "$tty" \
         --arg sid "$uuid" --arg cwd "$cwd" --arg chain "$chain" --arg launcher "$launcher" \
-        --arg at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-        '{name:$name, role:$role, group:$group, tty:$tty, session_id:$sid, cwd:$cwd, model_chain:$chain, launcher:$launcher, started_at:$at}' \
+        --arg pid "$pid" --arg at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+        '{name:$name, role:$role, group:$group, tty:$tty, pid:($pid|tonumber), session_id:$sid, cwd:$cwd, model_chain:$chain, launcher:$launcher, started_at:$at}' \
     | atomic_write "$(registry_dir)/$name.json"
   hlog "spawn $name: BOOT-VERIFIED pid=$pid tty=$tty session=$uuid model_chain=$chain"
+  # A resumed session restores its transcript but sits idle until prompted — kick it back to work
+  # (a bare Enter is a no-op; review HIGH). Fresh spawns already carry their prompt in the launcher.
+  if [ -n "$resume" ]; then
+    sleep 3
+    "$BIN/harness-term.sh" send "$tty" "continue" 2>/dev/null || true
+    hlog "spawn $name: resume kick sent"
+  fi
   echo "OK name=$name tty=$tty session=$uuid"
 }
 
 # ------------------------------------------------------------------------ close
 do_close() { # graceful close protocol (L11): /exit → wait for job end → close that session only
-  local name="${1:?name required}" reg tty deadline
+  local name="${1:?name required}" reg tty pid deadline
   reg="$(registry_dir)/$name.json"
   [ -f "$reg" ] || { echo "ERROR: '$name' not in registry (never close sessions we don't own — L12)" >&2; return 66; }
-  tty=$(jq -r '.tty' "$reg")
-  if ! ps -t "$tty" -o comm= 2>/dev/null | grep -q .; then
-    hlog "close $name: tty $tty already gone — removing registry entry"
+  tty=$(jq -r '.tty' "$reg"); pid=$(jq -r '.pid // empty' "$reg")
+  # job-end = the tracked claude pid is gone (NOT "any node on the tty" — MCP/dev-server node
+  # children share the tty and would mask completion; review MEDIUM).
+  job_alive() { [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+  if ! job_alive; then
+    hlog "close $name: claude pid ${pid:-?} already gone — removing registry entry"
     rm -f "$reg"; "$BIN/harness-term.sh" close "$tty" 2>/dev/null || true; return 0
   fi
   # A claude session mid-turn ignores /exit, so interrupt to idle first (Escape), then /exit.
@@ -206,8 +238,7 @@ do_close() { # graceful close protocol (L11): /exit → wait for job end → clo
   deadline=$(( $(now_epoch) + $(cfg '.session.close_timeout_seconds' '90') ))
   local sent_exit=0
   while [ "$(now_epoch)" -lt "$deadline" ]; do
-    # job ended = no claude/node foreground process left on that tty
-    if ! ps -t "$tty" -o comm= 2>/dev/null | grep -Eq 'claude|node'; then
+    if ! job_alive; then
       "$BIN/harness-term.sh" close "$tty" || true
       rm -f "$reg"
       hlog "close $name: closed cleanly"

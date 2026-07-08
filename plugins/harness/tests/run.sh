@@ -27,7 +27,7 @@ if [ -n "$v" ] && head -5 "$ROOT/CHANGELOG.md" | grep -q "## $v "; then ok "$t p
 # H-4: naming — the standalone word (no 'over-' prefix) appears nowhere outside docs/DESIGN.md
 t=H-4
 w='ni'; w="${w}ght"   # keep this file from matching itself
-hits=$(grep -rilE "(^|[^a-z])${w}([^a-z]|$)" "$ROOT" --exclude-dir=docs --exclude-dir=.git --exclude-dir=tests 2>/dev/null || true)
+hits=$(grep -rilE "(^|[^a-z])${w}([^a-z]|$)" "$ROOT" --exclude-dir=docs --exclude-dir=.git --exclude=run.sh 2>/dev/null || true)
 [ -z "$hits" ] && ok "$t no '${w}' naming outside docs/" || bad "$t" "found in: $hits"
 
 # H-5: model policy — haiku only ever appears in the rejection rule
@@ -69,10 +69,14 @@ t=H-11
 if grep -q 'return 75' "$ROOT/bin/harness-spawn.sh" && grep -q 'wait_clear' "$ROOT/bin/harness-limits.sh" \
    && grep -q '"stop_at": null' "$ROOT/templates/user-config.example.json"; then ok "$t pause-not-stop contract"; else bad "$t" "pause contract broken"; fi
 
-# H-12: Keychain-first token order (L6)
+# H-12: Keychain read precedes the stale default credentials file (L6). token() may consult an
+# active-account CLAUDE_CONFIG_DIR/.credentials.json first (correct — that's the switched account),
+# but among the machine-default sources the Keychain must come before ~/.claude/.credentials.json.
 t=H-12
-if awk '/^token\(\)/,/^}/' "$ROOT/bin/harness-limits.sh" | grep -n 'security find-generic-password' >/dev/null \
-   && awk '/^token\(\)/,/^}/' "$ROOT/bin/harness-limits.sh" | head -4 | grep -q 'security'; then ok "$t Keychain read before credentials file"; else bad "$t" "token order wrong"; fi
+body=$(awk '/^token\(\)/,/^}/' "$ROOT/bin/harness-limits.sh")
+kc=$(printf '%s\n' "$body" | grep -n 'security find-generic-password' | head -1 | cut -d: -f1)
+df=$(printf '%s\n' "$body" | grep -n '.claude/.credentials.json' | head -1 | cut -d: -f1)
+if [ -n "$kc" ] && [ -n "$df" ] && [ "$kc" -lt "$df" ]; then ok "$t Keychain read before default credentials file"; else bad "$t" "token order wrong (kc=$kc df=$df)"; fi
 
 # H-13: STOP is honored in spawn and watch
 t=H-13

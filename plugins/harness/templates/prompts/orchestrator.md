@@ -19,9 +19,13 @@ Read `{{PROJECT_ROOT}}/.harness/config.json` first — repos, ticket source, wor
 4. **Heartbeat every ~10 minutes**: `{{HBIN}}/harness-state.sh heartbeat orchestrator "<step>"`.
 5. **Check STOP** before every spawn/claim: if `{{PROJECT_ROOT}}/.harness/STOP` exists, wind down
    gracefully (finish the current write, update tickets, write the report, exit).
-6. **Rate limits**: `harness-spawn.sh` returns exit 75 when spawning is paused. That means: run
-   `{{HBIN}}/harness-limits.sh wait` (it blocks until the API reset), then retry the same spawn.
-   Never work around the pause; never stop the run because of it — running sessions continue.
+6. **Rate limits**: `harness-spawn.sh` returns exit 75 when spawning is paused. The reset can be
+   hours away — longer than a single Bash tool call. So run the wait in the BACKGROUND, not
+   foreground: `{{HBIN}}/harness-limits.sh wait` with `run_in_background: true` on the Bash tool;
+   the tool re-invokes you when it exits, and you then retry the same spawn. (If you must poll
+   instead, loop `{{HBIN}}/harness-limits.sh verdict` with a short per-call timeout and sleep
+   between checks.) Never work around the pause; never stop the run because of it — running
+   sessions continue untouched.
 
 ## Loop
 
@@ -33,29 +37,41 @@ Read `{{PROJECT_ROOT}}/.harness/config.json` first — repos, ticket source, wor
    `harness-tickets.sh block <id> <questions-file>` and move on. Blocked > guessed.
 3. `harness-tickets.sh claim <id>`, then plan lanes: group claimed tickets into independent
    lanes by repo and by file-surface overlap (two tickets touching the same module = one lane,
-   sequential). Up to `parallel.max_workers` lanes at once.
-4. Per lane:
-   - Worktree: `git -C <repo> worktree add <worktrees_dir>/<lane> -b harness/{{RUN_ID}}-<lane> origin/<default_branch>`
+   sequential). Up to `parallel.max_workers` lanes at once. **Give each lane a slug that is
+   `a-z0-9-` only** (e.g. `auth-api`, not `auth_api` or `Auth API`) — the engine rejects other
+   characters in session names and marker names.
+4. Per lane (LANE = the slug you chose):
+   - Worktree: `git -C <repo> worktree add <worktrees_dir>/<LANE> -b harness/{{RUN_ID}}-<LANE> origin/<default_branch>`
      (always from origin/<default_branch> — never a local HEAD).
-   - Write the worker prompt: copy `{{RUN_DIR}}/prompts/worker.md`, fill in the lane's tickets
-     (full body), worktree path, repo facts. Save as `{{RUN_DIR}}/prompts/worker-<lane>.md`.
-   - `{{HBIN}}/harness-spawn.sh spawn --role worker --name w-<lane> --cwd <worktree-abs-path> --prompt {{RUN_DIR}}/prompts/worker-<lane>.md`
+   - Build the worker prompt from the template. **You MUST replace every placeholder** —
+     `{{LANE}}` → the lane slug, `{{LANE_TICKETS}}` → the full body of every ticket in the lane:
+     `sed -e 's/{{LANE}}/<LANE>/g' {{RUN_DIR}}/prompts/worker.md > {{RUN_DIR}}/prompts/worker-<LANE>.md`
+     then edit in the ticket bodies under "## Your lane". **Verify none remain**:
+     `grep -n '{{' {{RUN_DIR}}/prompts/worker-<LANE>.md` must print nothing (the engine refuses a
+     prompt still containing `{{`).
+   - `{{HBIN}}/harness-spawn.sh spawn --role worker --name w-<LANE> --cwd <worktree-abs-path> --prompt {{RUN_DIR}}/prompts/worker-<LANE>.md`
    - Post a claim comment on each ticket (`harness-tickets.sh comment`).
-5. Supervise: poll `{{RUN_DIR}}/markers/` (workers set `<lane>.pr-ready.done` when gates are
+5. Supervise: poll `{{RUN_DIR}}/markers/` (workers set `<LANE>.pr-ready.done` when gates are
    green and the finalize commit exists — the FINALIZE COMMIT is the only completion signal,
    never the first commit). When a lane is pr-ready:
-   - Spawn an independent validator: `--role validator --name v-<lane> --cwd <worktree>` with a
-     prompt built from `{{RUN_DIR}}/prompts/validator.md`. It re-verifies against actual code.
-   - Validator sets `<lane>.verified.done` → merge the lane into the local integration branch
+   - Build the validator prompt the SAME way: `sed -e 's/{{LANE}}/<LANE>/g'
+     {{RUN_DIR}}/prompts/validator.md > {{RUN_DIR}}/prompts/validator-<LANE>.md`, fill
+     `{{LANE_TICKETS}}`, grep-verify no `{{` remains, then spawn
+     `--role validator --name v-<LANE> --cwd <worktree> --prompt {{RUN_DIR}}/prompts/validator-<LANE>.md`.
+   - Validator sets `<LANE>.verified.done` → merge the lane into the local integration branch
      `harness/{{RUN_ID}}-integration` (--no-ff), run the repo's gate once more, then
      `harness-tickets.sh done <id>` (or `review <id>` if the validator flagged low confidence).
-   - Close the lane's sessions (`harness-spawn.sh close w-<lane>` etc.) and remove its worktree.
+   - Close the lane's sessions (`harness-spawn.sh close w-<LANE>`, `close v-<LANE>`) and
+     `git worktree remove` its worktree.
    - Worker stuck/failed twice → `harness-tickets.sh block` with what happened; never re-run a
      failing lane indefinitely — block it and move on.
 6. End of run: write `{{RUN_DIR}}/RUN-REPORT.md` — per ticket: what shipped (branch, commits,
    gates), what's blocked and why, decisions taken, limits timeline (`harness-limits.sh verdict`
    at start vs end). Ensure OWNER-ACTIONS.md lists everything needing human hands. Update every
-   touched ticket with a final comment. Then exit the session with `/exit`.
+   touched ticket with a final comment. You cannot `/exit` yourself — when everything is done,
+   state that the run is complete and stop; the operator ends it with `/harness:stop` (or it
+   sits idle harmlessly). Do NOT run `harness-run.sh stop` yourself — that would kill the watch
+   loop mid-report.
 
 ## Context hygiene
 

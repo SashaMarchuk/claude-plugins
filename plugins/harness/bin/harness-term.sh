@@ -145,7 +145,8 @@ iterm_capture() { # <tty> [lines]
   local tty="$1" lines="${2:-40}" out
   out=$(iterm_session_do "$tty" "return (contents of s)") || return 66
   [ "$out" = "notfound" ] && { echo "ERROR: session $tty not found" >&2; return 66; }
-  printf '%s\n' "$out" | tail -n "$lines"
+  # iTerm returns the whole screen buffer padded with blank rows — drop trailing blanks first
+  printf '%s\n' "$out" | sed -e :a -e '/^[[:space:]]*$/{$d;N;ba' -e '}' | tail -n "$lines"
 }
 
 iterm_close() { # <tty> — close ONE session; caller guarantees its job already ended

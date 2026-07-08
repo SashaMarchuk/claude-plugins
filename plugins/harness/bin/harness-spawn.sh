@@ -201,8 +201,10 @@ do_close() { # graceful close protocol (L11): /exit → wait for job end → clo
     hlog "close $name: tty $tty already gone — removing registry entry"
     rm -f "$reg"; "$BIN/harness-term.sh" close "$tty" 2>/dev/null || true; return 0
   fi
-  "$BIN/harness-term.sh" send "$tty" "/exit" || true
+  # A claude session mid-turn ignores /exit, so interrupt to idle first (Escape), then /exit.
+  # Two rounds: the first Escape cancels a running turn; the second /exit lands on the idle prompt.
   deadline=$(( $(now_epoch) + $(cfg '.session.close_timeout_seconds' '90') ))
+  local sent_exit=0
   while [ "$(now_epoch)" -lt "$deadline" ]; do
     # job ended = no claude/node foreground process left on that tty
     if ! ps -t "$tty" -o comm= 2>/dev/null | grep -Eq 'claude|node'; then
@@ -210,6 +212,13 @@ do_close() { # graceful close protocol (L11): /exit → wait for job end → clo
       rm -f "$reg"
       hlog "close $name: closed cleanly"
       return 0
+    fi
+    if printf '%s' "$("$BIN/harness-term.sh" capture "$tty" 6 2>/dev/null)" | grep -q 'esc to interrupt'; then
+      "$BIN/harness-term.sh" key "$tty" escape 2>/dev/null || true   # cancel the running turn
+      sent_exit=0
+    elif [ "$sent_exit" -eq 0 ]; then
+      "$BIN/harness-term.sh" send "$tty" "/exit" 2>/dev/null || true  # idle → ask it to exit
+      sent_exit=1
     fi
     sleep 5
   done

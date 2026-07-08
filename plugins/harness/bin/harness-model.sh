@@ -25,7 +25,8 @@ split_chain() { # one candidate per line, whitespace-trimmed, empties dropped
 }
 
 cmd="${1:?usage: model.sh resolve|primary|rest <chain>}"; chain="${2:?chain required}"
-mapfile -t candidates < <(split_chain "$chain")
+candidates=()
+while IFS= read -r _m; do candidates+=("$_m"); done < <(split_chain "$chain")
 [ "${#candidates[@]}" -gt 0 ] || { echo "ERROR: empty model chain" >&2; exit 64; }
 for m in "${candidates[@]}"; do validate_candidate "$m" || exit 64; done
 

@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "_comment": "<project>/.harness/config.json — what this project IS. Overrides user config per key. Written by /harness:init; safe to edit by hand.",
+
+  "project": "my-project",
+
+  "repos": [
+    {
+      "name": "app",
+      "path": "app",
+      "_path_note": "relative to the project root (the dir containing .harness/); '.' if the project root is itself the repo",
+      "default_branch": "main",
+      "github": "owner/repo",
+      "worktrees_dir": "../app-worktrees"
+    }
+  ],
+
+  "tickets": {
+    "source": "github",
+    "_source_options": "github (labeled issues on tickets.repo — the default when a GitHub repo exists) | local (.harness/tickets/*.md — zero-dependency floor for folders without a queue repo)",
+    "repo": "owner/repo",
+    "label_prefix": "harness"
+  },
+
+  "workflow": "gsd",
+  "_workflow_options": "gsd (drive GSD headlessly with --auto entry points) | generic",
+
+  "parallel": {
+    "max_workers": 3,
+    "_note": "upper bound on concurrent worker sessions; the rate gate can hold new spawns below this"
+  },
+
+  "guardrails": {
+    "never_push": true,
+    "_never_push_note": "true = integration stays local; the run ends at PR-ready branches + a report. Set false only when you want the harness opening PRs itself.",
+    "owner_gated": [
+      "production deploys and cutovers",
+      "destructive or irreversible writes (DB, infra)",
+      "anything requiring a secret only the owner holds"
+    ],
+    "_owner_gated_note": "always owner-gated, regardless of any other setting or override — the orchestrator writes these to OWNER-ACTIONS.md instead of doing them"
+  },
+
+  "models": {
+    "_note": "optional per-project overrides of the user-level chains, same syntax"
+  }
+}

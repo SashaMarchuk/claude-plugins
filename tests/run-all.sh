@@ -12,7 +12,7 @@ set -uo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
-PLUGINS=(clickup g-event ultra ultra-analyzer claude-migrate find-call log-time)
+PLUGINS=(clickup g-event ultra ultra-analyzer claude-migrate find-call log-time harness)
 
 # Per-plugin tally
 declare -a SUMMARIES

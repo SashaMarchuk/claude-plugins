@@ -20,6 +20,22 @@ TDIR="$(hproject_root)/.harness/tickets"
 
 [ "$SOURCE" = "github" ] && [ -z "$REPO" ] && { echo "ERROR: tickets.source=github but tickets.repo is empty" >&2; exit 78; }
 
+# Deterministic floor under the LLM grill gate (review H2): a ticket may only enter `ready` if its
+# body carries the readiness checklist headers. This is a STRUCTURAL check, not a judgment of
+# quality — the /harness:add skill and the orchestrator still do the real grilling — but it makes
+# "a ticket can't be ready without the checklist" an engine guarantee, not just prose.
+require_ready_body() { # <body-file> — exit 0 if the body looks like a grilled ticket
+  local f="${1:?body file}" miss=""
+  [ -s "$f" ] || { echo "ERROR: empty ticket body — cannot be 'ready'" >&2; return 65; }
+  grep -qiE '^#+ *outcome'            "$f" || miss="$miss outcome"
+  grep -qiE '^#+ *(acceptance|accept)' "$f" || miss="$miss acceptance-criteria"
+  grep -qiE '^#+ *scope'             "$f" || miss="$miss scope"
+  if [ -n "$miss" ]; then
+    echo "ERROR: ticket body is missing required section(s):$miss — create it 'blocked' with open questions, or run the grill gate (/harness:add). A 'ready' ticket must carry: ## Outcome, ## Scope, ## Acceptance criteria." >&2
+    return 65
+  fi
+}
+
 # --------------------------------------------------------------------- github
 gh_labels_bootstrap() {
   local l c d
@@ -43,6 +59,7 @@ gh_show() { gh issue view "${1:?id}" --repo "$REPO" --json number,title,body,lab
               --jq '{number,title,labels:[.labels[].name],body,comments:[.comments[]|{author:.author.login,body}]}'; }
 gh_add() {
   local title="${1:?}" bodyf="${2:?}" state="${3:-ready}"
+  [ "$state" = "ready" ] && { require_ready_body "$bodyf" || return 65; }
   gh issue create --repo "$REPO" --title "$title" --body-file "$bodyf" --label "$PREFIX:$state"
 }
 gh_claim() {
@@ -83,6 +100,7 @@ l_list() {
 }
 l_add() {
   local title="${1:?}" bodyf="${2:?}" state="${3:-ready}" n slug
+  [ "$state" = "ready" ] && { require_ready_body "$bodyf" || return 65; }
   mkdir -p "$TDIR"
   n=$(( $(find "$TDIR" -maxdepth 1 -name '[0-9]*-*.md' | sed 's|.*/||; s|-.*||' | sort -n | tail -1 | sed 's/^$/0/') + 1 ))
   slug=$(printf '%s' "$title" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)

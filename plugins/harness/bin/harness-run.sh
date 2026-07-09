@@ -266,6 +266,24 @@ do_watch() {
   while :; do
     stop_requested && { hlog "watch: STOP — exiting"; exit 0; }
     [ -f "$run/STOPPED" ] && { hlog "watch: run stopped — exiting"; exit 0; }
+    # normal completion: the orchestrator sets the run.complete marker → tear the run down so
+    # caffeinate stops (the Mac can sleep) and the next /harness:run isn't blocked (review H1).
+    # Inlined (not `do_stop`, which would kill this very watch pid mid-teardown): close every
+    # session, stop caffeinate, mark STOPPED, then exit ourselves.
+    if [ -f "$run/markers/run.complete.done" ]; then
+      hlog "watch: run.complete — tearing down (closing sessions, stopping caffeinate)"
+      touch "$(hstop_file)"
+      local rf rn
+      for rf in "$run"/state/registry/*.json; do
+        [ -f "$rf" ] || continue; rn=$(jq -r '.name' "$rf")
+        "$BIN/harness-spawn.sh" close "$rn" >/dev/null 2>&1 || true
+      done
+      [ -f "$run/state/caffeinate.pid" ] && kill "$(cat "$run/state/caffeinate.pid")" 2>/dev/null || true
+      date -u '+%Y-%m-%dT%H:%M:%SZ' > "$run/STOPPED"
+      rm -f "$(hstop_file)"
+      hlog "watch: teardown complete — run $(basename "$run") stopped, Mac may sleep"
+      exit 0
+    fi
     watch_tick "$run" || hlog "watch: tick error (continuing)"
     sleep "$(cfg '.run.watch_interval_seconds' '60')"
   done

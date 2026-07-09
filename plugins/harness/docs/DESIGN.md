@@ -30,8 +30,11 @@ overloaded log) under `<project>/.harness/runs/<run-id>/`.
   terminal app + layout, account launcher, limit policy defaults. Written by `/harness:onboard`.
 - **Project config** `<project>/.harness/config.json` — what *this project* is: repos, ticket
   source, model chains, parallelism, guardrails. Written by `/harness:init`.
-- Resolution order (per key): **project > user > built-in default** (`hlib.sh::cfg`).
-  Duplicating a key at both levels is fine and expected.
+- Resolution order for `cfg()`-read keys (per key): **project > user > built-in default**
+  (`hlib.sh::cfg`). Duplicating such a key at both levels is fine and expected. NOTE: the
+  orchestrator reads a few project-shape keys straight from the project file (`repos`,
+  `workflow`, `parallel`, `guardrails.owner_gated`/`never_push`, `tickets`) — these are
+  project-level only, with no user fallback.
 - Both files follow the house schema discipline: `schemaVersion`, atomic tmp+rename writes,
   unknown keys preserved. State always lives outside the plugin dir (survives `/plugin update`).
 
@@ -140,8 +143,10 @@ Policy (config, defaults shown):
 
 ## 8. The grill gate — first, always
 
-A ticket is executed only if it passes the readiness checklist (outcome, scope/repos,
-acceptance criteria, out-of-scope, references). Enforcement points:
+A ticket is executed only after the readiness checklist (outcome, scope/repos, acceptance
+criteria, out-of-scope, references). Enforcement is layered: a deterministic engine floor
+(`tickets.sh` refuses to create a `ready` ticket whose body lacks the Outcome/Scope/Acceptance
+headers) under the LLM grill that does the real quality judgment. Points:
 
 1. `/harness:add "implement X"` — the gate runs *before* the ticket is created: interactive
    grilling via AskUserQuestion until the checklist is satisfied (or the user explicitly

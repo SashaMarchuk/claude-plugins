@@ -1,5 +1,33 @@
 # Changelog — harness
 
+## 0.3.0 — 2026-07-09
+
+Resolves an `/ultra:run --large` review (6 researchers → blind validators → devil's-advocate →
+2v2 debate → anti-slop) that caught a ship-blocker introduced by the 0.1.0 review wave.
+
+### Fixed
+- **CRITICAL (C1): `/harness:run` aborted at orchestrator boot every time.** The `{{`-placeholder
+  guard (added in 0.1.0 to catch unfilled worker prompts) rejected the orchestrator's own prompt,
+  which legitimately contains `{{LANE}}` as fill-instructions. The guard now matches only the
+  closed set of harness tokens and is role-gated to worker/validator.
+- **M1 (same root cause): ticket bodies with `{{ }}`** (GitHub Actions `${{ secrets.X }}`,
+  Vue/Jinja) no longer make a lane un-spawnable.
+- **HIGH (H1): a completed run now tears itself down** — the orchestrator sets a `run.complete`
+  marker; the watch loop closes sessions, stops caffeinate (Mac can sleep), and clears the run so
+  the next `/harness:run` isn't blocked.
+- **HIGH (H2): deterministic floor under the grill gate** — `tickets.sh` refuses to create a
+  `ready` ticket whose body lacks the Outcome/Scope/Acceptance headers.
+- **M3: per-role account override** — `accounts.<role>.env_command` (falls back to the shared
+  one); scaffolded in the project template (independent validator identity).
+- **M4: sonnet rejected for orchestrator/worker (build) roles** — policy is now engine-enforced,
+  not just defaulted.
+
+### Changed
+- Docs reconciled (M2): the per-key merge claim now names the project-only keys the orchestrator
+  reads directly; "mandatory grill gate" → "grill gate (LLM over a structural engine floor)".
+- New tests H-24..H-28 including an **end-to-end orchestrator-render check** (the test class that
+  was missing — the suite previously never exercised `start`).
+
 ## 0.2.0 — 2026-07-09
 
 ### Added

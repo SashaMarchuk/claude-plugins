@@ -43,5 +43,9 @@
 
   "models": {
     "_note": "optional per-project overrides of the user-level chains, same syntax"
+  },
+  "accounts": {
+    "_note": "OPTIONAL per-role account override. Each role (orchestrator|worker|validator|question) may carry its own env_command; the engine falls back to the user-level accounts.env_command when a role has none. Use this to run the independent validator under a SEPARATE account for true adversarial independence. Absent = single account.",
+    "validator": { "env_command": "" }
   }
 }

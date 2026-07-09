@@ -22,3 +22,8 @@ Each test pins an invariant from `docs/DESIGN.md`; the L-numbers reference its l
 | `\|` OR-chains parsed and defaulted | model requirement | H-18 |
 | Pre-generated session ids; exact resume | L17 | H-19 |
 | AskUserQuestion / interactive-GSD bans in prompts | L23 | H-20 |
+| Placeholder guard narrowed+role-gated; orchestrator renders clean | C1, M1 | H-24 |
+| Completed run self-teardown (caffeinate stops) | H1 | H-25 |
+| Structural floor under the grill gate | H2 | H-26 |
+| sonnet rejected for build roles | M4 | H-27 |
+| Per-role account override | M3 | H-28 |

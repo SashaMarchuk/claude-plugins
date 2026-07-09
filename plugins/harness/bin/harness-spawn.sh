@@ -91,12 +91,21 @@ do_spawn() {
     assert_abs "$prompt" "prompt file" || return 65
     [ -s "$prompt" ] || { echo "ERROR: prompt file missing/empty: $prompt" >&2; return 65; }
     case "$prompt" in *"'"*) echo "ERROR: prompt path may not contain single quotes" >&2; return 65 ;; esac
-    # An unfilled template placeholder ({{LANE}} etc.) would poison every engine call the
-    # session makes (marker names, heartbeat names). Refuse before spawning (review HIGH).
-    if grep -q '{{' "$prompt"; then
-      echo "ERROR: prompt still contains an unfilled {{placeholder}}: $prompt" >&2
-      grep -n '{{' "$prompt" | head -3 >&2; return 65
-    fi
+    # Reject only UNFILLED HARNESS template tokens, and only for worker/validator prompts:
+    #  - the orchestrator/question prompts are engine-authored and legitimately reference these
+    #    token NAMES as fill-instructions (`s/{{LANE}}/.../`), so a raw `grep {{` self-rejects
+    #    the flagship run at boot (review C1);
+    #  - ticket bodies pasted into worker prompts can contain `{{...}}` (GitHub Actions
+    #    `${{ secrets.X }}`, Vue/Jinja) — a raw `grep {{` would make those lanes un-spawnable
+    #    (review M1). Matching only the closed set of harness tokens fixes both.
+    case "$role" in
+      worker|validator)
+        if grep -qE '\{\{(HBIN|PROJECT_ROOT|RUN_DIR|RUN_ID|LANE|LANE_TICKETS)\}\}' "$prompt"; then
+          echo "ERROR: prompt still contains an unfilled harness placeholder: $prompt" >&2
+          grep -nE '\{\{(HBIN|PROJECT_ROOT|RUN_DIR|RUN_ID|LANE|LANE_TICKETS)\}\}' "$prompt" | head -3 >&2
+          return 65
+        fi ;;
+    esac
   fi
   [ -f "$(registry_dir)/$name.json" ] && { echo "ERROR: session '$name' already registered" >&2; return 65; }
 
@@ -115,9 +124,16 @@ do_spawn() {
 
   # -- resolve models --
   [ -n "$chain" ] || chain=$(default_chain_for_role "$role")
-  local models_lines rest
+  local models_lines rest primary
   models_lines=$("$BIN/harness-model.sh" resolve "$chain") || return 65
   rest=$("$BIN/harness-model.sh" rest "$chain")
+  # policy: sonnet is for validation/summarization only, never build work (review M4)
+  primary=$(printf '%s\n' "$models_lines" | head -1)
+  case "$role:$primary" in
+    orchestrator:sonnet|worker:sonnet)
+      echo "ERROR: model chain for a $role starts with sonnet — sonnet is reserved for validation/summarization, not build work. Use opus (or fable|mythos|opus)." >&2
+      return 65 ;;
+  esac
 
   # -- generate launcher (L1: prompt stays in its file; launcher is lintable bash) --
   local uuid ldir launcher title env_cmd claude_bin grace pflag extra=""
@@ -125,7 +141,9 @@ do_spawn() {
   ldir=$(launcher_home); mkdir -p "$ldir"
   launcher="$ldir/$name.sh"
   title="harness-$role-$name"
-  env_cmd=$(cfg '.accounts.env_command' '')
+  # per-role account first (e.g. an independent validator identity), else the shared one (review M3)
+  env_cmd=$(cfg ".accounts.$role.env_command" '')
+  [ -n "$env_cmd" ] || env_cmd=$(cfg '.accounts.env_command' '')
   claude_bin=$(command -v claude || true)
   [ -n "$claude_bin" ] || { echo "ERROR: claude binary not on PATH" >&2; return 65; }
   grace=$(cfg '.session.boot_grace_seconds' '45')

@@ -31,6 +31,16 @@ Read `{{PROJECT_ROOT}}/.harness/config.json` first — repos, ticket source, wor
    between checks.) Never work around the pause; never stop the run because of it — running
    sessions continue untouched.
 
+## Project guidance (once per repo, at run start)
+
+For each repo in config, run `bash {{HBIN}}/harness-guide.sh discover <repo-path>` and read what it
+lists (skip CLAUDE.md — already in context). Note the project's REAL gate command, its
+deploy/release process, its branch/PR/commit conventions, and its CODEOWNERS / do-not-touch
+boundaries. You re-run the gate before merge (loop step 5) — use the project's actual command, not
+a guessed one. Deploy/release/prod steps and anything needing a secret you don't hold are
+owner-gated (OWNER-ACTIONS.md), never executed. Workers discover the same guidance themselves; this
+keeps your merge and gate decisions aligned with theirs.
+
 ## GSD setup (once, at run start, when `workflow: gsd`)
 
 Do NOT hardcode `/gsd-*` names — discover them. Run `bash {{HBIN}}/harness-gsd.sh discover` and
@@ -81,6 +91,9 @@ autonomous variant.
      {{RUN_DIR}}/prompts/validator.md > {{RUN_DIR}}/prompts/validator-<LANE>.md`, fill
      `{{LANE_TICKETS}}`, grep-verify no `{{` remains, then spawn
      `--role validator --name v-<LANE> --cwd <worktree> --prompt {{RUN_DIR}}/prompts/validator-<LANE>.md`.
+   - If the validator wrote `{{RUN_DIR}}/state/validator-<LANE>-fail.md` instead of setting
+     `<LANE>.verified.done`, read it: fix the specific failures and re-run the worker→validator
+     cycle once, or (if it can't be fixed autonomously) block the ticket with that file's contents.
    - Validator sets `<LANE>.verified.done` → merge the lane into the local integration branch
      `harness/{{RUN_ID}}-integration` (--no-ff), run the repo's gate once more, then
      `harness-tickets.sh done <id>` (or `review <id>` if the validator flagged low confidence).

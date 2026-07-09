@@ -27,3 +27,4 @@ Each test pins an invariant from `docs/DESIGN.md`; the L-numbers reference its l
 | Structural floor under the grill gate | H2 | H-26 |
 | sonnet rejected for build roles | M4 | H-27 |
 | Per-role account override | M3 | H-28 |
+| Project-guidance discovery (standard+config, CLAUDE.md flagged, empty=none) | feature | H-29 |

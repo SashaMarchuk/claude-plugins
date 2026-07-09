@@ -7,6 +7,18 @@ worktree (your cwd). Engine: `{{HBIN}}/harness-*.sh`. Run dir: `{{RUN_DIR}}`.
 
 {{LANE_TICKETS}}
 
+## Before you start — discover project guidance
+
+Run `bash {{HBIN}}/harness-guide.sh discover` in your worktree and READ every file it lists (skip
+CLAUDE.md — it's already in your context). Extract this project's own rules and follow them: the
+push/merge gates, the EXACT lint/format/test/build commands, how deploy/release works, the
+branch + PR + commit-message conventions, and any do-not-touch / CODEOWNERS boundaries. These
+override your defaults — run the project's real gate commands for Definition-of-done rule 5b (not
+a guessed `npm test`), and match its commit style on the finalize commit. Anything a gate needs
+that you can't do autonomously (a deploy secret, a prod cutover, an approval you don't hold) →
+don't fake or skip it: block the ticket and set your `.blocked` marker per rule 1 so the
+orchestrator owner-gates it.
+
 ## Rules
 
 1. **Never AskUserQuestion.** In-scope ambiguity → decide, record via

@@ -184,8 +184,18 @@ do_spawn() {
   chmod +x "$launcher"
   bash -n "$launcher" || { echo "ERROR: generated launcher failed bash -n (bug — report this)" >&2; return 65; }
 
-  # pointer so a worker in a sibling worktree can find the project even without the env var
-  [ -e "$cwd/.harness-project" ] || printf '%s\n' "$PROJ" > "$cwd/.harness-project" 2>/dev/null || true
+  # pointer so a worker in a sibling worktree can find the project even without the env var.
+  # Also add it to the worktree's git exclude so a worker's `git add -A` never ships it in a PR
+  # (review LOW — pointer pollution). info/exclude is shared across worktrees; idempotent.
+  if [ ! -e "$cwd/.harness-project" ]; then
+    printf '%s\n' "$PROJ" > "$cwd/.harness-project" 2>/dev/null || true
+    local gexcl; if gexcl=$(git -C "$cwd" rev-parse --git-common-dir 2>/dev/null); then
+      case "$gexcl" in /*) ;; *) gexcl="$cwd/$gexcl" ;; esac
+      if [ -d "$gexcl/info" ] && ! grep -qxF '.harness-project' "$gexcl/info/exclude" 2>/dev/null; then
+        echo '.harness-project' >> "$gexcl/info/exclude" 2>/dev/null || true
+      fi
+    fi
+  fi
 
   # pre-trust the cwd so the session doesn't stall on "Do you trust the files in this folder?"
   # (deterministic belt — only trusts dirs inside the project; the watch monitor is the backstop).
@@ -212,9 +222,9 @@ do_spawn() {
   i=0
   while [ "$i" -lt "$total_wait" ]; do
     if [ -n "$resume" ]; then
-      pid=$(pgrep -f -- "--resume $uuid" | head -1 || true)
+      pid=$(pgrep -f -- "--resume $uuid" | grep -vx "$$" | head -1 || true)
     else
-      pid=$(pgrep -f -- "--session-id $uuid" | head -1 || true)
+      pid=$(pgrep -f -- "--session-id $uuid" | grep -vx "$$" | head -1 || true)
     fi
     [ -n "$pid" ] && break
     sleep 3; i=$((i+3))

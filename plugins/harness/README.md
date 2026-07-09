@@ -91,6 +91,19 @@ harness will not enter a secret on your behalf. For unattended Docker: on macOS,
 The full rationale, including the ledger of 24 real incidents from three prior harness
 generations that these rules encode, is in [`docs/DESIGN.md`](docs/DESIGN.md).
 
+## Project guidance
+
+Before touching code, each session runs `harness-guide.sh discover` and reads the files it finds —
+your project's own rules win over the harness's defaults. It surfaces what a repo actually has:
+`README`, `CONTRIBUTING`, `AGENTS.md`, `.github/` workflows + PR template + `CODEOWNERS`,
+`Makefile`/`Justfile`, `package.json` scripts, linter/formatter configs, `DEPLOY`/`RELEASE` docs,
+env setup. Workers run the project's real lint/test/build gate (not a guessed `npm test`), match
+its commit/PR conventions, respect its do-not-touch boundaries, and owner-gate anything a gate
+needs that they can't do (a deploy secret, a prod cutover). It's advisory — the helper lists paths,
+the session reads and follows them; nothing is hardcoded. Add project-specific files or a one-line
+steer via the optional `guidance` block in project config; `CLAUDE.md` is already auto-loaded so
+it's flagged, not re-read.
+
 ## Requirements
 
 macOS (iTerm2/Terminal.app backends; tmux backend is OS-agnostic), `jq`, `gh` (only for the

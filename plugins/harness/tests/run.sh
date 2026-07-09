@@ -183,6 +183,26 @@ if grep -q 'cfg ".accounts.\$role.env_command"' "$ROOT/bin/harness-spawn.sh"; th
   ok "$t per-role account override (M3)"
 else bad "$t" "per-role account not wired"; fi
 
+# H-29: project-guidance discovery — lists standard + config-listed files, flags CLAUDE.md, empty=none
+t=H-29
+gdir=$(mktemp -d)
+mkdir -p "$gdir/.harness" "$gdir/repo/docs" "$gdir/repo/deploy"
+echo '{"schemaVersion":1,"project":"g","guidance":{"files":["deploy/RUNBOOK.md"],"notes":"do not touch migrations"}}' > "$gdir/.harness/config.json"
+( cd "$gdir/repo" && touch README.md Makefile .eslintrc.json CLAUDE.md docs/A.md deploy/RUNBOOK.md && printf '{"scripts":{"test":"x","lint":"y"}}' > package.json )
+gout=$(HARNESS_PROJECT="$gdir" bash "$ROOT/bin/harness-guide.sh" discover "$gdir/repo" 2>/dev/null)
+gempty=$(HARNESS_PROJECT="$gdir" bash "$ROOT/bin/harness-guide.sh" discover "$gdir/.harness" 2>/dev/null)
+if printf '%s' "$gout" | grep -q 'README.md' \
+   && printf '%s' "$gout" | grep -q 'Makefile' \
+   && printf '%s' "$gout" | grep -q '.eslintrc.json' \
+   && printf '%s' "$gout" | grep -qE 'scripts: (lint, test|test, lint)' \
+   && printf '%s' "$gout" | grep -q 'deploy/RUNBOOK.md' \
+   && printf '%s' "$gout" | grep -q 'do not touch migrations' \
+   && printf '%s' "$gout" | grep -qi 'already-loaded (skip): CLAUDE.md' \
+   && printf '%s' "$gempty" | grep -q 'found: none'; then
+  ok "$t guidance discover: standard+config+notes listed, CLAUDE.md flagged, empty=none"
+else bad "$t" "guidance discover output incomplete"; fi
+rm -rf "$gdir"
+
 echo "------------------------------------------------------------------"
 echo "harness tests: PASS=$PASS  FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

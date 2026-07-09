@@ -116,11 +116,23 @@ atomic_write() { # atomic_write <file>  (content on stdin)
   cat > "$tmp" && mv "$tmp" "$f"
 }
 
-iso_to_epoch() { # iso_to_epoch <iso8601-with-offset> — handles microseconds; empty on failure
-  python3 - "$1" <<'PY' 2>/dev/null || true
+iso_to_epoch() { # iso_to_epoch <iso8601-with-offset> — handles microseconds; empty on failure.
+  # Prefer python3, but fall back to date(1) so a Mac without python3 still parses reset times
+  # (review LOW — undeclared python3 dep). The usage API returns UTC (+00:00), so treat as UTC.
+  local iso="$1" e base
+  if command -v python3 >/dev/null 2>&1; then
+    e=$(python3 - "$iso" <<'PY' 2>/dev/null
 import sys, datetime
 print(int(datetime.datetime.fromisoformat(sys.argv[1]).timestamp()))
 PY
+)
+    [ -n "$e" ] && { printf '%s\n' "$e"; return 0; }
+  fi
+  # strip fractional seconds and the timezone offset, then parse as UTC seconds
+  base=$(printf '%s' "$iso" | sed -E 's/\.[0-9]+//; s/(Z|[+-][0-9]{2}:?[0-9]{2})$//')
+  e=$(date -u -d "$base" +%s 2>/dev/null) && { printf '%s\n' "$e"; return 0; }         # GNU date
+  e=$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null) && { printf '%s\n' "$e"; return 0; }  # BSD date
+  return 1
 }
 
 now_epoch() { date +%s; }

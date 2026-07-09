@@ -112,7 +112,31 @@ if grep -q -- '--session-id' "$ROOT/bin/harness-spawn.sh" && grep -q -- '--resum
 # H-20: prompts ban AskUserQuestion and interactive GSD (L23)
 t=H-20
 if grep -q 'Never use AskUserQuestion' "$ROOT/templates/prompts/orchestrator.md" \
-   && grep -q 'NEVER interactive entry points' "$ROOT/templates/prompts/worker.md"; then ok "$t unattended prompt bans present"; else bad "$t" "prompt bans missing"; fi
+   && grep -q 'NEVER an interactive entry point' "$ROOT/templates/prompts/worker.md"; then ok "$t unattended prompt bans present"; else bad "$t" "prompt bans missing"; fi
+
+# H-21: GSD is driven by discovery, NOT hardcoded phase commands (naming-drift resistance)
+t=H-21
+if grep -q 'harness-gsd.sh discover' "$ROOT/templates/prompts/worker.md" \
+   && grep -q 'do not hardcode GSD command names' "$ROOT/templates/prompts/worker.md" \
+   && ! grep -qE '/gsd-(plan|execute)-phase N --auto' "$ROOT/templates/prompts/worker.md"; then
+  ok "$t GSD discovery-first (no hardcoded phase commands)"
+else bad "$t" "worker prompt still hardcodes gsd phase commands or lost discover step"; fi
+
+# H-22: trust dialog is sonnet+deterministic gated; passwords are owner-gated, never typed
+t=H-22
+if grep -q 'harness-trust.sh" inside' "$ROOT/bin/harness-run.sh" \
+   && grep -q 'trust_ok_sonnet' "$ROOT/bin/harness-run.sh" \
+   && grep -q 'PASSWORD-PROMPT' "$ROOT/bin/harness-run.sh" \
+   && ! grep -qiE 'send .*(password|passphrase)' "$ROOT/bin/harness-run.sh"; then
+  ok "$t trust gated, passwords owner-gated (never typed)"
+else bad "$t" "trust/password handling missing or types secrets"; fi
+
+# H-23: pretrust only trusts dirs inside the project (never blanket)
+t=H-23
+if grep -q 'is not inside the project — not pre-trusting' "$ROOT/bin/harness-trust.sh" \
+   && grep -q 'harness-trust.sh" pretrust' "$ROOT/bin/harness-spawn.sh"; then
+  ok "$t pretrust scoped to project dirs"
+else bad "$t" "pretrust missing or unscoped"; fi
 
 echo "------------------------------------------------------------------"
 echo "harness tests: PASS=$PASS  FAIL=$FAIL"

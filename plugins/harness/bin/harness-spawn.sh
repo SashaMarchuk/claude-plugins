@@ -169,6 +169,10 @@ do_spawn() {
   # pointer so a worker in a sibling worktree can find the project even without the env var
   [ -e "$cwd/.harness-project" ] || printf '%s\n' "$PROJ" > "$cwd/.harness-project" 2>/dev/null || true
 
+  # pre-trust the cwd so the session doesn't stall on "Do you trust the files in this folder?"
+  # (deterministic belt — only trusts dirs inside the project; the watch monitor is the backstop).
+  "$BIN/harness-trust.sh" pretrust "$cwd" >/dev/null 2>&1 || true
+
   # -- sonnet validation (second net; deterministic guards already passed) --
   # NOTE: capture the validator's exit status DIRECTLY. `if ! cmd; then rc=$?` would capture the
   # status of the `!` negation (always 0), silently swallowing a REJECT (review CRITICAL).

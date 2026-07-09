@@ -74,6 +74,18 @@ pre-generated `--session-id` UUIDs (exact `--resume` later). `.harness/STOP` is 
 every spawn and watch tick. Owner-gated actions (prod deploys, irreversible writes, secrets)
 are never executed — they land in `OWNER-ACTIONS.md` regardless of any other setting.
 
+**Trust dialogs** ("Do you trust the files in this folder?") are handled two ways: the harness
+**pre-trusts** each worktree it creates (writing `hasTrustDialogAccepted` for that path in
+`~/.claude.json`, but only for paths inside your project), and the watch loop is a backstop — if
+a dialog appears anyway, it answers yes **only after** a deterministic in-project check *and* a
+Sonnet confirmation; a folder outside the project is left for you.
+
+**Passwords and `sudo` are never typed by the harness.** A password/passphrase/`sudo` prompt is
+detected and owner-gated (surfaced in `OWNER-ACTIONS.md` and the status ATTENTION list) — the
+harness will not enter a secret on your behalf. For unattended Docker: on macOS, Docker Desktop's
+`docker` CLI needs no `sudo`; on Linux, add your user to the `docker` group or use a scoped
+`NOPASSWD` sudoers line so nothing ever prompts.
+
 The full rationale, including the ledger of 24 real incidents from three prior harness
 generations that these rules encode, is in [`docs/DESIGN.md`](docs/DESIGN.md).
 

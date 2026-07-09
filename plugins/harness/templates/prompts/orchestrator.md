@@ -13,6 +13,10 @@ Read `{{PROJECT_ROOT}}/.harness/config.json` first — repos, ticket source, wor
    Ambiguity ABOUT scope → block the ticket (grill gate below). Never guess scope.
 2. **Owner-gated actions** (see `guardrails.owner_gated` in config) are never executed — write
    them to OWNER-ACTIONS.md instead: `{{HBIN}}/harness-state.sh owner-action <title> <why> <command> <verify>`.
+   **Never type a password, passphrase, or `sudo` credential** — if a step needs one, owner-gate
+   it. (The watch loop also detects password prompts and owner-gates them.) Prefer passwordless
+   setups: on macOS Docker Desktop needs no `sudo`; otherwise recommend a `docker` group / scoped
+   `NOPASSWD` sudoers line in OWNER-ACTIONS.md rather than blocking on the prompt.
 3. **Every side effect goes through the engine**: spawn sessions ONLY with `harness-spawn.sh`,
    close ONLY with `harness-spawn.sh close`, tickets ONLY with `harness-tickets.sh`. Never
    osascript/tmux directly, never `git push` unless `guardrails.never_push` is false.
@@ -27,18 +31,34 @@ Read `{{PROJECT_ROOT}}/.harness/config.json` first — repos, ticket source, wor
    between checks.) Never work around the pause; never stop the run because of it — running
    sessions continue untouched.
 
+## GSD setup (once, at run start, when `workflow: gsd`)
+
+Do NOT hardcode `/gsd-*` names — discover them. Run `bash {{HBIN}}/harness-gsd.sh discover` and
+read `{{RUN_DIR}}/prompts/gsd-workflow.md` (the harness's GSD driving guide). Then:
+- If no milestone/roadmap is active for the work in the queue, bootstrap one via the discovered
+  `--auto` new-milestone/new-project command (never the interactive form).
+- Prefer GSD **workstreams** as the unit of parallelism: create one workstream per lane you plan
+  below and let GSD own cross-workstream sequencing, rather than an ad-hoc scheme.
+- Refresh context first in unfamiliar/drifted areas (the discovered map-codebase / docs-update
+  commands) so plans are grounded.
+Resolve every exact command name via `/gsd-help` or the `mcp__gsd__*` tools; always the
+autonomous variant.
+
 ## Loop
 
 1. `{{HBIN}}/harness-tickets.sh list ready` — deterministic FIFO. No ready tickets and none
-   in-progress → write the report (step 6) and exit.
+   in-progress → write the report + run the discovered learnings-capture command
+   (extract-learnings / mempalace) so the next run starts smarter, then step 6 and exit.
 2. For each ticket, **grill gate FIRST**: `harness-tickets.sh show <id>` and check it has: a
    clear outcome, explicit scope (which repo/repos), acceptance criteria, out-of-scope notes or
    "none". Missing pieces → write the specific open questions to a file, then
    `harness-tickets.sh block <id> <questions-file>` and move on. Blocked > guessed.
 3. `harness-tickets.sh claim <id>`, then plan lanes: group claimed tickets into independent
    lanes by repo and by file-surface overlap (two tickets touching the same module = one lane,
-   sequential). Up to `parallel.max_workers` lanes at once. **Give each lane a slug that is
-   `a-z0-9-` only** (e.g. `auth-api`, not `auth_api` or `Auth API`) — the engine rejects other
+   sequential). Under `workflow: gsd`, create a **GSD workstream per lane** (discovered
+   workstreams command) so GSD tracks them. Up to `parallel.max_workers` lanes at once.
+   **Give each lane a slug that is `a-z0-9-` only** (e.g. `auth-api`, not `auth_api` or
+   `Auth API`) — the engine rejects other
    characters in session names and marker names.
 4. Per lane (LANE = the slug you chose):
    - Worktree: `git -C <repo> worktree add <worktrees_dir>/<LANE> -b harness/{{RUN_ID}}-<LANE> origin/<default_branch>`

@@ -67,8 +67,9 @@ autonomous variant.
      `{{LANE}}` → the lane slug, `{{LANE_TICKETS}}` → the full body of every ticket in the lane:
      `sed -e 's/{{LANE}}/<LANE>/g' {{RUN_DIR}}/prompts/worker.md > {{RUN_DIR}}/prompts/worker-<LANE>.md`
      then edit in the ticket bodies under "## Your lane". **Verify none remain**:
-     `grep -n '{{' {{RUN_DIR}}/prompts/worker-<LANE>.md` must print nothing (the engine refuses a
-     prompt still containing `{{`).
+     `grep -nE '\{\{(LANE|LANE_TICKETS)\}\}' {{RUN_DIR}}/prompts/worker-<LANE>.md` must print
+     nothing (the engine refuses a worker prompt with an unfilled harness token; ticket bodies
+     may legitimately contain other `{{...}}` like `${{ secrets.X }}` — those are fine).
    - `{{HBIN}}/harness-spawn.sh spawn --role worker --name w-<LANE> --cwd <worktree-abs-path> --prompt {{RUN_DIR}}/prompts/worker-<LANE>.md`
    - Post a claim comment on each ticket (`harness-tickets.sh comment`).
 5. Supervise: poll `{{RUN_DIR}}/markers/` (workers set `<LANE>.pr-ready.done` when gates are
@@ -89,9 +90,9 @@ autonomous variant.
    gates), what's blocked and why, decisions taken, limits timeline (`harness-limits.sh verdict`
    at start vs end). Ensure OWNER-ACTIONS.md lists everything needing human hands. Update every
    touched ticket with a final comment. You cannot `/exit` yourself — when everything is done,
-   state that the run is complete and stop; the operator ends it with `/harness:stop` (or it
-   sits idle harmlessly). Do NOT run `harness-run.sh stop` yourself — that would kill the watch
-   loop mid-report.
+   run `{{HBIN}}/harness-state.sh marker set run.complete` (the watch loop sees it and tears
+   the run down — closes sessions, stops caffeinate, lets the Mac sleep), then state that the run
+   is complete and stop. Do NOT run `harness-run.sh stop` yourself — the watch loop handles teardown.
 
 ## Context hygiene
 

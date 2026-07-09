@@ -138,6 +138,51 @@ if grep -q 'is not inside the project — not pre-trusting' "$ROOT/bin/harness-t
   ok "$t pretrust scoped to project dirs"
 else bad "$t" "pretrust missing or unscoped"; fi
 
+# H-24: C1/M1 — the placeholder guard matches only harness tokens (not raw {{), role-gated to
+# worker/validator, so the orchestrator prompt and ticket bodies with ${{ }} both spawn.
+# END-TO-END: render the real orchestrator template as do_start would and confirm it does NOT trip
+# the guard's exact regex (this is the test that would have caught C1's dead-on-arrival run).
+t=H-24
+guard='\{\{(HBIN|PROJECT_ROOT|RUN_DIR|RUN_ID|LANE|LANE_TICKETS)\}\}'
+# (a) the rendered orchestrator prompt (do_start fills the base-4) has no unfilled base tokens —
+#     this is the C1 end-to-end check that would have caught the dead-on-arrival run.
+rendered_base=$(sed -e 's|{{HBIN}}|/bin|g' -e 's|{{PROJECT_ROOT}}|/p|g' -e 's|{{RUN_DIR}}|/r|g' -e 's|{{RUN_ID}}|r|g' "$ROOT/templates/prompts/orchestrator.md" | grep -E '\{\{(HBIN|PROJECT_ROOT|RUN_DIR|RUN_ID)\}\}' || true)
+# (b) the narrowed guard passes real ticket content (${{ secrets }}) but catches an unfilled {{LANE}}.
+c1ok=1; [ -n "$rendered_base" ] && c1ok=0
+printf '%s' 'deploy uses ${{ secrets.X }} and {{ vueVar }}' | grep -qE "$guard" && c1ok=0   # must NOT match
+printf '%s' 'run for {{LANE}}' | grep -qE "$guard" || c1ok=0                                  # must match
+# (c) engine still role-gates and no longer uses the raw grep.
+if [ "$c1ok" -eq 1 ] && grep -q 'worker|validator)' "$ROOT/bin/harness-spawn.sh" \
+   && ! grep -qF "grep -q '{{'" "$ROOT/bin/harness-spawn.sh"; then
+  ok "$t guard narrowed+role-gated: orchestrator renders clean, ticket {{ }} passes, {{LANE}} caught (C1/M1)"
+else bad "$t" "C1/M1 regression (base-left='$rendered_base' c1ok=$c1ok)"; fi
+
+# H-25: H1 — the watch loop tears the run down on run.complete (caffeinate stops, Mac sleeps)
+t=H-25
+if grep -q 'markers/run.complete.done' "$ROOT/bin/harness-run.sh" \
+   && grep -q 'run.complete' "$ROOT/templates/prompts/orchestrator.md"; then
+  ok "$t completed run self-teardown (H1)"
+else bad "$t" "no run.complete teardown path"; fi
+
+# H-26: H2 — engine floor under the grill gate: a ready ticket needs the checklist headers
+t=H-26
+if grep -q 'require_ready_body' "$ROOT/bin/harness-tickets.sh" \
+   && grep -q 'missing required section' "$ROOT/bin/harness-tickets.sh"; then
+  ok "$t structural grill floor on 'ready' tickets (H2)"
+else bad "$t" "no structural ready-ticket check"; fi
+
+# H-27: M4 — sonnet rejected for orchestrator/worker (build) roles
+t=H-27
+if grep -qE 'orchestrator:sonnet\|worker:sonnet' "$ROOT/bin/harness-spawn.sh"; then
+  ok "$t sonnet rejected for build roles (M4)"
+else bad "$t" "sonnet not rejected for build roles"; fi
+
+# H-28: M3 — per-role account resolves before the shared one
+t=H-28
+if grep -q 'cfg ".accounts.\$role.env_command"' "$ROOT/bin/harness-spawn.sh"; then
+  ok "$t per-role account override (M3)"
+else bad "$t" "per-role account not wired"; fi
+
 echo "------------------------------------------------------------------"
 echo "harness tests: PASS=$PASS  FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

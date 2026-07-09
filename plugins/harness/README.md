@@ -25,8 +25,10 @@ decision log. Nothing is pushed unless you flip `guardrails.never_push`.
 
 ## Config: user + project
 
-Per-key resolution: **project `.harness/config.json` → user `~/.claude/harness/config.json` →
-defaults**. Annotated examples: [`templates/user-config.example.json`](templates/user-config.example.json),
+Per-key resolution for engine-read keys (via `cfg()`): **project `.harness/config.json` →
+user `~/.claude/harness/config.json` → defaults**. A handful of project-shape keys the orchestrator
+reads directly (`repos`, `workflow`, `parallel`, `guardrails.owner_gated`/`never_push`,
+`tickets`) live at project level only — they have no user-level fallback by design. Annotated examples: [`templates/user-config.example.json`](templates/user-config.example.json),
 [`templates/project-config.example.json`](templates/project-config.example.json).
 
 The parts people ask about:

@@ -221,6 +221,36 @@ each lane.
   Docker Desktop needs no sudo; else `docker` group / scoped `NOPASSWD`). Typing a secret into a
   terminal is the one thing the harness will not do on the user's behalf.
 
+## 10c. Autonomous decisions — tiered, never AskUserQuestion
+
+An unattended run must not block on the owner, but it also must not silently guess. So decisions
+are resolved by tier, matched to the stakes — this is how the harness "answers questions that
+don't need the owner":
+
+- **Small / low-stakes** → decide directly; log via `harness-state.sh decision`.
+- **Non-trivial in-scope** → a **council**: 3 `harness:council-advisor` agents with distinct
+  lenses (simplicity / risk / user-impact), majority + strongest argument. A cheap second opinion
+  that double-checks the path without a human.
+- **Hard / high-stakes / would-normally-need-the-owner** → **escalate to `/ultra:run --large`**
+  with the question + context, and adopt its recommendation. This is the autonomous stand-in for
+  asking the owner (mirrors the real `.night-session` C-RESEARCH decision, which used
+  `/ultra:run --large` for the one architecture call).
+- **Scope change** (ticket doesn't cover it) → block the ticket. **Irreversible/prod** → owner-gate.
+
+Soft dependency: the ultra tier uses the `ultra` plugin's `/ultra:run`. If it isn't installed, the
+council is the top autonomous tier and the session should say so in its decision log rather than
+fail — the harness degrades, it doesn't break. `harness:council-advisor` ships with this plugin.
+
+### Red-team hardening round (0.5.0)
+
+An opus break-review + escalating (medium→large) validation found 13 runtime/logic gaps the static
+suite couldn't reach (0 false positives). Fixes: bottom-anchored + tightened prompt-detection (no
+false owner-alerts on build output that prints "password:"/"rate limit"), space-tolerant local ticket
+status (no infinite re-claim), loud failure on corrupt project config, empty-CURRENT self-heal,
+caffeinate bound to the watch pid, sonnet rejected anywhere in a build chain, narrowed cwd metachar
+guard, worktree-spoof hardening (one shared helper), account-aware pretrust target, fail-closed limits
+on bad percents, repo-contained guidance globs, project-scoped run ids. See CHANGELOG 0.5.0 (F1–F13).
+
 ## 11. What was deliberately left out (anti-overengineering)
 
 - No LLM watchdog (deterministic bash is cheaper and can't hang on the same modal as its

@@ -84,6 +84,22 @@ hlog() { # hlog <msg...> — timestamped, to stderr and the run log when a run i
 assert_abs() { # assert_abs <path> <what>
   case "${1:?}" in /*) return 0 ;; *) echo "ERROR: ${2:-path} must be absolute: $1" >&2; return 65 ;; esac
 }
+# _is_project_worktree <dir> <proj-abs> — 0 iff <dir> is a GENUINE linked git worktree whose main
+# repo lives inside <proj>. Hardened against --separate-git-dir spoofing (review F8): a real linked
+# worktree has git-dir UNDER <common>/worktrees/ and git-dir != git-common-dir.
+_is_project_worktree() {
+  local d="$1" proj="$2" common gitdir main
+  common=$(git -C "$d" rev-parse --git-common-dir 2>/dev/null) || return 1
+  gitdir=$(git -C "$d" rev-parse --git-dir 2>/dev/null) || return 1
+  case "$common" in /*) ;; *) common=$(cd "$d" && cd "$common" && pwd -P) ;; esac
+  case "$gitdir" in /*) ;; *) gitdir=$(cd "$d" && cd "$gitdir" && pwd -P) ;; esac
+  [ "$gitdir" != "$common" ] || return 1                            # linked worktree, not the main checkout
+  case "$gitdir/" in "$common"/worktrees/*) ;; *) return 1 ;; esac  # genuine worktree, not a spoofed git-dir
+  main=$(cd "$common/.." 2>/dev/null && pwd -P) || return 1
+  case "$main/" in "$proj"/*) return 0 ;; esac
+  return 1
+}
+
 assert_safe_cwd() { # assert_safe_cwd <dir> — absolute, exists, not $HOME, not /, inside project
   local d="${1:?cwd required}" proj
   assert_abs "$d" "cwd" || return 65
@@ -99,12 +115,7 @@ assert_safe_cwd() { # assert_safe_cwd <dir> — absolute, exists, not $HOME, not
   esac
   # Outside the project tree: allow ONLY a real git worktree whose main repo lives inside the
   # project (the sibling-worktree convention) — not every unrelated project under the parent dir.
-  local common main
-  if common=$(git -C "$d" rev-parse --git-common-dir 2>/dev/null); then
-    case "$common" in /*) ;; *) common=$(cd "$d" && cd "$common" && pwd -P) ;; esac
-    main=$(cd "$common/.." 2>/dev/null && pwd -P || true)
-    case "$main/" in "$proj"/*) return 0 ;; esac
-  fi
+  _is_project_worktree "$d" "$proj" && return 0
   echo "ERROR: cwd $d is neither inside the project ($proj) nor a git worktree of a repo in it" >&2
   return 65
 }

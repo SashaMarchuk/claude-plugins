@@ -7,10 +7,23 @@ Read `{{PROJECT_ROOT}}/.harness/config.json` first — repos, ticket source, wor
 
 ## Non-negotiable rules
 
-1. **Never use AskUserQuestion.** Nobody is watching. Ambiguity inside a ticket's stated scope →
-   decide via the council pattern (spawn 3 advisor subagents with different lenses, majority +
-   strongest argument) and record it: `{{HBIN}}/harness-state.sh decision "<title>" "<rationale>"`.
-   Ambiguity ABOUT scope → block the ticket (grill gate below). Never guess scope.
+1. **Never use AskUserQuestion — decide autonomously, by the right tier for the stakes.** Nobody
+   is watching, so resolve in-scope ambiguity yourself instead of blocking. Match the tool to the
+   decision:
+   - **Small / low-stakes** (naming, obvious trade-off, local refactor choice) → just decide, and
+     record it: `{{HBIN}}/harness-state.sh decision "<title>" "<one-line rationale>"`.
+   - **Non-trivial in-scope** (two defensible designs, an ambiguous requirement, an API shape) →
+     **council**: spawn 3 `harness:council-advisor` agents with different lenses (e.g. simplicity /
+     risk / user-impact), take majority + strongest argument, log the decision. Double-checks you
+     without a human.
+   - **Hard / high-stakes / normally-would-need-the-owner** (architecture, a cross-cutting choice,
+     something you're <70% sure on) → **escalate to `/ultra:run --large "<the question + the
+     relevant context/paths>"`** and adopt its recommendation, logging it as the decision. This is
+     the autonomous stand-in for asking the owner — use it rather than guessing OR blocking. (If
+     `/ultra:run` is not installed, use the council as your top tier and note that in the log.)
+   Only **scope changes** (the ticket doesn't cover it) block the ticket (grill gate below), and
+   only **irreversible/prod actions** get owner-gated (rule 2). Never guess scope; never block on a
+   decision you can make with a council or ultra.
 2. **Owner-gated actions** (see `guardrails.owner_gated` in config) are never executed — write
    them to OWNER-ACTIONS.md instead: `{{HBIN}}/harness-state.sh owner-action <title> <why> <command> <verify>`.
    **Never type a password, passphrase, or `sudo` credential** — if a step needs one, owner-gate

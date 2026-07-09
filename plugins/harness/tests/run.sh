@@ -171,11 +171,11 @@ if grep -q 'require_ready_body' "$ROOT/bin/harness-tickets.sh" \
   ok "$t structural grill floor on 'ready' tickets (H2)"
 else bad "$t" "no structural ready-ticket check"; fi
 
-# H-27: M4 — sonnet rejected for orchestrator/worker (build) roles
+# H-27: M4/F6 — sonnet rejected ANYWHERE in an orchestrator/worker (build) chain, not just primary
 t=H-27
-if grep -qE 'orchestrator:sonnet\|worker:sonnet' "$ROOT/bin/harness-spawn.sh"; then
-  ok "$t sonnet rejected for build roles (M4)"
-else bad "$t" "sonnet not rejected for build roles"; fi
+if grep -q "grep -qx 'sonnet'" "$ROOT/bin/harness-spawn.sh" && grep -q 'orchestrator|worker)' "$ROOT/bin/harness-spawn.sh"; then
+  ok "$t sonnet rejected anywhere in a build-role chain (M4/F6)"
+else bad "$t" "sonnet build-role guard missing or primary-only"; fi
 
 # H-28: M3 — per-role account resolves before the shared one
 t=H-28
@@ -202,6 +202,61 @@ if printf '%s' "$gout" | grep -q 'README.md' \
   ok "$t guidance discover: standard+config+notes listed, CLAUDE.md flagged, empty=none"
 else bad "$t" "guidance discover output incomplete"; fi
 rm -rf "$gdir"
+
+# H-30: tiered autonomous decisions — council for non-trivial, /ultra:run for hard, both prompts
+t=H-30
+if grep -q 'harness:council-advisor' "$ROOT/templates/prompts/orchestrator.md" \
+   && grep -q '/ultra:run --large' "$ROOT/templates/prompts/orchestrator.md" \
+   && grep -q 'harness:council-advisor' "$ROOT/templates/prompts/worker.md" \
+   && grep -q '/ultra:run --large' "$ROOT/templates/prompts/worker.md" \
+   && grep -q 'not installed, use the council' "$ROOT/templates/prompts/orchestrator.md" \
+   && grep -q 'Autonomous decisions' "$ROOT/docs/DESIGN.md"; then
+  ok "$t tiered decisions (council + ultra escalation) wired + soft-dep documented"
+else bad "$t" "decision-tier layer missing from prompts/DESIGN"; fi
+
+# H-31 (F2): local ticket status setter matches optional space (no infinite re-claim)
+t=H-31
+if grep -q "/\^status:/" "$ROOT/bin/harness-tickets.sh" && ! grep -q "awk -v s=\"\$2\" 'BEGIN{done=0} /\^status: /" "$ROOT/bin/harness-tickets.sh"; then
+  ok "$t ticket-status setter space-tolerant (F2)"
+else bad "$t" "F2 status setter still requires a space"; fi
+
+# H-32 (F3): empty CURRENT is not treated as an active run
+t=H-32
+if grep -q 'an empty/whitespace CURRENT' "$ROOT/bin/harness-run.sh" && grep -q 'cur=$(cat "$HDIR/CURRENT"' "$ROOT/bin/harness-run.sh"; then
+  ok "$t empty-CURRENT self-heal (F3)"
+else bad "$t" "F3 empty-CURRENT guard missing"; fi
+
+# H-33 (F4): preflight validates project config JSON
+t=H-33
+if grep -q 'is not valid JSON' "$ROOT/bin/harness-run.sh"; then ok "$t preflight validates project config (F4)"; else bad "$t" "F4 config validation missing"; fi
+
+# H-34 (F5): caffeinate bound to the watch pid (-w)
+t=H-34
+if grep -q 'caffeinate -dims -w' "$ROOT/bin/harness-run.sh"; then ok "$t caffeinate bound to watch pid (F5)"; else bad "$t" "F5 caffeinate -w missing"; fi
+
+# H-35 (F7): cwd guard narrowed to genuinely dangerous chars (allows ( ) ! etc.)
+t=H-35
+# narrowed guard uses the singular "a shell metacharacter" message and no longer lists < > ( ) in its class
+if grep -q 'contains a shell metacharacter' "$ROOT/bin/harness-spawn.sh"; then ok "$t cwd metachar guard narrowed (F7)"; else bad "$t" "F7 cwd guard not narrowed"; fi
+
+# H-36 (F8): worktree check hardened against --separate-git-dir spoof
+t=H-36
+if grep -q '_is_project_worktree' "$ROOT/bin/hlib.sh" && grep -q 'worktrees/\*) ;;' "$ROOT/bin/hlib.sh" \
+   && grep -q '_is_project_worktree' "$ROOT/bin/harness-trust.sh"; then
+  ok "$t worktree spoof-hardened + shared (F8)"
+else bad "$t" "F8 worktree hardening missing"; fi
+
+# H-37 (F10): limits fail CLOSED on non-numeric percents
+t=H-37
+if grep -q 'all(type=="number")' "$ROOT/bin/harness-limits.sh"; then ok "$t limits fail-closed on bad percent (F10)"; else bad "$t" "F10 fail-closed guard missing"; fi
+
+# H-38 (F11/F12/F13): guidance glob containment, project-scoped run naming, grill synonyms
+t=H-38
+if grep -q 'skipped: outside repo' "$ROOT/bin/harness-guide.sh" \
+   && grep -q 'proj_hash\|shasum -a 256' "$ROOT/bin/harness-term.sh" \
+   && grep -q 'definition of done' "$ROOT/bin/harness-tickets.sh"; then
+  ok "$t guidance containment + project-scoped ids + grill synonyms (F11/F12/F13)"
+else bad "$t" "F11/F12/F13 fix missing"; fi
 
 echo "------------------------------------------------------------------"
 echo "harness tests: PASS=$PASS  FAIL=$FAIL"

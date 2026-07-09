@@ -52,9 +52,9 @@ default_chain_for_role() {
 launcher_home() { # space-free path for launchers (AppleScript embeds it verbatim)
   local run; run=$(hcurrent_run)
   case "$run" in
-    # run path has chars AppleScript can't embed (spaces etc.): fall back to a per-run subdir of
-    # the shared launchers dir — run-id-scoped so concurrent runs/projects never collide (review LOW).
-    *[!A-Za-z0-9._/:@=-]*) local d; d="$HARNESS_USER_DIR/launchers/$(basename "$run")"; mkdir -p "$d"; printf '%s\n' "$d" ;;
+    # run path has chars AppleScript can't embed (spaces etc.): fall back to a subdir of the shared
+    # launchers dir, scoped by PROJECT hash + run-id so two projects can never collide (review F12).
+    *[!A-Za-z0-9._/:@=-]*) local d h; h=$(printf '%s' "$(hproject_root)" | shasum -a 256 | cut -c1-8); d="$HARNESS_USER_DIR/launchers/${h}-$(basename "$run")"; mkdir -p "$d"; printf '%s\n' "$d" ;;
     *) printf '%s/launchers\n' "$run" ;;
   esac
 }
@@ -85,7 +85,7 @@ do_spawn() {
   assert_safe_cwd "$cwd" || return 65
   # cwd is embedded into the generated launcher as `cd "$cwd"`; a real dir name containing a
   # command substitution would execute at launcher runtime. Screen it (belt for the resolved path).
-  case "$cwd" in *['`$;&|<>()!*?']*|*'"'*) echo "ERROR: cwd contains shell metacharacters — refusing: $cwd" >&2; return 65 ;; esac
+  case "$cwd" in *['`$\\']*|*'"'*) echo "ERROR: cwd contains a shell metacharacter (\` \$ \\ \") — refusing: $cwd" >&2; return 65 ;; esac
   if [ -z "$resume" ]; then
     [ -n "$prompt" ] || { echo "ERROR: --prompt required unless --resume" >&2; return 64; }
     assert_abs "$prompt" "prompt file" || return 65
@@ -124,15 +124,17 @@ do_spawn() {
 
   # -- resolve models --
   [ -n "$chain" ] || chain=$(default_chain_for_role "$role")
-  local models_lines rest primary
+  local models_lines rest
   models_lines=$("$BIN/harness-model.sh" resolve "$chain") || return 65
   rest=$("$BIN/harness-model.sh" rest "$chain")
-  # policy: sonnet is for validation/summarization only, never build work (review M4)
-  primary=$(printf '%s\n' "$models_lines" | head -1)
-  case "$role:$primary" in
-    orchestrator:sonnet|worker:sonnet)
-      echo "ERROR: model chain for a $role starts with sonnet — sonnet is reserved for validation/summarization, not build work. Use opus (or fable|mythos|opus)." >&2
-      return 65 ;;
+  # policy: sonnet is for validation/summarization only, never build work — reject it ANYWHERE in a
+  # build-role chain, not just the primary, so an opus|sonnet fallback can't run build work (review F6).
+  case "$role" in
+    orchestrator|worker)
+      if printf '%s\n' "$models_lines" | grep -qx 'sonnet'; then
+        echo "ERROR: model chain for a $role includes sonnet — sonnet is reserved for validation/summarization, not build work. Use opus (or fable|mythos|opus)." >&2
+        return 65
+      fi ;;
   esac
 
   # -- generate launcher (L1: prompt stays in its file; launcher is lintable bash) --

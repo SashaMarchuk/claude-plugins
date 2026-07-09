@@ -181,7 +181,7 @@ term_app_by_tty() { # <tty> <verb: capture|close|send-enter>
 }
 
 # ----------------------------------------------------------------------- tmux
-tmux_session() { printf 'harness-%s\n' "$(basename "$(hcurrent_run)")"; }
+tmux_session() { local h; h=$(printf '%s' "$(hproject_root)" | shasum -a 256 | cut -c1-8); printf 'harness-%s-%s\n' "$h" "$(basename "$(hcurrent_run)")"; }
 tmux_spawn() { # <group> <title> <launcher>
   local ses title="$2" launcher="$3"
   ses=$(tmux_session)

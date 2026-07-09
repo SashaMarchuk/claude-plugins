@@ -73,7 +73,16 @@ do_discover() {
     local globs; globs=$(printf '%s' "$extra" | jq -r '.[]?' 2>/dev/null || true)
     if [ -n "$globs" ]; then
       echo "config-listed:"; local gl m
-      while IFS= read -r gl; do [ -n "$gl" ] || continue; for m in "$repo"/$gl; do [ -e "$m" ] && printf '  %s\n' "${m#"$repo"/}"; done; done <<< "$globs"
+      while IFS= read -r gl; do
+        [ -n "$gl" ] || continue
+        for m in "$repo"/$gl; do
+          [ -e "$m" ] || continue
+          # resolve and require the match to stay INSIDE the repo — a `../` glob or tampered config
+          # must not surface out-of-repo files as authoritative guidance (review F11).
+          real=$(cd "$(dirname "$m")" 2>/dev/null && pwd -P)/$(basename "$m") || continue
+          case "$real/" in "$repo"/*) printf '  %s\n' "${real#"$repo"/}" ;; *) printf '  [skipped: outside repo] %s\n' "$gl" ;; esac
+        done
+      done <<< "$globs"
     fi
   fi
   local notes; notes=$(cfg '.guidance.notes' '' 2>/dev/null)

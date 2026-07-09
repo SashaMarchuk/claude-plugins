@@ -56,6 +56,11 @@ snapshot() {
 verdict() {
   local j sess weekly sess_reset weekly_reset p_sess p_week v until reason
   j=$(snapshot) || { echo "VERDICT=UNKNOWN SESSION=? WEEKLY=? UNTIL="; return 0; }
+  # a limits[] array with null/missing/non-numeric percents is an unreliable meter — fail CLOSED to
+  # UNKNOWN (never OK-by-default), matching the header policy (review F10).
+  if ! printf '%s' "$j" | jq -e '[.limits[] | select(.group=="session" or .group=="weekly") | .percent] | (length>0) and all(type=="number")' >/dev/null 2>&1; then
+    echo "VERDICT=UNKNOWN SESSION=? WEEKLY=? UNTIL="; return 0
+  fi
   sess=$(printf '%s' "$j"        | jq -r '[.limits[] | select(.group=="session") | .percent] | max // 0')
   weekly=$(printf '%s' "$j"      | jq -r '[.limits[] | select(.group=="weekly")  | .percent] | max // 0')
   sess_reset=$(printf '%s' "$j"  | jq -r '[.limits[] | select(.group=="session")] | sort_by(.percent) | reverse | .[0].resets_at // empty')

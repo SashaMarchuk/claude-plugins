@@ -27,9 +27,9 @@ TDIR="$(hproject_root)/.harness/tickets"
 require_ready_body() { # <body-file> — exit 0 if the body looks like a grilled ticket
   local f="${1:?body file}" miss=""
   [ -s "$f" ] || { echo "ERROR: empty ticket body — cannot be 'ready'" >&2; return 65; }
-  grep -qiE '^#+ *outcome'            "$f" || miss="$miss outcome"
-  grep -qiE '^#+ *(acceptance|accept)' "$f" || miss="$miss acceptance-criteria"
-  grep -qiE '^#+ *scope'             "$f" || miss="$miss scope"
+  grep -qiE '^#+ *(outcome|goal|objective)'                            "$f" || miss="$miss outcome"
+  grep -qiE '^#+ *(acceptance( criteria)?|accept|definition of done|dod)' "$f" || miss="$miss acceptance-criteria"
+  grep -qiE '^#+ *(scope|in scope)'                                    "$f" || miss="$miss scope"
   if [ -n "$miss" ]; then
     echo "ERROR: ticket body is missing required section(s):$miss — create it 'blocked' with open questions, or run the grill gate (/harness:add). A 'ready' ticket must carry: ## Outcome, ## Scope, ## Acceptance criteria." >&2
     return 65
@@ -87,7 +87,7 @@ l_file() { # id → path
 l_status_get() { sed -n 's/^status: *//p' "$(l_file "$1")" | head -1; }
 l_status_set() {
   local f; f=$(l_file "$1")
-  awk -v s="$2" 'BEGIN{done=0} /^status: /{ if(!done){print "status: " s; done=1; next} } {print}' "$f" | atomic_write "$f"
+  awk -v s="$2" 'BEGIN{done=0} /^status:/{ if(!done){print "status: " s; done=1; next} } {print}' "$f" | atomic_write "$f"
 }
 l_list() {
   local status="${1:-ready}" f

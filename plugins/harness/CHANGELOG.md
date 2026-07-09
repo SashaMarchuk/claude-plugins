@@ -1,5 +1,42 @@
 # Changelog — harness
 
+## 0.5.0 — 2026-07-10
+
+Adds tiered autonomous decisions; fixes 13 defects from an adversarial red-team (opus break-review
+→ escalating medium→large validation: 0 false positives, all confirmed real, 8 outright + 5 real-but-
+overstated). Notably the static suite passed 30/30 with every one of these present — they were
+runtime/logic gaps only an adversarial pass reaches.
+
+### Added
+- **Tiered autonomous decisions** (never AskUserQuestion): small → decide+log; non-trivial →
+  3-voice `harness:council-advisor`; hard / <70%-sure / would-need-the-owner → escalate to
+  `/ultra:run --large` and adopt its recommendation. Only scope changes block; only irreversible/
+  prod is owner-gated. Soft dependency on the `ultra` plugin (council is the top tier without it).
+
+### Fixed (red-team, validated)
+- **F1 (MEDIUM): watch-loop screen-scrape false positives** — `password:`/`rate limit`/`trust…` as
+  substrings in normal build output no longer misfire; detection is bottom-anchored (last ~3 non-blank
+  lines) with tighter patterns, killing the "arbitrary scrollback contains the phrase" class.
+- **F2 (MEDIUM): local `status:ready` (no space)** no longer causes infinite re-claim — the setter now
+  matches optional whitespace like the getter.
+- **F4 (MEDIUM): corrupt project `config.json`** now fails preflight loudly instead of silently
+  reverting every setting to defaults.
+- **F3: empty `.harness/CURRENT`** (crash between truncate and write) self-heals instead of wedging
+  start/resume/status.
+- **F5: caffeinate is bound to the watch pid (`-w`)** — a dead watch can no longer leave the Mac awake.
+- **F6: sonnet rejected ANYWHERE in a build-role chain** (not just the primary) — `opus|sonnet` fallback
+  can't run build work.
+- **F7: cwd guard narrowed** to genuinely dangerous chars (`` ` `` `$ \ "`) — legit paths like `my(app)`
+  are no longer refused.
+- **F8: worktree check hardened** against `--separate-git-dir` spoofing (requires a genuine linked
+  worktree); factored into one shared helper used by both callers.
+- **F9: pretrust writes to the active account's `.claude.json`** (config-dir-aware), not always `$HOME`.
+- **F10: limits fail CLOSED** to UNKNOWN when `limits[]` percents are null/non-numeric.
+- **F11: guidance globs are repo-contained** — a `../` glob is flagged, not surfaced as authoritative.
+- **F12: run ids/tmux sessions/launcher dirs are project-scoped** (hash prefix) — two projects can't collide.
+- **F13: grill floor accepts synonym headers** (Goal / In scope / Definition of Done).
+- Tests 30 → 38 (H-30 decision layer, H-31..H-38 the fixes).
+
 ## 0.4.0 — 2026-07-09
 
 Adds project-guidance discovery; resolves a third review (Fable revalidation SHIP-WITH-FIXES +

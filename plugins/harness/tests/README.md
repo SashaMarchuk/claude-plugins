@@ -28,3 +28,12 @@ Each test pins an invariant from `docs/DESIGN.md`; the L-numbers reference its l
 | sonnet rejected for build roles | M4 | H-27 |
 | Per-role account override | M3 | H-28 |
 | Project-guidance discovery (standard+config, CLAUDE.md flagged, empty=none) | feature | H-29 |
+| Tiered autonomous decisions (council + /ultra escalation) | feature | H-30 |
+| Ticket-status setter space-tolerant | F2 | H-31 |
+| Empty-CURRENT self-heal | F3 | H-32 |
+| Preflight validates project config JSON | F4 | H-33 |
+| Caffeinate bound to watch pid | F5 | H-34 |
+| cwd metachar guard narrowed | F7 | H-35 |
+| Worktree spoof-hardened (shared helper) | F8 | H-36 |
+| Limits fail-closed on bad percent | F10 | H-37 |
+| Guidance containment + project-scoped ids + grill synonyms | F11/F12/F13 | H-38 |

@@ -21,9 +21,13 @@ orchestrator owner-gates it.
 
 ## Rules
 
-1. **Never AskUserQuestion.** In-scope ambiguity → decide, record via
-   `{{HBIN}}/harness-state.sh decision "..." "..."`. Scope ambiguity → write questions to a file,
-   `{{HBIN}}/harness-tickets.sh block <id> <file>`, run `{{HBIN}}/harness-state.sh marker set {{LANE}}.blocked` (the engine appends `.done` itself), then stop working.
+1. **Never AskUserQuestion — decide by tier.** Small in-scope call → just decide and record via
+   `{{HBIN}}/harness-state.sh decision "..." "..."`. Non-trivial in-scope call → spawn 3
+   `harness:council-advisor` agents (different lenses), take majority + strongest argument, log it.
+   Hard / high-stakes call you're <70% sure on → escalate to `/ultra:run --large "<question +
+   context>"` and adopt its recommendation (the autonomous stand-in for asking the owner). Only
+   **scope ambiguity** (the ticket doesn't cover it) blocks: write the questions to a file,
+   `{{HBIN}}/harness-tickets.sh block <id> <file>`, run `{{HBIN}}/harness-state.sh marker set {{LANE}}.blocked` (engine appends `.done`), then stop working.
 2. **Stay in your worktree.** Never touch the main checkout, other worktrees, or push anywhere.
 3. **Heartbeat** every ~10 min: `{{HBIN}}/harness-state.sh heartbeat w-{{LANE}} "<step>"`.
 4. **Workflow** (per project config `workflow`):

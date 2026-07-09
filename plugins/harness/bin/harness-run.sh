@@ -14,6 +14,7 @@ preflight() {
   command -v jq >/dev/null || { echo "MISSING: jq" >&2; fails=1; }
   command -v claude >/dev/null || { echo "MISSING: claude CLI" >&2; fails=1; }
   [ -f "$HARNESS_USER_CONFIG" ] || { echo "MISSING: user config — run /harness:onboard" >&2; fails=1; }
+  jq -e . "$PROJ/.harness/config.json" >/dev/null 2>&1 || { echo "INVALID: $PROJ/.harness/config.json is not valid JSON — every setting would silently revert to defaults" >&2; fails=1; }
   if [ "$(cfg '.tickets.source' 'local')" = "github" ]; then
     gh auth status >/dev/null 2>&1 || { echo "MISSING: gh auth (tickets.source=github)" >&2; fails=1; }
   fi
@@ -42,9 +43,12 @@ preflight() {
 
 do_start() {
   stop_requested && { echo "STOP file present ($(hstop_file)) — remove it to start a run" >&2; exit 65; }
-  if [ -f "$HDIR/CURRENT" ] && [ -d "$HDIR/runs/$(cat "$HDIR/CURRENT")" ] && [ ! -f "$HDIR/runs/$(cat "$HDIR/CURRENT")/STOPPED" ]; then
-    echo "ERROR: run $(cat "$HDIR/CURRENT") looks active — use 'harness-run.sh resume' or stop it first" >&2; exit 65
+  local cur; cur=$(cat "$HDIR/CURRENT" 2>/dev/null | tr -d '[:space:]')
+  if [ -n "$cur" ] && [ -d "$HDIR/runs/$cur" ] && [ ! -f "$HDIR/runs/$cur/STOPPED" ]; then
+    echo "ERROR: run $cur looks active — use 'harness-run.sh resume' or stop it first" >&2; exit 65
   fi
+  # an empty/whitespace CURRENT (crash between truncate and write) is NOT an active run — fall through
+  # and start fresh, self-healing the wedge (review F3).
   preflight || { echo "PREFLIGHT FAILED — fix the items above" >&2; exit 78; }
 
   local id run tdir
@@ -68,15 +72,16 @@ do_start() {
   # limits snapshot for the morning report
   "$BIN/harness-limits.sh" verdict > "$run/state/limits-at-start.txt" || true
 
-  # caffeinate: harness-managed, no -t (L16); watch respawns it if it dies
-  if [ "$(cfg '.run.caffeinate' 'true')" = "true" ] && command -v caffeinate >/dev/null; then
-    nohup caffeinate -dims >/dev/null 2>&1 &
-    printf '%s\n' "$!" > "$run/state/caffeinate.pid"
-  fi
-
-  # deterministic watch loop (not an LLM — L9)
+  # deterministic watch loop (not an LLM — L9) — start FIRST so caffeinate can bind to it
   nohup "$BIN/harness-run.sh" watch >> "$run/logs/watch.log" 2>&1 &
   printf '%s\n' "$!" > "$run/state/watch.pid"
+
+  # caffeinate bound to the watch pid (-w): if the watch ever dies, macOS releases the sleep
+  # assertion automatically, so a dead watch can never leave the Mac awake (review F5).
+  if [ "$(cfg '.run.caffeinate' 'true')" = "true" ] && command -v caffeinate >/dev/null; then
+    nohup caffeinate -dims -w "$(cat "$run/state/watch.pid")" >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$run/state/caffeinate.pid"
+  fi
 
   # orchestrator — if the account is rate-paused at start (exit 75), WAIT for the reset and retry
   # rather than aborting: starting a run at 91% is the exact go-to-sleep case (pause-not-stop, review HIGH).
@@ -173,9 +178,9 @@ watch_tick() {
   stall_min=$(cfg '.run.stall_minutes' '20')
   : > "$run/state/attention.tmp"
 
-  # caffeinate liveness (L16)
+  # caffeinate liveness (L16) — respawn bound to THIS watch loop ($$) so it dies with the watch (F5)
   if [ -f "$run/state/caffeinate.pid" ] && ! kill -0 "$(cat "$run/state/caffeinate.pid")" 2>/dev/null; then
-    nohup caffeinate -dims >/dev/null 2>&1 &
+    nohup caffeinate -dims -w "$$" >/dev/null 2>&1 &
     printf '%s\n' "$!" > "$run/state/caffeinate.pid"
     hlog "watch: caffeinate respawned"
   fi

@@ -9,22 +9,17 @@
 set -uo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hlib.sh"
 
-CLAUDE_JSON="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/../.claude.json"
-[ -f "$HOME/.claude.json" ] && CLAUDE_JSON="$HOME/.claude.json"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then CLAUDE_JSON="$CLAUDE_CONFIG_DIR/.claude.json"; else CLAUDE_JSON="$HOME/.claude.json"; fi
 
 inside_project() { # exit 0 iff <dir> is inside the project or one of its git worktrees
-  local d="${1:?dir}" proj resolved common main
+  local d="${1:?dir}" proj resolved
   assert_abs "$d" "dir" >/dev/null 2>&1 || return 1
   [ -d "$d" ] || return 1
   resolved=$(cd "$d" && pwd -P) || return 1
   proj=$(hproject_root 2>/dev/null) || return 1
   proj=$(cd "$proj" && pwd -P)
   case "$resolved/" in "$proj"/*) return 0 ;; esac
-  if common=$(git -C "$resolved" rev-parse --git-common-dir 2>/dev/null); then
-    case "$common" in /*) ;; *) common=$(cd "$resolved" && cd "$common" && pwd -P) ;; esac
-    main=$(cd "$common/.." 2>/dev/null && pwd -P || true)
-    case "$main/" in "$proj"/*) return 0 ;; esac
-  fi
+  _is_project_worktree "$resolved" "$proj" && return 0
   return 1
 }
 

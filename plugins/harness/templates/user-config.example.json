@@ -4,7 +4,7 @@
 
   "terminal": {
     "app": "auto",
-    "_app_options": "auto | iterm2 | terminal | tmux — 'auto' picks iTerm2 if installed, else Terminal.app, else tmux",
+    "_app_options": "auto | iterm2 | terminal | tmux — 'auto' picks iTerm2 if installed, else tmux, else Terminal.app (Terminal.app can't drive stop/watch — pick iterm2 or tmux for full features)",
     "fullscreen": false,
     "windows": {
       "control": ["orchestrator", "watch"],

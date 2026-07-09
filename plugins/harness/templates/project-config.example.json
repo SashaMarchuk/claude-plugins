@@ -25,6 +25,14 @@
   "workflow": "gsd",
   "_workflow_options": "gsd (drive GSD headlessly with --auto entry points) | generic",
 
+  "guidance": {
+    "_note": "OPTIONAL. Sessions auto-discover standard guidance (README, CONTRIBUTING, AGENTS.md, .github/ workflows+PR-template+CODEOWNERS, Makefile/Justfile, package.json scripts, linter/formatter configs, DEPLOY*/RELEASE* docs) via harness-guide.sh — this block only ADDS files the scan would miss, plus an optional steer. Delete to rely on defaults.",
+    "files": [],
+    "_files_note": "extra paths/globs (relative to a repo root) to always surface, e.g. ['deploy/RUNBOOK.md','docs/architecture/*.md']",
+    "notes": "",
+    "_notes_note": "free-text steer shown verbatim to every session, e.g. 'never touch db/migrations by hand; deploy is gated on the #ops approval in RELEASE.md'"
+  },
+
   "parallel": {
     "max_workers": 3,
     "_note": "upper bound on concurrent worker sessions; the rate gate can hold new spawns below this"

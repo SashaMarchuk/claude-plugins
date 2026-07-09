@@ -1,5 +1,33 @@
 # Changelog — harness
 
+## 0.4.0 — 2026-07-09
+
+Adds project-guidance discovery; resolves a third review (Fable revalidation SHIP-WITH-FIXES +
+an independent 0-100 validation that scored 82 with one blocking bug).
+
+### Added
+- **Project-guidance discovery** (`harness-guide.sh discover`): before working, each session reads
+  the repo's own rules — README/CONTRIBUTING/AGENTS.md, `.github/` workflows + PR template +
+  CODEOWNERS, Makefile/Justfile, package.json scripts, linter/formatter configs, DEPLOY/RELEASE
+  docs, env setup — and follows them (real gate commands, commit/PR conventions, do-not-touch
+  boundaries), owner-gating anything it can't satisfy. Advisory (lists paths, never enforces);
+  optional `guidance` config block for extra files + a free-text steer; CLAUDE.md flagged as
+  already-loaded. Wired into worker + orchestrator prompts. Test H-29.
+
+### Fixed
+- **BLOCKING (0-100 validator): `harness-trust.sh` and `harness-gsd.sh` were committed
+  non-executable** (mode 100644) but invoked via direct exec — both trust-dialog layers silently
+  died (`Permission denied`). Now `100755`.
+- `.harness-project` pointer is added to the worktree's git exclude so `git add -A` never ships it
+  in a PR.
+- The stall-nudge now skips any session at a password OR trust modal (a blind Enter would submit an
+  empty credential / accept a trust the sonnet gate declined).
+- Preflight warns about Terminal.app's missing send/key when it's the RESOLVED backend, not only the
+  configured literal.
+- Boot-verify `pgrep` anchors out the caller's own pid (Linux self-match; macOS was already safe).
+- `iso_to_epoch` falls back to `date(1)` when `python3` is absent (no silent rate-wait degradation).
+- Docs: auto-detect order, validator-FAIL handling in orchestrator, DESIGN window-id/tty wording.
+
 ## 0.3.1 — 2026-07-09
 
 Resolves a second Opus+Fable review (of 0.3.0) — overnight-survival hardening.

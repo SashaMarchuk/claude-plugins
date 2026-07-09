@@ -79,7 +79,7 @@ user actually runs Claude in), overridable any time.
 - **Layout**: roles map to window groups (default `two-windows`:
   `control` = orchestrator + watch, `work` = everything else). First spawn in a group creates
   a window (optionally sized to full screen bounds); later spawns become tabs of that window.
-  Window identity is tracked by id *and* re-resolved through the tty of a member session,
+  Window GROUPS are tracked by id (state/windows.json); individual sessions are addressed by tty,
   because iTerm window ids drift/collide (L10).
 - **Sessions are addressed by tty**, recorded at boot verification, never by window id or
   process-grep patterns (L10, L4).

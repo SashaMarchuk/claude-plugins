@@ -17,9 +17,10 @@ preflight() {
   if [ "$(cfg '.tickets.source' 'local')" = "github" ]; then
     gh auth status >/dev/null 2>&1 || { echo "MISSING: gh auth (tickets.source=github)" >&2; fails=1; }
   fi
-  "$BIN/harness-term.sh" probe >/dev/null || { echo "FAILED: terminal automation probe (grant Automation permission?)" >&2; fails=1; }
-  # Terminal.app can't drive stop/watch/auto-resume (no send/key) — warn if it's the resolved backend.
-  local be; be=$(cfg '.terminal.app' 'auto')
+  local probe; probe=$("$BIN/harness-term.sh" probe 2>/dev/null) || { echo "FAILED: terminal automation probe (grant Automation permission?)" >&2; fails=1; }
+  # Terminal.app can't drive stop/watch/auto-resume (no send/key) — warn whenever it's the RESOLVED
+  # backend, even when auto-detected (review LOW), by reading the probe's 'OK backend=<x>' line.
+  local be; be=$(printf '%s' "$probe" | sed -n 's/.*backend=//p')
   if [ "$be" = "terminal" ]; then
     echo "WARN: terminal.app=terminal — graceful stop, stall nudges, and rate-limit auto-resume are unavailable on Terminal.app. Prefer iterm2 or tmux." >&2
   fi
@@ -192,7 +193,7 @@ watch_tick() {
     fi
   fi
 
-  local f name tty role pid age tail cwd pwflag pw_prompt orch_alive any_alive
+  local f name tty role pid age tail cwd pwflag pw_prompt modal orch_alive any_alive
   orch_alive=0; any_alive=0
   for f in "$run"/state/registry/*.json; do
     [ -f "$f" ] || continue
@@ -209,12 +210,15 @@ watch_tick() {
     # prompt — if so, we must NOT nudge/send anything into it (an Enter is an empty credential,
     # and that would break the "never enter a secret" promise; review MEDIUM).
     tail=$("$BIN/harness-term.sh" capture "$tty" 25 2>/dev/null || true)
-    pw_prompt=0
-    printf '%s' "$tail" | grep -qiE 'password:|\[sudo\]|passphrase|sudo password' && pw_prompt=1
+    pw_prompt=0; modal=0
+    printf '%s' "$tail" | grep -qiE 'password:|\[sudo\]|passphrase|sudo password' && { pw_prompt=1; modal=1; }
+    # a blind Enter into a trust dialog would accept "Yes, proceed" — the very answer the sonnet
+    # gate may decline; treat any trust/password dialog as a modal the nudge must not touch (review LOW).
+    printf '%s' "$tail" | grep -qiE 'trust the files in this folder|do you trust' && modal=1
 
-    # heartbeat staleness → single nudge (Enter), then report; never kill (L18). Skip if at a
-    # password prompt (a stale heartbeat there is EXPECTED — it's waiting on the owner).
-    if [ "$pw_prompt" -eq 0 ]; then
+    # heartbeat staleness → single nudge (Enter), then report; never kill (L18). Skip if the session
+    # is sitting at a password/trust modal (a stale heartbeat there is EXPECTED — it awaits a decision).
+    if [ "$modal" -eq 0 ]; then
       age=$("$BIN/harness-state.sh" heartbeat-age "$name" 2>/dev/null || echo never)
       if [ "$age" != "never" ] && [ "$age" -gt $((stall_min*60)) ]; then
         nudge_file="$run/state/nudged-$name"

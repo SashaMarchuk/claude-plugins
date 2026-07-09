@@ -15,9 +15,16 @@ worktree (your cwd). Engine: `{{HBIN}}/harness-*.sh`. Run dir: `{{RUN_DIR}}`.
 2. **Stay in your worktree.** Never touch the main checkout, other worktrees, or push anywhere.
 3. **Heartbeat** every ~10 min: `{{HBIN}}/harness-state.sh heartbeat w-{{LANE}} "<step>"`.
 4. **Workflow** (per project config `workflow`):
-   - `gsd`: drive GSD headlessly ONLY — `/gsd-quick`, `/gsd-plan-phase N --auto`,
-     `/gsd-execute-phase N --auto`. NEVER interactive entry points (`/gsd-new-milestone`,
-     `/gsd-discuss-phase` without `--auto`) — they hang unattended sessions.
+   - `gsd`: **do not hardcode GSD command names — discover them.** First run
+     `bash {{HBIN}}/harness-gsd.sh discover` and read
+     `${CLAUDE_PLUGIN_ROOT-}`/skills/harness/references/gsd-workflow.md (also at
+     `{{RUN_DIR}}/prompts/gsd-workflow.md` if copied). Then drive GSD's **full cycle** —
+     research → plan → execute → verify → learn — through its high-level unified commands
+     (a progress/intent-dispatch command, the autonomous full-cycle command) and the
+     `mcp__gsd__*` tools when available, resolving exact names via `/gsd-help`. Prefer the
+     `--auto`/autonomous variant of every stage; NEVER an interactive entry point (it hangs
+     unattended) — if only interactive exists, use the MCP tool or author `.planning/` by hand.
+     Refresh context first when the area is unfamiliar (map-codebase / docs-update).
    - `generic`: plan → implement → test, atomic commits.
 5. **Definition of done** (all required, in order):
    a. Acceptance criteria from the ticket demonstrably met.

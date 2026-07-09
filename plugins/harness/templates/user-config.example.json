@@ -45,7 +45,8 @@
 
   "guardrails": {
     "sonnet_validation": true,
-    "_note": "Every spawn's generated launcher is reviewed by a sonnet validator before the terminal opens (second net after the deterministic guards). Costs one small -p call per spawn."
+    "sonnet_trust_check": true,
+    "_note": "sonnet_validation: every spawn's generated launcher is sonnet-reviewed before the terminal opens (second net after the deterministic guards). sonnet_trust_check: if a 'trust this folder?' dialog appears, a sonnet confirms the folder is legitimately part of the run before the watch loop answers yes (the folder is already deterministically verified to be inside the project first). Password/sudo prompts are NEVER auto-answered — they are owner-gated. Both cost one small -p sonnet call when they fire."
   },
 
   "run": {

@@ -60,6 +60,9 @@ do_start() {
     sed -e "s|{{HBIN}}|$BIN|g" -e "s|{{PROJECT_ROOT}}|$PROJ|g" -e "s|{{RUN_DIR}}|$run|g" \
         -e "s|{{RUN_ID}}|$id|g" "$f" > "$run/prompts/$base"
   done
+  # the GSD driving guide lives with the skill; copy it beside the prompts so sessions can read it
+  local gref; gref="$(dirname "$BIN")/skills/harness/references/gsd-workflow.md"
+  [ -f "$gref" ] && sed -e "s|{{HBIN}}|$BIN|g" -e "s|{{RUN_DIR}}|$run|g" "$gref" > "$run/prompts/gsd-workflow.md"
 
   # limits snapshot for the morning report
   "$BIN/harness-limits.sh" verdict > "$run/state/limits-at-start.txt" || true
@@ -181,7 +184,7 @@ watch_tick() {
     fi
   fi
 
-  local f name tty role pid age tail
+  local f name tty role pid age tail cwd pwflag
   for f in "$run"/state/registry/*.json; do
     [ -f "$f" ] || continue
     name=$(jq -r '.name' "$f"); tty=$(jq -r '.tty' "$f"); role=$(jq -r '.role' "$f"); pid=$(jq -r '.pid // empty' "$f")
@@ -205,8 +208,9 @@ watch_tick() {
       fi
     fi
 
-    # interactive limit banner: clear only when idle, timing from the API (L8/L9)
     tail=$("$BIN/harness-term.sh" capture "$tty" 25 2>/dev/null || true)
+
+    # interactive limit banner: clear only when idle, timing from the API (L8/L9)
     if printf '%s' "$tail" | grep -qiE 'limit reached|hit your (session|weekly) limit|rate limit' \
        && ! printf '%s' "$tail" | grep -q 'esc to interrupt'; then
       hlog "watch: limit banner on $name — waiting for reset via API"
@@ -216,8 +220,44 @@ watch_tick() {
       "$BIN/harness-term.sh" send "$tty" "continue" 2>/dev/null || true
       hlog "watch: sent resume to $name after reset"
     fi
+
+    # trust dialog: answer ONLY after a Sonnet check confirms the session's cwd is inside the
+    # project (pretrust normally prevents this; this is the backstop). Never blanket-trust.
+    if printf '%s' "$tail" | grep -qiE 'trust the files in this folder|do you trust'; then
+      cwd=$(jq -r '.cwd' "$f")
+      if "$BIN/harness-trust.sh" inside "$cwd" >/dev/null 2>&1 && trust_ok_sonnet "$name" "$cwd" "$tail"; then
+        "$BIN/harness-term.sh" key "$tty" enter 2>/dev/null || true   # default selection = "Yes, proceed"
+        hlog "watch: trust dialog on $name — confirmed cwd $cwd inside project, answered yes"
+      else
+        echo "TRUST-PROMPT: $name is asking to trust $cwd — NOT auto-answered (outside project or Sonnet declined); answer it yourself" >> "$run/state/attention.tmp"
+      fi
+    fi
+
+    # password / sudo prompt: NEVER type a secret. Owner-gate it (DESIGN §secrets).
+    if printf '%s' "$tail" | grep -qiE 'password:|\[sudo\]|passphrase|sudo password'; then
+      echo "PASSWORD-PROMPT: $name ($role) is blocked on a password/sudo prompt — the harness never types secrets. Enter it yourself, or set up passwordless access (see README)." >> "$run/state/attention.tmp"
+      local pwflag="$run/state/pw-gated-$name"
+      if [ ! -f "$pwflag" ]; then
+        "$BIN/harness-state.sh" owner-action "Password/sudo prompt in session $name" \
+          "an unattended session hit an interactive password/sudo prompt; the harness will not type secrets" \
+          "attach to the $role session and enter the credential, OR configure passwordless sudo / docker group so it never prompts" \
+          "the session proceeds past the prompt" 2>/dev/null || true
+        date +%s > "$pwflag"
+      fi
+    fi
   done
   mv "$run/state/attention.tmp" "$run/state/attention" 2>/dev/null || true
+}
+
+# Sonnet gate for the trust dialog: a second opinion that the folder is legitimately part of this
+# run before we answer yes. Deterministic `inside` check already passed; this catches oddities.
+trust_ok_sonnet() { # <name> <cwd> <screen-tail>
+  local name="$1" cwd="$2" tail="$3" claude_bin out
+  [ "$(cfg '.guardrails.sonnet_trust_check' 'true')" = "true" ] || return 0
+  claude_bin=$(command -v claude) || return 0   # can't check → rely on the deterministic inside test
+  out=$("$claude_bin" -p --model sonnet --settings '{"disableAllHooks": true}' \
+    "A harness session named '$name' is showing Claude Code's 'trust the files in this folder?' dialog for the directory: $cwd . This directory has ALREADY been verified to be inside the operator's configured harness project (a git worktree or the project root the harness itself created). Should the harness answer YES to trust it? Answer TRUST-YES only if nothing about the path looks like a system/home/unrelated location; otherwise TRUST-NO. Reply with exactly one token: TRUST-YES or TRUST-NO." 2>/dev/null) || return 0
+  case "$out" in *TRUST-YES*) return 0 ;; *) hlog "watch: Sonnet declined trust for $cwd"; return 1 ;; esac
 }
 
 do_watch() {

@@ -189,6 +189,33 @@ Shipped in `templates/prompts/`, copied per-run, substituted from config:
 - **Validator**: independent session (optionally different account label), re-verifies
   against actual code, never trusts builder status files (L24).
 
+## 10a. GSD is driven by discovery, never hardcoded
+
+GSD command names drift, so the harness never bakes them in. `harness-gsd.sh discover` enumerates
+the currently-installed `/gsd-*` skills (and flags whether the `mcp__gsd__*` tools are present) at
+runtime; the worker/orchestrator prompts load `skills/harness/references/gsd-workflow.md`, which
+tells the session to (a) discover the surface, (b) prefer the drift-resistant MCP tools and the
+high-level unified drivers (a progress/intent-dispatch command, the autonomous full-cycle command,
+the workstreams command) over naming each stage, (c) verify exact names via `/gsd-help`, and
+(d) always use the `--auto`/autonomous variant. Harness lanes map to **GSD workstreams**; the full
+cycle (research → plan → execute → verify → learn) runs per workstream, with context refresh
+(map-codebase / docs-update) up front and learnings capture (extract-learnings / mempalace) at the
+end. The harness owns terminals/limits/tickets/safety; GSD owns the engineering workflow inside
+each lane.
+
+## 10b. Trust dialogs and secrets
+
+- **Trust dialog** ("Do you trust the files in this folder?"): the harness **pre-trusts** each
+  worktree it creates by setting `hasTrustDialogAccepted` for that path in `~/.claude.json` — but
+  only for paths verified inside the project, via a merge that preserves every other key. The
+  watch loop is the backstop: a dialog that appears anyway is answered yes only after a
+  deterministic in-project check AND a Sonnet confirmation; anything outside is surfaced to the
+  operator, never auto-trusted.
+- **Passwords / sudo**: never typed. The watch loop detects a password/passphrase/sudo prompt and
+  owner-gates it (ATTENTION + OWNER-ACTIONS.md); prompts recommend passwordless setups (macOS
+  Docker Desktop needs no sudo; else `docker` group / scoped `NOPASSWD`). Typing a secret into a
+  terminal is the one thing the harness will not do on the user's behalf.
+
 ## 11. What was deliberately left out (anti-overengineering)
 
 - No LLM watchdog (deterministic bash is cheaper and can't hang on the same modal as its

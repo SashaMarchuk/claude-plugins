@@ -1,5 +1,24 @@
 # Changelog — harness
 
+## 0.2.0 — 2026-07-09
+
+### Added
+- **GSD driven by discovery, not hardcoded** (`harness-gsd.sh discover` + a
+  `references/gsd-workflow.md` driving guide): sessions resolve the current `/gsd-*` surface at
+  runtime, prefer the `mcp__gsd__*` tools and GSD's high-level unified drivers (progress /
+  autonomous / workstreams), verify names via `/gsd-help`, and always use `--auto` variants.
+  Harness lanes now map to GSD **workstreams**; the full research→plan→execute→verify→learn cycle
+  runs per workstream, with context refresh (map-codebase / docs-update) up front and
+  learnings capture (extract-learnings / mempalace) at the end.
+- **Trust-dialog handling**: deterministic `pretrust` of each created worktree (scoped to
+  in-project paths; merge preserves all `~/.claude.json` keys) + a Sonnet-gated watch backstop.
+- **Password/sudo prompts are owner-gated** — detected and surfaced, never typed. New
+  `guardrails.sonnet_trust_check` knob.
+- Tests H-21/22/23 (GSD discovery-first, trust+password handling, pretrust scoping).
+
+### Changed
+- Worker/orchestrator prompts no longer name specific GSD phase commands.
+
 ## 0.1.0 — 2026-07-09
 
 Initial beta.

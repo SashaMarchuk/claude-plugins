@@ -15,7 +15,11 @@ token() {
   # credentials; then prefer the config-dir file, then the Keychain (fresh after a switch),
   # then the default file. Any provided CLAUDE_CODE_OAUTH_TOKEN wins outright.
   local ec blob t cfgdir="${CLAUDE_CONFIG_DIR:-}"
-  ec=$(cfg '.accounts.env_command' '')
+  # meter the role's actual account when a per-role override is active (HARNESS_ROLE is set by the
+  # spawn rate-gate), else the shared account (review MEDIUM — M3 metering).
+  ec=""
+  [ -n "${HARNESS_ROLE:-}" ] && ec=$(cfg ".accounts.$HARNESS_ROLE.env_command" '')
+  [ -n "$ec" ] || ec=$(cfg '.accounts.env_command' '')
   if [ -n "$ec" ]; then
     local envout; envout=$($ec 2>/dev/null || true)
     case "$envout" in
@@ -57,7 +61,7 @@ verdict() {
   sess_reset=$(printf '%s' "$j"  | jq -r '[.limits[] | select(.group=="session")] | sort_by(.percent) | reverse | .[0].resets_at // empty')
   weekly_reset=$(printf '%s' "$j"| jq -r '[.limits[] | select(.group=="weekly")]  | sort_by(.percent) | reverse | .[0].resets_at // empty')
   p_sess=$(cfg '.limits.pause_next_spawn_at' '90')
-  p_week=$(cfg '.limits.weekly_pause_at' 'null')
+  p_week=$(cfg '.limits.weekly_pause_at' '99')
   # percent is a JSON number and may be fractional (e.g. 91.7); integer `[ -ge ]` would error and,
   # with 2>/dev/null, silently take the no-pause branch (review MEDIUM). Compare numerically.
   ge() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a+0>=b+0)}'; }

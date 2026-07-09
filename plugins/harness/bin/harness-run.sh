@@ -144,6 +144,7 @@ do_resume() {
     nohup "$BIN/harness-run.sh" watch >> "$run/logs/watch.log" 2>&1 &
     printf '%s\n' "$!" > "$run/state/watch.pid"
   fi
+  rm -f "$run/DEAD-RUN" "$run/state/dead-ticks"
   local f name sid role cwd pid
   for f in "$run"/state/registry/*.json; do
     [ -f "$f" ] || continue
@@ -155,6 +156,13 @@ do_resume() {
     rm -f "$f"
     "$BIN/harness-spawn.sh" spawn --role "$role" --name "$name" --cwd "$cwd" --resume "$sid" || true
   done
+  # Crash-safety: if there is NO orchestrator registry entry (e.g. `start` was killed mid rate-wait
+  # before the orchestrator ever booted — the zombie-run case), spawn one fresh from the run's
+  # prompt so resume is never a no-op (review MEDIUM).
+  if [ ! -e "$run"/state/registry/orchestrator.json ] && [ -f "$run/prompts/orchestrator.md" ]; then
+    hlog "resume: no orchestrator in registry — spawning a fresh one"
+    "$BIN/harness-spawn.sh" spawn --role orchestrator --name orchestrator --cwd "$PROJ" --prompt "$run/prompts/orchestrator.md" || true
+  fi
   echo "OK resumed run $(basename "$run")"
 }
 
@@ -184,7 +192,8 @@ watch_tick() {
     fi
   fi
 
-  local f name tty role pid age tail cwd pwflag
+  local f name tty role pid age tail cwd pwflag pw_prompt orch_alive any_alive
+  orch_alive=0; any_alive=0
   for f in "$run"/state/registry/*.json; do
     [ -f "$f" ] || continue
     name=$(jq -r '.name' "$f"); tty=$(jq -r '.tty' "$f"); role=$(jq -r '.role' "$f"); pid=$(jq -r '.pid // empty' "$f")
@@ -194,24 +203,36 @@ watch_tick() {
       echo "DEAD: $name (pid ${pid:-?}) — resume with: harness-run.sh resume" >> "$run/state/attention.tmp"
       continue
     fi
+    any_alive=1; [ "$role" = orchestrator ] && orch_alive=1
 
-    # heartbeat staleness → single nudge (Enter), then report; never kill (L18)
-    age=$("$BIN/harness-state.sh" heartbeat-age "$name" 2>/dev/null || echo never)
-    if [ "$age" != "never" ] && [ "$age" -gt $((stall_min*60)) ]; then
-      nudge_file="$run/state/nudged-$name"
-      if [ ! -f "$nudge_file" ] || [ $(( $(date +%s) - $(cat "$nudge_file") )) -gt 3600 ]; then
-        "$BIN/harness-term.sh" key "$tty" enter 2>/dev/null || true
-        date +%s > "$nudge_file"
-        hlog "watch: nudged $name (heartbeat ${age}s stale)"
-      else
-        echo "STALLED: $name heartbeat ${age}s old (already nudged)" >> "$run/state/attention.tmp"
+    # capture the screen ONCE, and decide up front whether this session is sitting at a password
+    # prompt — if so, we must NOT nudge/send anything into it (an Enter is an empty credential,
+    # and that would break the "never enter a secret" promise; review MEDIUM).
+    tail=$("$BIN/harness-term.sh" capture "$tty" 25 2>/dev/null || true)
+    pw_prompt=0
+    printf '%s' "$tail" | grep -qiE 'password:|\[sudo\]|passphrase|sudo password' && pw_prompt=1
+
+    # heartbeat staleness → single nudge (Enter), then report; never kill (L18). Skip if at a
+    # password prompt (a stale heartbeat there is EXPECTED — it's waiting on the owner).
+    if [ "$pw_prompt" -eq 0 ]; then
+      age=$("$BIN/harness-state.sh" heartbeat-age "$name" 2>/dev/null || echo never)
+      if [ "$age" != "never" ] && [ "$age" -gt $((stall_min*60)) ]; then
+        nudge_file="$run/state/nudged-$name"
+        if [ ! -f "$nudge_file" ] || [ $(( $(date +%s) - $(cat "$nudge_file") )) -gt 3600 ]; then
+          "$BIN/harness-term.sh" key "$tty" enter 2>/dev/null || true
+          date +%s > "$nudge_file"
+          hlog "watch: nudged $name (heartbeat ${age}s stale)"
+        else
+          echo "STALLED: $name heartbeat ${age}s old (already nudged)" >> "$run/state/attention.tmp"
+        fi
       fi
     fi
 
-    tail=$("$BIN/harness-term.sh" capture "$tty" 25 2>/dev/null || true)
-
-    # interactive limit banner: clear only when idle, timing from the API (L8/L9)
-    if printf '%s' "$tail" | grep -qiE 'limit reached|hit your (session|weekly) limit|rate limit' \
+    # interactive limit banner: clear only when idle AND not at a password prompt, timing from the
+    # API. limits.sh wait waits on the tighter of the 5h/weekly resets (weekly now defaults to a
+    # real pause threshold, so a weekly-exhausted session actually waits instead of thrashing).
+    if [ "$pw_prompt" -eq 0 ] \
+       && printf '%s' "$tail" | grep -qiE 'limit reached|hit your (session|weekly) limit|rate limit' \
        && ! printf '%s' "$tail" | grep -q 'esc to interrupt'; then
       hlog "watch: limit banner on $name — waiting for reset via API"
       "$BIN/harness-limits.sh" wait || true
@@ -234,9 +255,9 @@ watch_tick() {
     fi
 
     # password / sudo prompt: NEVER type a secret. Owner-gate it (DESIGN §secrets).
-    if printf '%s' "$tail" | grep -qiE 'password:|\[sudo\]|passphrase|sudo password'; then
+    if [ "$pw_prompt" -eq 1 ]; then
       echo "PASSWORD-PROMPT: $name ($role) is blocked on a password/sudo prompt — the harness never types secrets. Enter it yourself, or set up passwordless access (see README)." >> "$run/state/attention.tmp"
-      local pwflag="$run/state/pw-gated-$name"
+      pwflag="$run/state/pw-gated-$name"
       if [ ! -f "$pwflag" ]; then
         "$BIN/harness-state.sh" owner-action "Password/sudo prompt in session $name" \
           "an unattended session hit an interactive password/sudo prompt; the harness will not type secrets" \
@@ -246,6 +267,24 @@ watch_tick() {
       fi
     fi
   done
+
+  # Dead-run fallback (review HIGH): if the orchestrator crashed before it could set run.complete,
+  # nothing else ever tears the run down — caffeinate would keep the Mac awake indefinitely and the
+  # next /harness:run would refuse. If the orchestrator is dead AND no session is alive for a few
+  # consecutive ticks, tear down (so the Mac can sleep) and leave a loud DEAD-RUN marker.
+  local deadf="$run/state/dead-ticks"
+  if [ "$orch_alive" -eq 0 ] && [ "$any_alive" -eq 0 ] && [ -e "$run"/state/registry/orchestrator.json ]; then
+    local dt; dt=$(( $(cat "$deadf" 2>/dev/null || echo 0) + 1 )); echo "$dt" > "$deadf"
+    echo "DEAD-RUN: orchestrator and all workers are gone (tick $dt/3) — run '/harness:resume' to revive, or the watch will tear down and let the Mac sleep." >> "$run/state/attention.tmp"
+    if [ "$dt" -ge 3 ]; then
+      hlog "watch: orchestrator dead + no live sessions for $dt ticks — tearing down (Mac may sleep)"
+      [ -f "$run/state/caffeinate.pid" ] && kill "$(cat "$run/state/caffeinate.pid")" 2>/dev/null || true
+      printf 'orchestrator died before completion; watch tore the run down after %s idle ticks\n' "$dt" > "$run/DEAD-RUN"
+      date -u '+%Y-%m-%dT%H:%M:%SZ' > "$run/STOPPED"
+    fi
+  else
+    rm -f "$deadf"
+  fi
   mv "$run/state/attention.tmp" "$run/state/attention" 2>/dev/null || true
 }
 

@@ -35,8 +35,10 @@ Read `{{PROJECT_ROOT}}/.harness/config.json` first — repos, ticket source, wor
 
 Do NOT hardcode `/gsd-*` names — discover them. Run `bash {{HBIN}}/harness-gsd.sh discover` and
 read `{{RUN_DIR}}/prompts/gsd-workflow.md` (the harness's GSD driving guide). Then:
-- If no milestone/roadmap is active for the work in the queue, bootstrap one via the discovered
-  `--auto` new-milestone/new-project command (never the interactive form).
+- If no milestone/roadmap is active for the work in the queue, **seed `.planning/` by hand**
+  (`config.json` with `skip_discuss:true`+`auto_advance:true`, plus `PROJECT.md` / `ROADMAP.md`,
+  following the repo's convention) — the new-milestone/new-project commands have NO unattended
+  path and WILL hang on AskUserQuestion. See gsd-workflow.md §4.3.
 - Prefer GSD **workstreams** as the unit of parallelism: create one workstream per lane you plan
   below and let GSD own cross-workstream sequencing, rather than an ad-hoc scheme.
 - Refresh context first in unfamiliar/drifted areas (the discovered map-codebase / docs-update

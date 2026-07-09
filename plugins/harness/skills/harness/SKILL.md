@@ -91,14 +91,14 @@ Input: free text after `--add` (e.g. "implement CSV export for reports").
    `harness-tickets.sh list ready`), limits right now (`harness-limits.sh verdict`), terminal
    layout, and whether the queue is empty (empty → suggest /harness:add first; starting an
    empty run is allowed but pointless).
-2. Start it with `bash "${CLAUDE_PLUGIN_ROOT}/bin/harness-run.sh" start`. This legitimately
-   takes several minutes (terminal probe + usage-API call + sonnet spawn-validation up to 120s +
-   boot-verification poll), and if the account is rate-paused at launch it waits for the reset —
-   so **run it with a 600000 ms Bash timeout, or `run_in_background: true` and tail
-   `.harness/runs/<id>/logs/harness.log`**. Never let the default 2-minute tool timeout kill it.
-   Preflight is inside `start`; it refuses with specific messages — relay them verbatim and help
-   fix (missing user config → offer --onboard; missing project → --init; Automation permission →
-   point at System Settings → Privacy & Security → Automation).
+2. Start it with `bash "${CLAUDE_PLUGIN_ROOT}/bin/harness-run.sh" start` **and always use
+   `run_in_background: true`** (then tail `.harness/runs/<id>/logs/harness.log`). Do NOT run it
+   foreground with a long timeout: if the account is rate-paused at launch, `start` legitimately
+   waits for the reset (which can be hours), and the Bash tool's 10-minute cap would kill it
+   mid-wait, leaving a zombie run (CURRENT set, no orchestrator). Background execution avoids that
+   entirely. Preflight is inside `start`; it refuses with specific messages — relay them verbatim
+   and help fix (missing user config → offer --onboard; missing project → --init; Automation
+   permission → point at System Settings → Privacy & Security → Automation).
 3. Report the run id and how to watch: `/harness:status`, STOP semantics (`/harness:stop`), and
    where artifacts land (`.harness/runs/<id>/RUN-REPORT.md`).
 

@@ -1,5 +1,29 @@
 # Changelog — harness
 
+## 0.3.1 — 2026-07-09
+
+Resolves a second Opus+Fable review (of 0.3.0) — overnight-survival hardening.
+
+### Fixed
+- **HIGH: orchestrator GSD bootstrap pointed at a hang.** The prompt said to bootstrap a milestone
+  via `--auto new-milestone/new-project`, but those have no unattended path (verified vs installed
+  GSD) — it now hand-seeds `.planning/`, matching gsd-workflow.md.
+- **HIGH: dead-run fallback.** If the orchestrator crashes before setting `run.complete`, the watch
+  loop now tears the run down after 3 idle ticks (caffeinate stops, Mac can sleep, DEAD-RUN marker)
+  and `resume` respawns a missing orchestrator — previously the Mac stayed awake and the next run
+  was blocked.
+- **HIGH: weekly-cap pausing.** `weekly_pause_at` now defaults to 99 (was null), so a weekly-capped
+  run waits on the weekly reset instead of injecting `continue` into hard-limited sessions every tick.
+- **MEDIUM: no keystrokes into a password prompt.** The watch computes the password-prompt state
+  first and skips the stall-nudge/limit-resume for a session sitting at one (an Enter was an empty
+  credential — it contradicted the "never enter a secret" promise).
+- **MEDIUM: `--run` is background-only.** SKILL no longer suggests a foreground timeout (the Bash
+  tool's 10-min cap could kill a legitimate hours-long rate-wait and zombie the run); `resume` is
+  now crash-safe (spawns a fresh orchestrator if the registry lost it).
+- **MEDIUM: per-role rate metering.** The rate gate meters the role's actual account
+  (`HARNESS_ROLE`) so an override account (e.g. an independent validator identity) is measured
+  correctly, not the shared one.
+
 ## 0.3.0 — 2026-07-09
 
 Resolves an `/ultra:run --large` review (6 researchers → blind validators → devil's-advocate →

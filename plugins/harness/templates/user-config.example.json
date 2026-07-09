@@ -29,11 +29,11 @@
 
   "limits": {
     "pause_next_spawn_at": 90,
-    "weekly_pause_at": null,
+    "weekly_pause_at": 99,
     "resume_margin_seconds": 90,
     "stop_at": null,
     "on_unreadable": "proceed",
-    "_note": "Pause, don't stop: at/above pause_next_spawn_at% of the 5h window, NEW spawns wait for the reset (running sessions are never touched). weekly_pause_at/stop_at null = never pause on weekly / never hard-stop. on_unreadable: proceed|hold when the usage API can't be read."
+    "_note": "Pause, don't stop: at/above pause_next_spawn_at% of the 5h window, NEW spawns wait for the reset (running sessions are never touched). weekly_pause_at (default 99 = near-exhaustion) makes a weekly-capped run WAIT on the weekly reset instead of thrashing; set null to disable weekly pausing. stop_at null = never hard-stop. on_unreadable: proceed|hold when the usage API can't be read."
   },
 
   "session": {

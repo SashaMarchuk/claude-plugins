@@ -111,7 +111,7 @@ do_spawn() {
 
   # -- rate gate: pause new spawns, never running ones (L13) --
   local vline v
-  vline=$("$BIN/harness-limits.sh" verdict); v=$(printf '%s' "$vline" | sed -n 's/.*VERDICT=\([A-Z]*\).*/\1/p')
+  vline=$(HARNESS_ROLE="$role" "$BIN/harness-limits.sh" verdict); v=$(printf '%s' "$vline" | sed -n 's/.*VERDICT=\([A-Z]*\).*/\1/p')
   if [ "$v" = "PAUSE" ]; then
     hlog "spawn $name: rate-paused ($vline)"
     echo "PAUSED: $vline" >&2

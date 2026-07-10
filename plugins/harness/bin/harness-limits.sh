@@ -43,8 +43,11 @@ token() {
 snapshot() {
   local t j
   t=$(token) || { echo "UNREADABLE"; return 1; }
-  j=$(curl -sS --max-time 20 https://api.anthropic.com/api/oauth/usage \
-        -H "Authorization: Bearer $t" -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null) || { echo "UNREADABLE"; return 1; }
+  # feed the bearer token via stdin (-H @-), never on argv, so it is not visible in `ps` for the
+  # request lifetime (this runs on every spawn gate / wait iteration; review 0.6.0 secret-on-argv).
+  j=$(printf 'Authorization: Bearer %s\n' "$t" \
+        | curl -sS --max-time 20 https://api.anthropic.com/api/oauth/usage \
+            -H @- -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null) || { echo "UNREADABLE"; return 1; }
   # an auth error body is JSON too — require the limits[] array to call it readable
   if printf '%s' "$j" | jq -e '.limits | type == "array"' >/dev/null 2>&1; then
     printf '%s\n' "$j"
@@ -81,7 +84,7 @@ verdict() {
 
 wait_clear() {
   local margin line v until epoch now left
-  margin=$(cfg '.limits.resume_margin_seconds' '90')
+  margin=$(cfg_int '.limits.resume_margin_seconds' 90)
   while :; do
     stop_requested && { hlog "limits.wait: STOP requested — aborting wait"; return 75; }
     line=$(verdict)

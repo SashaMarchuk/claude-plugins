@@ -1,5 +1,52 @@
 # Changelog — harness
 
+## 0.6.0 — 2026-07-10
+
+Deterministic-core hardening from a deeper multi-agent review (6 design streams + an /ultra --xl
+adversarial gate). The review split its findings into this low-risk deterministic core and a
+concurrency/liveness follow-up (hardened locks + `session_pid` liveness + the claim-time sonnet
+screen), which ships separately with behavioral tests. Every item below is behaviorally tested; the
+`.harness/` run state is forward/backward compatible (all new state is additive).
+
+### Added
+- **`cfg_int`** — every numeric config knob (`stall_minutes`, `watch_interval_seconds`,
+  `boot_grace_seconds`, `close_timeout_seconds`, `resume_margin_seconds`) is now read through a
+  validator that WARNs loudly and falls back to the default on a non-integer value, base-10 normalized
+  so a leading zero can't trip a fatal octal error. A bad value can no longer abort a watch tick or
+  busy-spin the loop; `watch_interval` is floored to ≥1.
+- **`tickets.sh render`** — the only sanctioned way ticket text enters a session prompt: the body is
+  wrapped in labeled UNTRUSTED-DATA markers (spoofed sentinels neutralized), and the worker/validator/
+  orchestrator prompts frame it as data, never instructions (first, always-on layer of the ticket-body
+  injection defense).
+- **`tickets.sh release` / `stale`** — the only in-progress→ready path (floor-gated), plus a start-time
+  sweep that reports every in-progress ticket and releases the ones idle > 7 days that still pass the
+  ready floor. The orchestrator's exit condition now counts only lanes IT claimed this run, so a ticket
+  stranded by a crashed run can't poison a future run's completion.
+- **`state.sh marker clear`** — lets a worker→validator retry reset attempt-1 markers/fail-file so
+  stale state can't satisfy the new round.
+- **`status --json`** — machine-readable run health (exit 1 on attention items or a DEAD-RUN marker)
+  for cron/notifier babysitting.
+- **git ground-truth stall cross-check (L18)** — the watch nudge now skips when the session's tree
+  shows recent git activity (head for a worker, any branch for the orchestrator) or is mid-turn
+  (`esc to interrupt`), so a long build with a quiet heartbeat no longer gets a blind Enter.
+
+### Fixed / hardened
+- **Secrets:** the OAuth token is fed to `curl` via stdin (`-H @-`), never on argv (no longer visible
+  in `ps`); preflight refuses a literal credential embedded in any `accounts*.env_command`.
+- **Launcher PATH sanitized** — empty / `.` / relative components dropped before baking (each was a
+  `.`-injection vector in a bypass-permissions session).
+- **`never_push` origin-pushurl belt** — an in-session `git push` (origin) fails fast under the
+  never-push guarantee; fetch/pull unaffected (best-effort: origin only, documented).
+- **`hcurrent_run` self-heals** an empty/stale `.harness/CURRENT` to the single live run (so state
+  verbs no longer crash in the torn-write window); the CURRENT write is atomic.
+- **`.blocked`-lane consumer** — a self-blocked lane is closed and its marker cleared instead of being
+  nudged hourly.
+
+### Removed
+- The proposed per-session PostToolUse auto-heartbeat hook was cut before shipping (it fired only after
+  a tool returned — missing the long-single-call stall it targeted — and could mask a genuinely stuck
+  tool-spinning session; the git cross-check + `esc to interrupt` skip cover the case instead).
+
 ## 0.5.0 — 2026-07-10
 
 Adds tiered autonomous decisions; fixes 13 defects from an adversarial red-team (opus break-review

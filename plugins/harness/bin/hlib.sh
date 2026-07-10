@@ -56,6 +56,19 @@ cfg() {
   fi
   printf '%s\n' "$def"
 }
+# cfg_int <jq-path> <int-default> — like cfg, but the value must be a plain non-negative integer
+# (digits only); anything else (units like "20m", empty, floats, negatives, garbage) logs a LOUD
+# warning and returns the default. Normalized base-10 so a leading-zero value ("08") can never trip
+# a fatal octal error in a later $(( )). EVERY numeric knob feeding arithmetic or sleep reads through
+# this, so a bad config value can never abort a watch tick or busy-spin the loop (0.6.0 numeric fix).
+cfg_int() {
+  local path="${1:?jq path required}" def="${2:?integer default required}" v
+  v=$(cfg "$path" "$def")
+  case "$v" in
+    ''|*[!0-9]*) hlog "WARN: config $path='$v' is not a non-negative integer — using default $def"; printf '%s\n' "$def" ;;
+    *) printf '%s\n' "$((10#$v))" ;;
+  esac
+}
 
 # ------------------------------------------------------------------- run state
 # Run layout: <project>/.harness/runs/<run-id>/{launchers,prompts,state,logs,heartbeats,markers}
@@ -63,10 +76,29 @@ cfg() {
 hruns_dir()   { printf '%s/.harness/runs\n' "$(hproject_root)"; }
 hstop_file()  { printf '%s/.harness/STOP\n' "$(hproject_root)"; }
 hcurrent_run() {
-  local proj; proj=$(hproject_root) || return 1
-  local id
-  id=$(cat "$proj/.harness/CURRENT" 2>/dev/null || true)
+  # Self-heal (0.6.0): a torn write (crash between truncate and write) can leave CURRENT empty while
+  # the run is alive. ONE rule, applied everywhere (incl. do_start): "empty/stale CURRENT + exactly
+  # ONE non-STOPPED run dir ⇒ that run IS current" — repair the pointer and return it; >1 candidates
+  # ⇒ fail LOUDLY (rc 2, never guess); 0 ⇒ genuinely no active run (rc 1). NEVER call hlog here
+  # (hlog calls hcurrent_run — that would recurse); plain stderr only.
+  local proj id d cand="" n=0
+  proj=$(hproject_root) || return 1
+  id=$(cat "$proj/.harness/CURRENT" 2>/dev/null | tr -d '[:space:]')
   [ -n "$id" ] && [ -d "$proj/.harness/runs/$id" ] && { printf '%s\n' "$proj/.harness/runs/$id"; return 0; }
+  for d in "$proj"/.harness/runs/*/; do
+    [ -d "$d" ] || continue
+    [ -f "${d}STOPPED" ] && continue
+    cand="${d%/}"; n=$((n+1))
+  done
+  if [ "$n" -eq 1 ]; then
+    printf '%s\n' "$(basename "$cand")" | atomic_write "$proj/.harness/CURRENT"
+    echo "WARN: .harness/CURRENT was empty/stale — self-healed to run $(basename "$cand")" >&2
+    printf '%s\n' "$cand"; return 0
+  fi
+  if [ "$n" -gt 1 ]; then
+    echo "ERROR: .harness/CURRENT is empty/stale and $n non-STOPPED runs exist under .harness/runs/ — set it to the correct id manually" >&2
+    return 2
+  fi
   echo "ERROR: no active run (missing/stale .harness/CURRENT) — start one with /harness:run" >&2
   return 1
 }
@@ -148,3 +180,33 @@ PY
 
 now_epoch() { date +%s; }
 run_id_new() { date -u '+%Y%m%d-%H%M%S'; }
+
+# hsanitize_path <PATH> — keep only ABSOLUTE components, in order; drop empty / "." / relative
+# entries (each is a `.`-style injection vector once baked into a session launcher). Globbing is
+# disabled around the split so a component like "/opt/*/bin" is never expanded against the fs.
+hsanitize_path() {
+  local out="" c IFS=: reglob=0
+  case $- in *f*) ;; *) set -f; reglob=1 ;; esac
+  for c in ${1-}; do case "$c" in /*) out="${out:+$out:}$c" ;; esac; done
+  [ "$reglob" -eq 1 ] && set +f
+  printf '%s\n' "$out"
+}
+
+# git_recent <dir> <max_age_s> [head|any] — rc 0 iff the tree shows git activity newer than max_age:
+# a recent commit (scope head = this checkout's HEAD; any = newest commit on any local branch, for the
+# orchestrator at the project root whose lanes commit on sibling branches) OR a recent index mtime.
+# The ground-truth cross-check the stall nudge consults before alarming (DESIGN L18). BSD/GNU stat.
+git_recent() {
+  local d="${1:?dir}" max="${2:?max age}" scope="${3:-head}" now t gitdir idx
+  now=$(date +%s)
+  if [ "$scope" = "any" ]; then
+    t=$(git -C "$d" for-each-ref --sort=-committerdate --format='%(committerdate:unix)' --count=1 refs/heads 2>/dev/null | head -1)
+  else
+    t=$(git -C "$d" log -1 --format=%ct 2>/dev/null)
+  fi
+  [ -n "$t" ] && [ "$((now - t))" -le "$max" ] && return 0
+  gitdir=$(git -C "$d" rev-parse --git-dir 2>/dev/null) || return 1
+  case "$gitdir" in /*) ;; *) gitdir="$d/$gitdir" ;; esac
+  idx=$(stat -f %m "$gitdir/index" 2>/dev/null || stat -c %Y "$gitdir/index" 2>/dev/null) || return 1
+  [ "$((now - idx))" -le "$max" ]
+}

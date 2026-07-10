@@ -171,7 +171,9 @@ headers) under the LLM grill that does the real quality judgment. Points:
 - `run.sh resume`: relaunch watch, respawn dead sessions with `--resume <recorded-session-id>`
   (exact continuation; `--continue` is cwd-ambiguous with parallel sessions, L17).
 - Heartbeats: each session appends `<utc-ts> <step>` to its heartbeat file every ~10 min
-  (prompt-enforced) — but stall verdicts always cross-check ground truth (git/CI state)
+  (prompt-enforced) — but stall verdicts always cross-check git ground truth (recent commit or
+  index activity in the session's tree via `git_recent`; the orchestrator at the project root checks
+  any lane branch) and skip the nudge when the session is mid-turn (`esc to interrupt`)
   before alarming (L18).
 
 ## 10. Orchestration playbook (prompt templates)
@@ -251,6 +253,20 @@ caffeinate bound to the watch pid, sonnet rejected anywhere in a build chain, na
 guard, worktree-spoof hardening (one shared helper), account-aware pretrust target, fail-closed limits
 on bad percents, repo-contained guidance globs, project-scoped run ids. See CHANGELOG 0.5.0 (F1–F13).
 
+### Red-team hardening round (0.6.0) — deterministic core
+
+A deeper multi-agent review (6 design streams + an /ultra --xl adversarial gate) split its fixes into a
+low-risk deterministic core (this release) and a concurrency/liveness follow-up. Shipped here: `cfg_int`
+(every numeric knob validated → a bad value can never abort a watch tick or busy-spin the loop), OAuth
+token off the `curl` argv, `hcurrent_run` empty-CURRENT self-heal (fixes state verbs racing a torn
+pointer write), a `marker clear` verb, launcher PATH sanitized (drop empty/`.`/relative), an
+`env_command`-secret preflight refusal, a `never_push` origin-pushurl belt, ticket-body fencing
+(`tickets.sh render` — untrusted-data markers, spoof-neutralized) framed in the worker/validator/
+orchestrator prompts, `release`/`stale` ticket verbs + a start-time reclaim sweep with own-claim exit
+scoping, a `.blocked`-lane consumer, the git ground-truth stall cross-check (L18), and `status --json`
+(exit 1 on attention/DEAD-RUN). The auto-heartbeat hook was cut (it missed the long-call stall and
+masked real ones; the git cross-check + `esc to interrupt` skip replace it). See CHANGELOG 0.6.0.
+
 ## 11. What was deliberately left out (anti-overengineering)
 
 - No LLM watchdog (deterministic bash is cheaper and can't hang on the same modal as its
@@ -285,7 +301,7 @@ on bad percents, repo-contained guidance globs, project-scoped run ids. See CHAN
 | L15 | agents hallucinated "clean logs"; guessed scope drifted | grill gate first; blocked > guessed |
 | L16 | `caffeinate -t 15000` expired silently mid-run | harness-managed caffeinate without `-t`, liveness-checked by watch |
 | L17 | `--continue` grabs "most recent session in cwd" — ambiguous with parallel sessions | pre-generated `--session-id` UUIDs; resume via `--resume <id>` |
-| L18 | clock-skewed heartbeats caused a false stall alarm | stall verdicts cross-check git/CI ground truth |
+| L18 | clock-skewed heartbeats caused a false stall alarm | stall verdicts cross-check git ground truth (`git_recent`: recent commit — head for a worker, any branch for the orchestrator — or index mtime) before alarming |
 | L19 | worktrees stacked on uncommitted sibling HEADs | worktrees branch from `origin/<default_branch>` |
 | L20 | owner actions scattered across state files | OWNER-ACTIONS.md template: why/command/verify per item |
 | L21 | executor raced planner's checker loop (13 min dual-commit) | finalize-commit is the only completion signal |

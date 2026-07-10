@@ -20,9 +20,10 @@ marker_name_ok() { case "${1:?}" in *[!a-z0-9.-]*|"") echo "ERROR: marker must b
 
 case "${1:?usage: state.sh marker|heartbeat|heartbeat-age|decision|owner-action}" in
   marker)
-    sub="${2:?set|check|wait}"; name="${3:?marker name}"; marker_name_ok "$name"
+    sub="${2:?set|check|clear|wait}"; name="${3:?marker name}"; marker_name_ok "$name"
     case "$sub" in
       set)   date -u '+%Y-%m-%dT%H:%M:%SZ' > "$MARKERS/$name.done"; hlog "marker set: $name" ;;
+      clear) rm -f "$MARKERS/$name.done"; hlog "marker cleared: $name" ;;
       check) [ -f "$MARKERS/$name.done" ] ;;
       wait)
         timeout="${4:-0}"; waited=0

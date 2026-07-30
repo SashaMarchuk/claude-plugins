@@ -86,6 +86,16 @@
       "source": "./plugins/harness",
       "category": "development",
       "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/harness"
+    },
+    {
+      "name": "task-launch",
+      "description": "Open ONE fresh coding session for ONE in-progress task (default: Claude Code in a new iTerm2 tab — launcher and coding tool configurable), in the right folder, seeded with the task's context + related call transcripts (loaded fresh via the configured transcript loader) + any verbatim pass-through material + a rule to report back to the tracker when done. Runs standalone or right after morning-brief; tracker-agnostic and config-driven via ~/.claude/task-launch/config.json (set up with /task-launch:onboard, inspect with /task-launch:status). One task = one session; always a fresh session; the launcher only opens the session — the report-back is a rule the child session follows. Not a batch/queue runner (that's the harness).",
+      "author": {
+        "name": "Sasha Marchuk"
+      },
+      "source": "./plugins/task-launch",
+      "category": "productivity",
+      "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/task-launch"
     }
   ]
 }

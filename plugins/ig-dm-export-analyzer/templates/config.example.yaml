@@ -1,0 +1,92 @@
+# ig-dm-export-analyzer — run configuration.
+#
+# Copy this file next to the export you are analysing, edit the paths, run:
+#   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run_pipeline.py" my-run.yaml
+#
+# Everything the pipeline needs is here — nothing about a specific export,
+# provider, account, or credential location lives in the code.
+# A .json file with the same keys works identically (and needs no PyYAML).
+# Relative paths are resolved against THIS file's directory.
+
+export:
+  # Directory containing inbox/ and message_requests/. An export root also works —
+  # the skill descends into your_instagram_activity/messages automatically.
+  # NOTE: Meta's folder names can contain a literal trailing space. Quote them.
+  text_root: "/path/to/instagram-<account>-<date>-<idA>/your_instagram_activity/messages"
+
+  # Root that media URIs resolve against. Meta often splits a DYI export into a
+  # text archive and a media archive with different ids — point this at the media
+  # one. Leave null for a single-archive export; the skill then probes the text
+  # archive's own ancestors.
+  media_root: "/path/to/instagram-<account>-<date>-<idB>"
+
+  # Account owner's Instagram display name, used to derive message direction.
+  # null = auto-detect (the name that sends in the most threads) and log it.
+  owner_name: null
+
+  # Repair Meta's UTF-8-as-Latin-1 mojibake on load. Leave true: it is a safe
+  # no-op on clean data and idempotent on already-repaired data.
+  fix_mojibake: true
+
+filter:
+  # Inclusive lower bound / exclusive upper bound, ISO-8601 UTC. null = unbounded.
+  # Messages outside the range are dropped entirely (not kept as flagged context);
+  # a thread is kept only if it has at least one in-range message.
+  start: "2026-01-01T00:00:00Z"
+  end: null
+
+  # Conversations to drop outright regardless of activity — folder names under
+  # inbox/ or message_requests/ (e.g. personal, non-client threads).
+  # They still appear in index.json with reason "excluded_manual_thread".
+  exclude_thread_slugs: []
+
+  include_sources: ["inbox", "message_requests"]
+
+stt:
+  # soniox     — cloud, multilingual, handles uk/ru/en code-switching; ~$0.10/hour
+  # whisper_cpp — local, free, nothing leaves the machine; needs a ggml model
+  # none        — skip STT; voice/video get an explicit NOT TRANSCRIBED label
+  provider: "soniox"
+  concurrency: 4
+
+  # required     — a run whose provider-side deletes fail exits non-zero
+  # best_effort  — log failures and continue
+  # skip         — never call delete
+  delete_remote: "required"
+
+  soniox:
+    base_url: "https://api.soniox.com"
+    model: "stt-async-v4"
+    language_hints: ["uk", "ru", "en"]
+    enable_speaker_diarization: true
+    enable_language_identification: true
+    poll_interval_sec: 5
+    poll_timeout_sec: 600
+    max_retries: 5
+    credentials:
+      # Resolved in this order; the first hit wins. Nothing is hardcoded.
+      env_var: "SONIOX_API_KEY"          # checked in the environment first
+      env_file: null                     # then this KEY=value file, read-only
+                                         # e.g. "/path/to/other-project/.env"
+      key_file: null                     # then a file containing only the key
+
+  whisper_cpp:
+    binary: "whisper-cli"
+    model_path: null                     # e.g. "~/models/ggml-large-v3-turbo.bin"
+    language: "auto"
+
+photos:
+  # Photo captioning is a separate, deferred pass. Photos are recorded with an
+  # explicit media[].caption.status == "not_analyzed" placeholder so a later run
+  # can fill them in without a schema change. true is rejected (not implemented).
+  analyze: false
+
+output:
+  dir: "./output"
+
+verify:
+  # Optional hard asserts. Leave empty for a first run on an unknown export, then
+  # pin the numbers so a future re-run detects drift.
+  # Valid keys: kept_threads, total_threads, messages_written, stt_ok, stt_jobs,
+  #             owner_voice, owner_video_audio, silent_videos
+  expect: {}

@@ -159,25 +159,40 @@ if grep -q "never translated" "$SCRIPTS/build_chats.py" && grep -q "never transl
 else fail "LABELING: translation rule" "missing the never-translate-content rule"; fi
 
 # ============================================================ NO PERSONAL DATA LEAK
-# The plugin was generalized from a one-off run over a private export. These two
-# scans are the gate that no trace of that run (or of any local machine) came
-# along. plugin.json / LICENSE author attribution is legitimate and not scanned.
+# This plugin was generalized from a one-off run over someone's private data
+# export, so these scans are the gate that no trace of that run — or of any local
+# machine — came along. They match SHAPES, never a list of the private strings
+# themselves: a public test that spelled out the identifiers it suppresses would
+# republish exactly what it is meant to keep out, and would only ever catch the
+# leaks already known. plugin.json / LICENSE author attribution is legitimate and
+# is deliberately not scanned.
 
 LEAK_FILES=("$SKILL" "$CONFIG_TPL" "$README_P" "$CHANGELOG" "$SCRIPTS"/*.py)
 
-IDENTITY_HITS=$(grep -rniE "sasha-marchuk|sashko|speedandfunction|NasAnanas|/Users/|spikes/voice-transcription" \
-                "${LEAK_FILES[@]}" 2>/dev/null || true)
-if [[ -z "$IDENTITY_HITS" ]]; then
-  pass "NO-LEAK: no personal identifiers, local paths, or private-repo references"
-else fail "NO-LEAK: identity" "$(echo "$IDENTITY_HITS" | head -3 | tr '\n' '|')"; fi
+# Local machine paths and private working folders, in any shape.
+PATH_HITS=$(grep -rniE "/Users/|/home/[a-z]|~/(Work|Documents|Desktop)/|spikes?/[a-z]" \
+            "${LEAK_FILES[@]}" 2>/dev/null || true)
+if [[ -z "$PATH_HITS" ]]; then
+  pass "NO-LEAK: no local machine paths or private working folders"
+else fail "NO-LEAK: local path" "$(echo "$PATH_HITS" | head -3 | tr '\n' '|')"; fi
 
-# Exact counts / dates from the owner's real export would fingerprint whose data
-# this was tested on. Qualitative claims only.
-RUN_HITS=$(grep -rniE "1,?495|16,?278|58 STT jobs|2026-08-03|2026-07-30" \
-           "$SKILL" "$CONFIG_TPL" "$README_P" "$SCRIPTS"/*.py 2>/dev/null || true)
-if [[ -z "$RUN_HITS" ]]; then
-  pass "NO-LEAK: no exact counts or dates from the private export it was tested on"
-else fail "NO-LEAK: private run" "$(echo "$RUN_HITS" | head -3 | tr '\n' '|')"; fi
+# Exact corpus figures fingerprint whose export this was tested on. Claims about
+# real-world testing must stay qualitative ("a real multi-thousand-message
+# export"), never "N,NNN threads / M STT jobs".
+FIGURE_HITS=$(grep -rniE "[0-9]{1,3},[0-9]{3}[ -]?(thread|message)|[0-9]+[ -](STT|transcription) jobs?" \
+              "${LEAK_FILES[@]}" 2>/dev/null || true)
+if [[ -z "$FIGURE_HITS" ]]; then
+  pass "NO-LEAK: no exact corpus figures from any real export"
+else fail "NO-LEAK: corpus figures" "$(echo "$FIGURE_HITS" | head -3 | tr '\n' '|')"; fi
+
+# Calendar dates in the skill, scripts, or README can only date a real run
+# (release dates belong in CHANGELOG.md; the config template's dates are
+# documented example filter values, so both are out of scope here).
+DATE_HITS=$(grep -rnE "20[0-9]{2}-[01][0-9]-[0-3][0-9]" \
+            "$SKILL" "$README_P" "$SCRIPTS"/*.py 2>/dev/null || true)
+if [[ -z "$DATE_HITS" ]]; then
+  pass "NO-LEAK: no calendar dates pinning when or on what this was run"
+else fail "NO-LEAK: run date" "$(echo "$DATE_HITS" | head -3 | tr '\n' '|')"; fi
 
 # ============================================================ Python syntax
 
@@ -435,6 +450,45 @@ rerun_rc=$?
 if [[ "$rerun_rc" -eq 0 ]]; then
   pass "E2E: --from 3 re-assembles and re-verifies from cached state, exit 0"
 else fail "E2E: re-run" "exit=$rerun_rc :: $(echo "$RERUN" | tail -3 | tr '\n' '|')"; fi
+
+# ---- the labeling invariant is enforced at runtime, not just greppable ----
+# The happy-path fixture runs with stt.provider = none, so no message is ever
+# machine-generated and Step 4's `generated == true <=> ⟦ in text` branch never
+# fires. These two tampered copies of a good output dir prove the invariant is
+# actually load-bearing, in both directions, rather than dead code guarded by a
+# string match.
+python3 - "$TMP" <<'PY' >/dev/null 2>&1
+import json, shutil, sys
+from pathlib import Path
+
+tmp = Path(sys.argv[1])
+cfg = json.loads((tmp / "run.json").read_text(encoding="utf-8"))
+
+def tamper(name, mutate):
+    dest = tmp / name
+    shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(tmp / "out", dest)
+    chat_file = next(iter(sorted((dest / "chats").glob("*.json"))))
+    chat = json.loads(chat_file.read_text(encoding="utf-8"))
+    mutate(chat["messages"][0])
+    chat_file.write_text(json.dumps(chat, ensure_ascii=False, indent=2), encoding="utf-8")
+    (tmp / f"{name}.json").write_text(json.dumps(
+        dict(cfg, output={"dir": str(dest)}, verify={"expect": {}})), encoding="utf-8")
+
+# claims machine authorship with no marker in the text
+tamper("tamper_a", lambda m: m.update(generated=True))
+# carries the marker while claiming the person typed it
+tamper("tamper_b", lambda m: m.update(text="⟦AUDIO TRANSCRIPT 0:03⟧ " + m["text"]))
+PY
+TA=$(python3 "$SCRIPTS/verify.py" "$TMP/tamper_a.json" 2>&1); ta_rc=$?
+TB=$(python3 "$SCRIPTS/verify.py" "$TMP/tamper_b.json" 2>&1); tb_rc=$?
+if [[ "$ta_rc" -ne 0 && "$tb_rc" -ne 0 ]] \
+   && echo "$TA" | grep -q "FAIL - generated == true" \
+   && echo "$TB" | grep -q "FAIL - generated == true"; then
+  pass "VERIFY: tampered output is rejected — the labeling invariant is enforced both ways"
+else
+  fail "VERIFY: labeling invariant" "tampered output accepted (a=$ta_rc b=$tb_rc)"
+fi
 
 # ---- a dry run stops after Step 1 (nothing uploaded, nothing assembled) ----
 python3 - "$TMP" <<'PY' >/dev/null 2>&1

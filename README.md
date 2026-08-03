@@ -48,6 +48,7 @@ Assuming `/plugin marketplace add SashaMarchuk/claude-plugins` was already run:
 /plugin install claude-migrate@sashamarchuk-plugins   # requires ultra + Node/Playwright
 /plugin install find-call@sashamarchuk-plugins        # reads (never writes) the shared identity file
 /plugin install log-time@sashamarchuk-plugins         # evidence-only time-logs; pairs well with find-call
+/plugin install ig-dm-export-analyzer@sashamarchuk-plugins   # Instagram DYI export to clean chat JSON
 /reload-plugins
 ```
 

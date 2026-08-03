@@ -33,7 +33,11 @@ First public release (beta).
   `.env` file → key file, all named in config), and output directory.
 - `tests/run.sh` — contract assertions plus a live end-to-end pipeline run over a
   synthetic export fixture (mojibake, pagination, date filtering, exclusions,
-  ordering, labeling, verification) in a sandboxed temp dir.
+  ordering, labeling, verification) in a sandboxed temp dir. Two tampered copies
+  of a good output directory prove the labeling invariant is enforced at runtime
+  in both directions, and the no-personal-data gate matches shapes (local paths,
+  corpus figures, calendar dates) rather than a list of strings, so it generalizes
+  and stays safe to publish.
 
 ### Notes
 - All output goes to the user-chosen `output.dir`; nothing is ever written into

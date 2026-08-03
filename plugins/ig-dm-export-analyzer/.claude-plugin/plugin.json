@@ -1,0 +1,11 @@
+{
+  "name": "ig-dm-export-analyzer",
+  "version": "0.1.0",
+  "description": "(beta) Turn an Instagram \"Download Your Information\" export into a clean, analysable chat corpus — one JSON file per conversation plus a filterable index.json rollup. Repairs Meta's UTF-8-as-Latin-1 mojibake, merges message_N.json pagination, filters strictly by date range and excluded threads, resolves media across split text/media archives, and transcribes voice notes and video audio tracks through a configurable speech-to-text provider (Soniox cloud, local whisper.cpp, or none). Every machine transcription is labeled four independent ways so it can never be mistaken for something the person typed, and a self-consistency verifier reconciles the output against the raw export. Fully config-driven: a new export is a new config file, not a code change.",
+  "author": {
+    "name": "Sasha Marchuk",
+    "url": "https://github.com/SashaMarchuk"
+  },
+  "homepage": "https://github.com/SashaMarchuk/claude-plugins/tree/main/plugins/ig-dm-export-analyzer",
+  "license": "MIT"
+}

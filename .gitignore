@@ -5,3 +5,9 @@ node_modules/
 .env.*
 !.env.example
 .planning/
+
+# Local Claude Code settings — machine-specific permissions, not shared
+.claude/settings.local.json
+
+# Working audit reports — generated artifacts, not repo deliverables
+.audits/

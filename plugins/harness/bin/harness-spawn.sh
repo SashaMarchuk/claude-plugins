@@ -148,9 +148,13 @@ do_spawn() {
   [ -n "$env_cmd" ] || env_cmd=$(cfg '.accounts.env_command' '')
   claude_bin=$(command -v claude || true)
   [ -n "$claude_bin" ] || { echo "ERROR: claude binary not on PATH" >&2; return 65; }
-  grace=$(cfg '.session.boot_grace_seconds' '45')
+  grace=$(cfg_int '.session.boot_grace_seconds' 45)
   pflag=$(perm_flag)
   [ "$printmode" = 1 ] && { extra="-p"; [ -n "$rest" ] && extra="-p --fallback-model $rest"; }
+  # bake a SANITIZED PATH into the launcher: absolute components only, no empty/./relative entry
+  # (each is a `.`-injection vector in a bypass-permissions session) (review 0.6.0 PATH hardening).
+  local safe_path; safe_path=$(hsanitize_path "$PATH")
+  [ -n "$safe_path" ] || { echo "ERROR: PATH has no absolute entries after sanitizing — refusing to spawn" >&2; return 65; }
 
   {
     echo '#!/usr/bin/env bash'
@@ -158,13 +162,19 @@ do_spawn() {
     echo 'set -uo pipefail'
     echo "LOG=\"$run/logs/launcher.log\""
     echo "note(){ printf '[%s %s] %s\\n' \"\$(date -u '+%H:%M:%S')\" \"$name\" \"\$*\" | tee -a \"\$LOG\" >&2; }"
-    echo "export PATH=\"$PATH\""
+    echo "export PATH=\"$safe_path\""
     # workers/validators run in sibling worktrees with no .harness/ — hand them the project root
     # so every engine call they make resolves (CRITICAL: worktree can't reach the engine otherwise).
     echo "export HARNESS_PROJECT=\"$PROJ\""
     echo "cd \"$cwd\" || { note 'FATAL: cd failed — refusing to start claude (L3)'; sleep 30; exit 66; }"
     if [ -n "$env_cmd" ]; then
       echo "if envout=\$($env_cmd 2>>\"\$LOG\"); then eval \"\$envout\"; note 'account env applied'; else note 'FATAL: accounts.env_command failed (L7)'; sleep 30; exit 9; fi"
+    fi
+    if [ "$(cfg '.guardrails.never_push' 'true')" = "true" ]; then
+      # deterministic belt under the never-push guarantee: an unroutable origin pushurl makes an
+      # in-session `git push` (origin) fail fast — a cheap backstop if a ticket body tries to trigger
+      # one. Best-effort: it covers `origin` only; other/added remotes are NOT caught (review 0.6.0).
+      echo 'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=harness-never-push-guardrail://blocked'
     fi
     echo "MODELS=($(printf '%s\n' "$models_lines" | tr '\n' ' '))"
     echo "GRACE=$grace"
@@ -269,7 +279,7 @@ do_close() { # graceful close protocol (L11): /exit → wait for job end → clo
   fi
   # A claude session mid-turn ignores /exit, so interrupt to idle first (Escape), then /exit.
   # Two rounds: the first Escape cancels a running turn; the second /exit lands on the idle prompt.
-  deadline=$(( $(now_epoch) + $(cfg '.session.close_timeout_seconds' '90') ))
+  deadline=$(( $(now_epoch) + $(cfg_int '.session.close_timeout_seconds' 90) ))
   local sent_exit=0
   while [ "$(now_epoch)" -lt "$deadline" ]; do
     if ! job_alive; then

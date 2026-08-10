@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "(beta) Universal autonomous orchestration harness — runs Claude Code sessions in real terminals to execute your ticket queue end-to-end (GSD-flavored by default), unattended. Deterministic bash engine: user + project config, model fallback chains with '|' OR syntax (fable|mythos|opus), GitHub-issues or local-file ticket queue with a readiness grill gate (LLM grilling over a structural engine floor), rate-limit PAUSE (never stop) with API-timed auto-resume, tty-keyed session registry, graceful /exit-then-close terminal lifecycle, and a lessons ledger distilled from three generations of real overnight runs. One account by default; any account switcher pluggable via one config key.",
   "author": {
     "name": "Sasha Marchuk",

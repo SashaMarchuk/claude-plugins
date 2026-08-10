@@ -29,6 +29,15 @@ preflight() {
   if [ -n "$ec" ]; then
     $ec >/dev/null 2>&1 || { echo "FAILED: accounts.env_command preflight: $ec (L7)" >&2; fails=1; }
   fi
+  # a literal secret in any accounts*.env_command would be baked into the on-disk launcher AND shipped
+  # to the sonnet spawn-validator. env_command must be a COMMAND that prints exports, never the secret.
+  local ecfg
+  for ecfg in "$PROJ/.harness/config.json" "$HARNESS_USER_CONFIG"; do
+    [ -f "$ecfg" ] || continue
+    if jq -r '(.accounts // {}) | .. | objects | .env_command? // empty' "$ecfg" 2>/dev/null | grep -qE 'OAUTH_TOKEN=|API_KEY=|SECRET='; then
+      echo "REFUSED: an accounts*.env_command in $ecfg embeds a literal credential (OAUTH_TOKEN=/API_KEY=/SECRET=). Point env_command at a command that PRINTS exports; never inline the secret — it would land in the launcher file and the validator prompt." >&2; fails=1
+    fi
+  done
   # First-run bypass-permissions acceptance: --dangerously-skip-permissions blocks on an interactive
   # "I accept" dialog the first time per account. Boot verification would still pass (process exists)
   # while the session sits on the dialog. Warn if we can't confirm prior acceptance (review MEDIUM).
@@ -54,7 +63,7 @@ do_start() {
   local id run tdir
   id=$(run_id_new); run="$HDIR/runs/$id"
   mkdir -p "$run"/{launchers,prompts,state/registry,logs,heartbeats,markers}
-  printf '%s\n' "$id" > "$HDIR/CURRENT"
+  printf '%s\n' "$id" | atomic_write "$HDIR/CURRENT"   # atomic: no truncate-then-write empty-CURRENT window
   hlog "run $id: created"
 
   # copy prompt templates into the run (shipped templates are never edited in place)
@@ -71,6 +80,14 @@ do_start() {
 
   # limits snapshot for the morning report
   "$BIN/harness-limits.sh" verdict > "$run/state/limits-at-start.txt" || true
+
+  # reclaim tickets left in-progress by a previous crashed run: report ALL in-progress, and release
+  # the ones idle beyond the threshold (default 7d) that still pass the ready floor. Start-time only —
+  # mid-run the harness only reports, never sweeps (review 0.6.0 point-2 stranded tickets).
+  "$BIN/harness-tickets.sh" stale > "$run/state/stale-at-start.txt" 2>&1 || true
+  if [ -s "$run/state/stale-at-start.txt" ]; then
+    echo "in-progress ticket sweep at start:"; sed 's/^/  /' "$run/state/stale-at-start.txt"
+  fi
 
   # deterministic watch loop (not an LLM — L9) — start FIRST so caffeinate can bind to it
   nohup "$BIN/harness-run.sh" watch >> "$run/logs/watch.log" 2>&1 &
@@ -127,7 +144,36 @@ do_stop() {
 }
 
 do_status() {
-  local run; run=$(hcurrent_run) || exit 66
+  local run jsonmode=0; [ "${1:-}" = "--json" ] && jsonmode=1
+  run=$(hcurrent_run) || exit 66
+
+  if [ "$jsonmode" -eq 1 ]; then
+    # machine-readable health for a cron/notifier babysitter: exit 0 healthy, exit 1 when the run
+    # needs a human (attention items present or a DEAD-RUN marker). No terminal/network required
+    # beyond the limits verdict (review 0.6.0 observability).
+    local now h hb att ready inprog dead=false stopped=false healthy=true
+    now=$(date +%s)
+    hb=$(for h in "$run"/heartbeats/*.epoch; do [ -f "$h" ] || continue
+           printf '%s\t%s\n' "$(basename "$h" .epoch)" "$(( now - $(cat "$h") ))"; done \
+         | jq -R -s 'split("\n")|map(select(length>0)|split("\t"))|map({(.[0]):(.[1]|tonumber)})|add // {}')
+    att=$(jq -R -s 'split("\n")|map(select(length>0))' "$run/state/attention" 2>/dev/null); [ -n "$att" ] || att='[]'
+    ready=$("$BIN/harness-tickets.sh" list ready 2>/dev/null \
+      | jq -R -s 'split("\n")|map(select(length>0)|split("\t"))|map({id:.[0],title:.[1]})'); [ -n "$ready" ] || ready='[]'
+    inprog=$("$BIN/harness-tickets.sh" list in-progress 2>/dev/null \
+      | jq -R -s 'split("\n")|map(select(length>0)|split("\t"))|map({id:.[0],title:.[1]})'); [ -n "$inprog" ] || inprog='[]'
+    [ -f "$run/DEAD-RUN" ] && dead=true
+    [ -f "$run/STOPPED" ] && stopped=true
+    { [ -s "$run/state/attention" ] || [ "$dead" = true ]; } && healthy=false
+    jq -n --arg run "$(basename "$run")" --arg project "$PROJ" \
+          --arg verdict "$("$BIN/harness-limits.sh" verdict)" \
+          --argjson hb "$hb" --argjson att "$att" --argjson dead "$dead" --argjson stopped "$stopped" \
+          --argjson healthy "$healthy" --argjson ready "$ready" --argjson inprog "$inprog" \
+          '{run:$run, project:$project, healthy:$healthy, limits_verdict:$verdict,
+            heartbeat_ages:$hb, attention:$att, dead_run:$dead, stopped:$stopped,
+            tickets:{ready:$ready, in_progress:$inprog}}'
+    [ "$healthy" = true ]; return
+  fi
+
   echo "run: $(basename "$run")   project: $PROJ"
   echo "limits: $("$BIN/harness-limits.sh" verdict)"
   echo; "$BIN/harness-spawn.sh" list
@@ -140,6 +186,7 @@ do_status() {
   if [ -f "$run/state/attention" ]; then echo; echo "ATTENTION:"; sed 's/^/  /' "$run/state/attention"; fi
   echo; echo "tickets ready:"; "$BIN/harness-tickets.sh" list ready 2>/dev/null | sed 's/^/  /' || true
   echo "tickets in-progress:"; "$BIN/harness-tickets.sh" list in-progress 2>/dev/null | sed 's/^/  /' || true
+  return 0
 }
 
 do_resume() {
@@ -175,7 +222,7 @@ do_resume() {
 # ---------------------------------------------------------------- watch (loop)
 watch_tick() {
   local run="$1" stall_min nudge_file
-  stall_min=$(cfg '.run.stall_minutes' '20')
+  stall_min=$(cfg_int '.run.stall_minutes' 20)
   : > "$run/state/attention.tmp"
 
   # caffeinate liveness (L16) — respawn bound to THIS watch loop ($$) so it dies with the watch (F5)
@@ -198,11 +245,11 @@ watch_tick() {
     fi
   fi
 
-  local f name tty role pid age tail cwd pwflag pw_prompt modal orch_alive any_alive
+  local f name tty role pid age tail cwd pwflag pw_prompt modal orch_alive any_alive blocked scope
   orch_alive=0; any_alive=0
   for f in "$run"/state/registry/*.json; do
     [ -f "$f" ] || continue
-    name=$(jq -r '.name' "$f"); tty=$(jq -r '.tty' "$f"); role=$(jq -r '.role' "$f"); pid=$(jq -r '.pid // empty' "$f")
+    name=$(jq -r '.name' "$f"); tty=$(jq -r '.tty' "$f"); role=$(jq -r '.role' "$f"); pid=$(jq -r '.pid // empty' "$f"); cwd=$(jq -r '.cwd' "$f")
 
     # liveness: the tracked claude pid (not "any node on the tty" — review MEDIUM)
     if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
@@ -221,19 +268,36 @@ watch_tick() {
     # gate may decline; treat any trust/password dialog as a modal the nudge must not touch (review LOW).
     printf '%s' "$tail" | grep -qiE 'trust the files in this folder|do you trust' && modal=1
 
-    # heartbeat staleness → single nudge (Enter), then report; never kill (L18). Skip if the session
-    # is sitting at a password/trust modal (a stale heartbeat there is EXPECTED — it awaits a decision).
-    if [ "$modal" -eq 0 ]; then
+    # a worker that declared itself blocked (worker rule 6) is EXPECTED to be idle — never nudge it,
+    # so STALLED spam can't bury real items (review 0.6.0 point-7 blocked-lane).
+    blocked=0
+    case "$name" in w-*) [ -f "$run/markers/${name#w-}.blocked.done" ] && blocked=1 ;; esac
+
+    # heartbeat staleness → single nudge (Enter), then report; never kill (L18). Skip at a
+    # password/trust modal or a self-blocked lane. Before nudging, CROSS-CHECK GIT GROUND TRUTH
+    # (DESIGN L18): recent commits/index activity in the session's own tree (or, for the orchestrator
+    # at the project root, on any lane branch) = working, not stalled — a long build/test with a quiet
+    # heartbeat must not get a blind Enter; likewise skip when the screen shows 'esc to interrupt'
+    # (mid-turn). Both cases re-arm the one-shot nudge (review 0.6.0 point-9).
+    if [ "$modal" -eq 0 ] && [ "$blocked" -eq 0 ]; then
       age=$("$BIN/harness-state.sh" heartbeat-age "$name" 2>/dev/null || echo never)
       if [ "$age" != "never" ] && [ "$age" -gt $((stall_min*60)) ]; then
-        nudge_file="$run/state/nudged-$name"
-        if [ ! -f "$nudge_file" ] || [ $(( $(date +%s) - $(cat "$nudge_file") )) -gt 3600 ]; then
-          "$BIN/harness-term.sh" key "$tty" enter 2>/dev/null || true
-          date +%s > "$nudge_file"
-          hlog "watch: nudged $name (heartbeat ${age}s stale)"
+        scope="head"; [ "$role" = orchestrator ] && scope="any"
+        if git_recent "$cwd" $((stall_min*60)) "$scope" \
+           || printf '%s' "$tail" | grep -q 'esc to interrupt'; then
+          rm -f "$run/state/nudged-$name"
         else
-          echo "STALLED: $name heartbeat ${age}s old (already nudged)" >> "$run/state/attention.tmp"
+          nudge_file="$run/state/nudged-$name"
+          if [ ! -f "$nudge_file" ] || [ $(( $(date +%s) - $(cat "$nudge_file") )) -gt 3600 ]; then
+            "$BIN/harness-term.sh" key "$tty" enter 2>/dev/null || true
+            date +%s > "$nudge_file"
+            hlog "watch: nudged $name (heartbeat ${age}s stale, no git activity)"
+          else
+            echo "STALLED: $name heartbeat ${age}s old (already nudged)" >> "$run/state/attention.tmp"
+          fi
         fi
+      else
+        rm -f "$run/state/nudged-$name"
       fi
     fi
 
@@ -333,14 +397,15 @@ do_watch() {
       exit 0
     fi
     watch_tick "$run" || hlog "watch: tick error (continuing)"
-    sleep "$(cfg '.run.watch_interval_seconds' '60')"
+    local wiv; wiv=$(cfg_int '.run.watch_interval_seconds' 60); [ "$wiv" -lt 1 ] && wiv=60  # never 0 → busy-spin
+    sleep "$wiv"
   done
 }
 
 case "${1:?usage: harness-run.sh start|stop|status|resume|watch}" in
   start)  do_start ;;
   stop)   do_stop ;;
-  status) do_status ;;
+  status) shift; do_status "$@" ;;
   resume) do_resume ;;
   watch)  do_watch ;;
   *) echo "usage: harness-run.sh start|stop|status|resume|watch" >&2; exit 64 ;;

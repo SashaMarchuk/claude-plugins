@@ -62,6 +62,11 @@ Everything else. None of it means anything outside this plugin.
     "answersFile": false
   },
 
+  "questions": {
+    "style": "live",
+    "recommendedBy": "plugin"
+  },
+
   "language": {
     "questions": null,
     "documents": null,
@@ -85,6 +90,10 @@ Everything else. None of it means anything outside this plugin.
 **`output.path`** is where packages and analyses land. There is no forced default. On first run the person is asked, and `docs/handoff/{topic}` is offered as the recommendation.
 
 **`package.answersFile`** adds a file for the interviewer to write into. Off by default, and confirmed with the person before it is added. When it is on, that file becomes the resource `collect` reads.
+
+**`questions.style`** is `live` by default: the package carries open items and the interviewer words each question during the session, following the method it was pointed at. Set it to `written` to have the plugin write finished question text instead, which is more rigid but survives an interviewer that cannot follow a method.
+
+**`questions.recommendedBy`** is `plugin` by default, because the plugin has seen the project, the earlier rounds and the rejected list while the interviewer has seen none of that. Set it to `interviewer` to have the recommendation formed live.
 
 **`language.*`** overrides the general `language` per artifact. Null means fall back to the general key, and an absent general key means detect. Verbatim quotes ignore all of this and stay in the language they were said.
 
@@ -142,7 +151,7 @@ Open with this:
 >
 > Three can be set separately: the questions your interviewer asks, the package documents, and the analysis. Name a language for each one that should differ; the rest follow your answer above. Quoted words always stay in the language they were said. They are evidence and are never translated.
 
-**Close** by naming every value written and the exact file it landed in. On a clean first setup that is slot 1 for `language` and slot 2 for `output.path`. Then:
+**Close** by naming every value actually written and the exact file each landed in. Name only what was written: answering Q2 with the recommendation means the language is left to detection, nothing is stored for it, and only one file is created. Do not describe a write that did not happen. Then:
 
 > Six more settings exist: the interview method, where finished session records are found, an answers file for your interviewer, the classification labels, automatic compression, and where the context document starts from. Each keeps its default until the first moment it matters, and I will ask then. To change any one of them at any time, run the config command and name the setting in your own words.
 

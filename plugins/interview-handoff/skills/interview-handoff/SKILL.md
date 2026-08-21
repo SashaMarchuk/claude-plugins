@@ -67,7 +67,8 @@ Resolve it in this order:
 
 1. **Configured.** Use it. Say which method you are using before the first question.
 2. **Not configured.** Look at what interview methods are available in this environment, weigh them against the candidates in `config/recommended.json`, and offer what fits with a recommendation. The user picks, and the answer is written down as configuration.
-3. **Nothing available, or the user declines to choose.** Use the built-in method in `references/interview-method.md` and say so. The plugin never depends on a method it did not ship: an absent method is a fallback, not a failure.
+3. **Configured but not installed here.** A method may be referenced by a URL as well as by a local path. When the local copy is absent, hand the interviewer the URL and let it fetch the method itself; when it cannot, fetch the text yourself at that moment and pass it inline. Either way you hold a reference, never a stored copy.
+4. **Nothing available at all.** Use the built-in method in `references/interview-method.md` and say so. The plugin never depends on a method it did not ship: an absent method is a fallback, not a failure.
 
 Two things decide whether a resolved method can be driven from here rather than by the user:
 
@@ -94,9 +95,13 @@ Into the configured output location, defaulting to a folder named for the topic.
 
 | File | What goes in it |
 |---|---|
-| questions | The question set, in the order it should be asked. May be split across several files when the questions fall into real categories. |
+| questions | **The open items this session must close**, in the order they should be worked, each with an id. May be split across several files when the items fall into real categories. |
 | context | Current state, and what has already been rejected. This is what lets the interviewer explain a question that did not land, and stops it proposing dead ideas. |
-| prompt | The prompt the user pastes into the interview session. Built from `references/interviewer-prompt.md`. |
+| prompt | The prompt the user pastes into the interview session. Built from `references/interviewer-prompt.md`. **It names the resolved interview method** by path, and by URL when there is one, so the interviewer can follow the method rather than only the rules quoted in the prompt. When neither can be reached, the method's text goes into the prompt inline, fetched at that moment. |
+
+**Each item carries four things and no finished question:** an **id**, one line saying **what breaks** if it is answered wrong, the **options** when there are real ones, and a **recommendation**. The interviewer words the actual question live, fitted to the conversation, and the item is the map it works from. Write finished wording instead only when `questions.style` is set to `written`.
+
+By default the plugin prepares the recommendation, because it has seen the project, the earlier rounds and the rejected list, and the interviewer has seen none of that. `questions.recommendedBy` moves that to the interviewer.
 
 An answers file is added only when configured on. Confirm it with the user before adding it, and see the note in `references/analysis.md` about why it is off by default.
 

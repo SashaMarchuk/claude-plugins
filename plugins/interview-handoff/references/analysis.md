@@ -1,5 +1,13 @@
 # Analysing what came back
 
+## What an answer is matched to
+
+By default no written question exists: the plugin wrote **open items** and the interviewer worded the questions live. So an answer is matched to its **item**, not to a sentence.
+
+Two anchors, in this order. The interviewer names the item id aloud in each confirmation and reads the list back at the end, so **match on the stated id first**. Fall back to matching on meaning only where an id is missing, and say in the analysis which items were matched that way, because those are the ones most likely to be wrong.
+
+An item nobody named and nobody discussed is `untouched`. That is what makes the open set countable and the next round buildable.
+
 ## Classify every question
 
 Five labels, as a recommendation rather than a closed set. Add one of your own when there is a real reason, and say why you added it.

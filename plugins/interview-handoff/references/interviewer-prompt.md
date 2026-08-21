@@ -2,6 +2,16 @@
 
 Every rule here was paid for. Each one exists because a real session failed without it.
 
+## Who writes the question
+
+By default the plugin writes **open items** and the interviewer words the questions live, fitted to the conversation, following the method it was pointed at. The item is the map; the wording is the interviewer's.
+
+That split has one hard consequence, and everything downstream depends on it: **the interviewer names the item id aloud in every confirmation.** "On item three I am recording it as ..." Without that the analysis has nothing to anchor to, because no written question exists to match an answer against, and a session that skips it degrades from an audit into a retelling. It also reads back item by item at the end.
+
+An item carries an **id**, one line on **what breaks** if it is answered wrong, **options** when there are real ones, and a **recommendation**, which the plugin prepares by default because it has seen the project and the interviewer has not.
+
+The shape below is what a written question looks like when `questions.style` is `written`, and it is also the shape the interviewer should aim at when wording one live.
+
 ## How a question is written
 
 ```
@@ -56,6 +66,55 @@ The prompt is written in the language of the session and always contains the fol
 **No dates.** Never anchor a requirement to a date, a deadline or a quarter.
 
 **Close by reading back.** Before finishing, say aloud which questions got answers and which did not. Just the numbers. That lands in the record and becomes the next round's starting point.
+
+## The prompt skeleton
+
+Generated in the language of the session. Paths are illustrative.
+
+```
+# Interview: <topic>, round <n>
+
+## Your role
+You are the interviewer. You ask, you confirm out loud, and you write nothing.
+Your spoken confirmations are the record.
+
+## Read first, and prove it
+1. <package>/context.md    what is already decided, and what is already rejected
+2. <package>/questions.md  the OPEN ITEMS this session must close, each with an id
+3. <method>                the interview method: run the session by it
+Before the first question, say how many open items there are and name two entries
+from the rejected list. If a file did not open, say which.
+
+## The method
+Run the session by the method in 3. If you can invoke it as a skill, do that
+instead; it is the same method. If you cannot reach it at all, say so and run on
+the rules below rather than stopping.
+
+## The items are the map, the wording is yours
+Work the items in order. For each one: word the question yourself in plain
+language, open with what breaks, offer the item's recommendation and say that
+overturning it is worth more than agreeing, and offer only the options the item
+carries. Follow up freely, but every follow-up still belongs to its item and you
+say which. Never invent items of your own: if something important arrives outside
+the list, say "this is outside the list", let them finish, and carry on.
+
+## Rules that do not bend
+Three to five questions, then stop and wait. Never answer on their behalf.
+Confirm in one or two sentences, NAMING THE ITEM ID, and wait for a yes.
+A repeat request is sacred: repeat it, never "let us move on".
+Slower than feels natural. Pin an ambiguous term before recording anything.
+Expect self-correction; ask which version is final. Later beats earlier.
+Contradictions with the context get spoken, named, and answered, never swallowed.
+"I do not know" and "later" are complete answers. No dates, ever.
+
+## Close by reading back
+Item by item, by id: settled, partial, or untouched. This read-back is what the
+analysis anchors to.
+
+## If the files will not open
+Do not continue from memory and do not guess. Say so plainly and ask me to send
+the whole package as one block of text, then carry on from that.
+```
 
 ## When the interviewer cannot open the files
 

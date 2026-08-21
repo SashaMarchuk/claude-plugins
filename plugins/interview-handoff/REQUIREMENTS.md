@@ -303,3 +303,28 @@ plugin then states what it chose and where it wrote it. **It covers settings onl
 question about the subject being designed, never picks a resource's trust level, and never decides what the
 person meant, because the plugin closing one of those on the person's behalf is the failure it exists to
 avoid.
+
+**D29. The package carries open items, and the interviewer words the questions live.** (round seven) Each
+item has an id, one line on what breaks if it is answered wrong, options where there are real ones, and a
+recommendation. This is the default. `questions.style: written` restores finished wording for an interviewer
+that cannot follow a method. Live wording rests only on the interviewer reading files, which is proven;
+invoking a skill is a bonus, not a foundation.
+
+**D30. The interviewer names the item id aloud in every confirmation.** (round seven) With no written question
+on disk, the id is what the analysis matches an answer to. Meaning-matching is the fallback and is reported as
+such. The interviewer also reads the list back item by item at the end.
+
+**D31. A method is referenced, never copied, and the reference may be remote.** (round seven) Local path
+first; when the method is not installed, the URL is handed over, or fetched at that moment and passed inline.
+Nothing is ever stored as a frozen copy. This is how a person with none of the known methods installed still
+gets one.
+
+**D32. The plugin prepares each item's recommendation by default.** (round seven) It has seen the project, the
+earlier rounds and the rejected list; the interviewer has seen none of that, so a recommendation formed live
+would be guesswork. `questions.recommendedBy: interviewer` moves it.
+
+**D33. The package points the interviewer at the method.** (round seven, found by test) A live run resolved
+`grilling` and followed it correctly on the plugin side, but nothing in the package named it, so the external
+interviewer reached only the rules quoted in the prompt and reported the method as "the prompt itself". The
+generated prompt now names the resolved method by path, and by URL where one exists, with the text inlined
+only when neither can be reached.

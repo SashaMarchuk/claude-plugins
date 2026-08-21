@@ -1,0 +1,21 @@
+{
+  "connectors": {
+    "session-logs": {
+      "strength": "weak",
+      "candidates": [
+        "local-directory",
+        "clipboard",
+        "manual-path"
+      ],
+      "note": "Where the record of a finished interview session can be found. Point this at wherever your interviewer leaves its output, or leave it unset and hand over a file each time. Change it when you switch to a different interviewer."
+    },
+    "interview-method": {
+      "strength": "weak",
+      "candidates": [
+        "grilling",
+        "built-in"
+      ],
+      "note": "How the user is questioned when a package is prepared. Any interview or elicitation method available in the environment can answer this source. Prefer one this skill can invoke directly; a method only a person can start still works, it is just handed over rather than driven. Leave it unset to be offered what is available, or set it to built-in to use the method the plugin ships."
+    }
+  }
+}

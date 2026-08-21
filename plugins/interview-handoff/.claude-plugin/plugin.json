@@ -1,6 +1,6 @@
 {
   "name": "interview-handoff",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "(beta) Prepares an interview you take somewhere else, then collects the result back. /interview-handoff:run grills you until the design tree is exhausted, then writes a handoff package into your project: the questions, a short context document, and a prompt. A separate interviewer runs the session against those files. /interview-handoff:collect reads whatever that session produced, matches every answer to its question, classifies it, flags anything that contradicts an earlier answer, and offers the next round built only from what is still open. Source-agnostic: where the result comes from and where the analysis lands are yours to configure.",
   "author": {
     "name": "Sasha Marchuk",

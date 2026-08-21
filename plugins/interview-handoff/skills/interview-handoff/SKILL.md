@@ -30,7 +30,9 @@ Read the merged configuration from these files, lowest to highest, later overrid
 
 `<config-root>` is `$CLAUDE_CONFIG_DIR` when set, otherwise the home directory plus `/.claude`. Never write a literal `~` into a file call. Never touch `<config-root>/plugins/`, which belongs to Claude Code.
 
-**Running with no config at all is normal.** Do not fail and do not stall. Ask what you need, use the answer, and write it down as configuration (`references/config.md` says which file each answer lands in).
+**Running with no config at all is normal.** Do not fail and do not stall. Ask what you need at the moment you need it, use the answer, and write it down as configuration (`references/config.md` says which file each answer lands in). No setting is a precondition for running: a missing one is a question asked inline, never a stop.
+
+**Autopilot.** If the person says autopilot, or passes `--auto`, stop asking them about settings: reuse whatever is already on disk, take the written recommendation for the rest, and then say what you chose and where you wrote it. It covers settings only. It never answers a question about the subject being designed, never picks a resource's trust level, and never decides what the person meant. See `references/config.md`.
 
 Missing or unreadable file: skip that layer, keep going, and say which layer you skipped.
 
@@ -102,7 +104,9 @@ An answers file is added only when configured on. Confirm it with the user befor
 
 ### 4. Hand it over
 
-Tell the user where the package is and what to paste. If their interviewer cannot read project files, offer the inline variant: the same prompt with the questions and context pasted into it. A handoff to an interviewer that never reads the files is the one failure that costs the whole session.
+Tell the user where the package is and what to paste.
+
+The prompt you wrote already covers an interviewer that cannot open the files: it is told to say so and ask for the whole package as one block of text, instead of stalling silently or guessing. When that request reaches the user, produce it: context and questions inlined in full, every path into the project stripped, including the ones buried inside the pasted content. See `references/interviewer-prompt.md`. This needs no separate command.
 
 ---
 
@@ -113,7 +117,7 @@ Tell the user where the package is and what to paste. If their interviewer canno
 A resource is whatever holds the result of the interview. A session record is one kind. So is a file the interviewer wrote into, a requirements document the user happens to have, or something they paste. **None of these is more legitimate than the others**, and a resource may have nothing to do with the questions and still be worth processing.
 
 - Configured source set: read it and say which item you took before doing anything with it.
-- Not set: ask. If the place was already named in this conversation, confirm it rather than asking again.
+- Not set: ask, with the resource actually in hand. If the place was already named in this conversation, confirm it rather than asking again. When the answer names somewhere that could recur, a folder or a standing tool, offer in one line to remember it. A one-off paste is never recorded as standing.
 - The user hands over content directly: take it.
 - If the package includes an answers file and the user configured the interviewer to write there, **that file is the resource.** Do not go looking for anything else.
 
@@ -121,7 +125,7 @@ A resource is whatever holds the result of the interview. A session record is on
 
 Live recognition repeats the same phrase several times over, each time longer. Left alone it drowns the analysis.
 
-Before processing, look at the resource and ask, in one line, whether to compress it for accuracy. Do not ask when the resource is already clean. When the configuration says to always compress losslessly, do it without asking.
+Before processing, look at the resource and ask, in one line, whether to compress it for accuracy. Offer three answers: yes, yes and always from now on, or no. The middle one records `compress.always`, which is why there is no separate question for it anywhere. Do not ask at all when the resource is already clean, and do not ask when the configuration already says always.
 
 Two rules that do not bend:
 
@@ -150,7 +154,13 @@ Running `collect` twice on the same resource must not double-count it. Recognise
 
 ## Mode: config
 
-Start at the first question every time. For a value already stored, ask whether it is still current; keep it if they confirm, replace it if they do not. See `references/config.md` for every key, and for which file each one is written to.
+**The sequence is fixed and written down. Follow it exactly, never reconstruct one.** It lives in `references/config.md` under "Config mode", with the wording of each question and the order they are asked in.
+
+A first run is **two questions**: where packages are saved, and what language to use. Everything else has a working default and is asked at the first moment it actually matters, which is named per key in that same file. Do not ask about a deferred key in config mode.
+
+On a re-run, every stored value is shown with the file it lives in and re-asked as "is this still current": keep it on a yes, collect a replacement on a no, and write back into the layer it came from. The order does not change between runs.
+
+If the user named a single setting in plain words, ask only that one.
 
 ---
 

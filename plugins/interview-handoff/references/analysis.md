@@ -59,7 +59,16 @@ The reverse also happens: an answer can break a question's premise, so a questio
 
 ## Contradictions
 
-Check each new answer against everything already recorded, including earlier answers in the same resource. A contradiction is not resolved here, ever. Present it as a choice: what collides, which side is newer, the concrete case where both cannot hold, and the question to put to them.
+Check each new answer against everything already recorded, including earlier answers in the same resource.
+
+**A contradiction is its own item, never folded into the classification of the answer that caused it.** It carries both statements, the words used, and **when each was said**.
+
+Then one fork, and only one:
+
+- **The person marked one of them final in the session** — "that is my final word", "ignore what I said before", "the later one stands". Record that one as the decision, say plainly that they settled it themselves and quote the words that did it. Do not put a settled thing back to them.
+- **Nothing marks either as final.** Do not choose. Put it back to them as a question, showing both statements and when each was said, so they can see what they are choosing between. Recency alone is not a marker of finality: a person can repeat an old position without meaning to overturn a newer one.
+
+When a contradiction turns out to touch something on the rejected list, say so out loud in the analysis. A rejected entry that is now live policy has to be corrected in the context document, or the next interviewer will refuse to discuss the very thing that was just decided.
 
 Where the source material carries speaker labels, treat an unattributable segment as a flag, not a guess. Attributing the interviewer's words to the person fabricates a decision at the highest level of authority the record has.
 

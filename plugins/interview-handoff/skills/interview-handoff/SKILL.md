@@ -65,7 +65,7 @@ How the user is questioned is a **source**, resolved like any other. Never name 
 
 Resolve it in this order:
 
-1. **Configured.** Use it. Say which method you are using before the first question.
+1. **Configured.** Use it. Before the first question, say **which method you are using and where you actually read it from**. The place you read it and the place the config names can differ, and when they do, say so rather than letting it pass silently: a person editing the file they think is in play deserves to know it is not. If you find a better or equivalent source than the one configured, use it and say why you did.
 2. **Not configured.** Look at what interview methods are available in this environment, weigh them against the candidates in `config/recommended.json`, and offer what fits with a recommendation. The user picks, and the answer is written down as configuration.
 3. **Configured but not installed here.** A method may be referenced by a URL as well as by a local path. When the local copy is absent, hand the interviewer the URL and let it fetch the method itself; when it cannot, fetch the text yourself at that moment and pass it inline. Either way you hold a reference, never a stored copy.
 4. **Nothing available at all.** Use the built-in method in `references/interview-method.md` and say so. The plugin never depends on a method it did not ship: an absent method is a fallback, not a failure.

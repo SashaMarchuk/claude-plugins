@@ -328,3 +328,20 @@ would be guesswork. `questions.recommendedBy: interviewer` moves it.
 interviewer reached only the rules quoted in the prompt and reported the method as "the prompt itself". The
 generated prompt now names the resolved method by path, and by URL where one exists, with the text inlined
 only when neither can be reached.
+
+**D34. Every setting is enumerable and re-askable.** (round eight, found by test) `questions.style` and
+`questions.recommendedBy` were settable by name but appeared in no list and in no trigger table, so nothing
+ever showed them back and a re-run never re-asked them. Both are now enumerated in the wizard's closing line
+and carry a trigger, like every other deferred key.
+
+**D35. The plugin says which method it is using and where it actually read it from.** (round eight, found by
+test) A run recorded one path in config and loaded the method from another. This is transparency, not a
+restriction: the two may legitimately differ, and a better or equivalent source may be used, but the person is
+told which one is really in play so they are not editing a file that has no effect.
+
+**D36. A contradiction is its own item, and is resolved only by the person.** (round eight) It carries both
+statements and when each was said. If the person marked one final in the session, that is the decision and it
+is recorded with the words that settled it. If nothing marks either as final, it goes back to them as a
+question showing both sides and their timing; recency alone is not finality. A contradiction touching the
+rejected list is called out, because a rejected entry that is now live policy must be corrected or the next
+interviewer will refuse to discuss it.

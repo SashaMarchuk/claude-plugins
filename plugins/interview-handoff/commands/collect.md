@@ -1,5 +1,5 @@
 ---
-argument-hint: "[path-or-topic]"
+argument-hint: "[path-or-topic] [--auto]"
 description: "/interview-handoff:collect — read what the interview produced, match answers to questions, classify them, flag contradictions, and offer the next round."
 ---
 

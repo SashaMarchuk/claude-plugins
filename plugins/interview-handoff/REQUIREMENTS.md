@@ -268,3 +268,38 @@ and reads what answers it from the resolved config. Concrete candidates appear o
 as it now is. The plugin ships its own compact method in `references/interview-method.md` and falls back to
 it when nothing else is available, so it never depends on a method it did not ship. Whether a resolved
 method can be driven by the skill or must be handed to the user is checked before it is recommended.
+
+**D24. The config wizard is two questions, and the sequence is written down.** (round six, after a test run
+found that "start at the first question" pointed at a key reference with no questions in it, so two runs
+produced two different wizards) A first run asks only `output.path`, which has no default and blocks the first
+write, and `language`, which is person-dependent and answerable cold. The other six keys each keep a working
+default and are asked at a named in-context trigger instead, several of which the run and collect flows
+already perform. Full sequence, wording and triggers in `references/config.md`.
+
+**D25. An interviewer that cannot open the files stops, and says why.** (round six) Stopping is correct
+behaviour and is kept. What changes is that the generated prompt now always carries one line telling it to say
+so plainly and ask for the whole package as one block of text. No separate command: the prompt asks, the
+person relays, the skill produces it with every project path stripped, including those inside the pasted
+content.
+
+**D26. The options line in a question is optional.** (round six) The template previously made it mandatory, so
+an open question was forced to invent a menu of one. An open question now omits the line. A list of one is
+forbidden. Question wording beyond this is the interview method's business, not the plugin's.
+
+## Still not decided
+
+- Whether the plugin ships tests, and which.
+- Whether `REQUIREMENTS.md` stays in the plugin folder.
+- How the wizard places a **new** value at project level (slots 3 to 6). The clean-setup and write-back rules
+  cover every other case; this one is not decided and is not to be invented.
+
+**D27. No setting is a precondition for running.** (round six) A missing value is asked inline at the moment
+it is needed and written down, never a reason to stop. The wizard settles things in one sitting as a
+convenience; it is not a gate in front of the plugin.
+
+**D28. Autopilot.** (round six) Saying autopilot, or passing `--auto`, stops the questions about settings:
+values already on disk are reused, the written recommendation is taken for everything still unset, and the
+plugin then states what it chose and where it wrote it. **It covers settings only.** It never answers a
+question about the subject being designed, never picks a resource's trust level, and never decides what the
+person meant, because the plugin closing one of those on the person's behalf is the failure it exists to
+avoid.

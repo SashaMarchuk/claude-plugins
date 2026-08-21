@@ -1,5 +1,5 @@
 ---
-argument-hint: "[topic]"
+argument-hint: "[topic] [--auto]"
 description: "/interview-handoff:run — grill until the design tree is exhausted, then write the handoff package (questions, context, prompt) for an interviewer to run elsewhere."
 ---
 

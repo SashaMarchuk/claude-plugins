@@ -153,7 +153,7 @@ Open with this:
 
 **Close** by naming every value actually written and the exact file each landed in. Name only what was written: answering Q2 with the recommendation means the language is left to detection, nothing is stored for it, and only one file is created. Do not describe a write that did not happen. Then:
 
-> Six more settings exist: the interview method, where finished session records are found, an answers file for your interviewer, the classification labels, automatic compression, and where the context document starts from. Each keeps its default until the first moment it matters, and I will ask then. To change any one of them at any time, run the config command and name the setting in your own words.
+> Eight more settings exist: the interview method, where finished session records are found, an answers file for your interviewer, the classification labels, automatic compression, where the context document starts from, whether the interviewer words the questions live or I write them out, and who prepares the recommendation on each item. Each keeps its default until the first moment it matters, and I will ask then. To change any one of them at any time, run the config command and name the setting in your own words.
 
 ### Autopilot
 
@@ -181,6 +181,8 @@ Never asked by the first run. This order is also their re-run order.
 | `classification.labels` | the recommended five | The person disputes a label or asks for different ones while looking at an analysis. Never proactive. |
 | `compress.always` | off, which means ask per resource | The per-resource compression question in `collect` carries it as one of its answers: yes, yes and always, or no. There is no separate question. |
 | `context.source` | ask per package | Run step 3 already asks at the first context build. Recorded as standing only when the person says the choice should hold for future rounds. |
+| `questions.style` | `live` | Never asked proactively: the default is the recommended path. Offered when the person says the questions did not suit them, or when their interviewer turns out not to follow a method. Shown and re-asked on a config re-run, like every other stored value. |
+| `questions.recommendedBy` | `plugin` | Never asked proactively. Offered when the person says the recommendations are off, or wants the interviewer to form them live. Shown and re-asked on a config re-run. |
 
 ### Re-run
 

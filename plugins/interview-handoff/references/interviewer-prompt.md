@@ -128,4 +128,6 @@ That line survives every setup, because the prompt itself is always pasted in ra
 
 When that request comes back, produce the package as a single block of text: the context and the questions inlined in full, with no instruction to open anything and no path left pointing at the project. Strip the references inside the pasted content too, not only the ones in the read-block, since a path buried mid-sentence strands the interviewer just as effectively.
 
+**The method is part of that block.** An interviewer that could not open the package files cannot open a method sitting at a local path either, and one stripped of its path and left with nothing runs on the quoted rules alone — which is the failure this file already had to fix once. So: keep the method's URL when there is one, and **inline the method's text when there is not**, read at that moment. Never leave the method slot holding a bare local path in a block built for someone who cannot reach this machine.
+
 This needs no separate command. The prompt asks, the person relays, the skill produces it.

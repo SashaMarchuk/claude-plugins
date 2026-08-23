@@ -21,6 +21,14 @@ On a clean first setup, with no config file anywhere, a shared answer goes to sl
 
 A setting some layer already holds is written back into that same layer, not created somewhere else as a side effect. Every write preserves keys it does not recognise.
 
+## What is not a layer
+
+`config/recommended.json` is **not a slot**. It is the plugin's own list of what a source could plausibly be answered by, and it **contributes nothing to the resolved config**: merging the six slots never reads it, and no value in it is ever treated as if a person had set it.
+
+It is read in exactly one situation — while a source is being **chosen**: the wizard asking about a source for the first time, and the not-configured branch of a run. Once a source is settled, everything needed to use it lives in the stored value, so a run that already has one never opens that file again. Anything a settled value will need later, a URL above all, is copied into the value at the moment it is written.
+
+This is why a run must never report a difference between `config/recommended.json` and what it found installed as though the config had been contradicted. Nothing was configured, so nothing was contradicted. What is worth saying in that situation is which copy is now in play, and that it is not yet settled.
+
 ## General config
 
 Three keys, because each is useful to any plugin that talks to this person, not just this one.
@@ -34,7 +42,11 @@ Three keys, because each is useful to any plugin that talks to this person, not 
       "use": { "kind": "auto" }
     },
     "interview-method": {
-      "use": { "kind": "auto" }
+      "use": {
+        "name": "the method's own name, matched exactly against what the environment offers",
+        "path": "where that method was actually read last time",
+        "url":  "where the method can be fetched when no local copy resolves"
+      }
     }
   }
 }
@@ -44,7 +56,15 @@ Three keys, because each is useful to any plugin that talks to this person, not 
 
 **`connectors.session-logs`** is where the record of a finished interview session can be found. `{ "kind": "auto" }` or an absent `use` sends it to detection, which here means asking.
 
-**`connectors.interview-method`** is how the user is questioned while a package is being prepared. It is shared because a method that suits this person suits any plugin that questions them. Absent or `auto` means look at what is available, offer it with a recommendation, and record the answer. Resolution runs on every invocation, so a method that has changed since last time is used as it now is. Set it to `built-in` to use the method the plugin ships and stop being asked.
+**`connectors.interview-method`** is how the user is questioned while a package is being prepared. It is shared because a method that suits this person suits any plugin that questions them. Absent, or `{ "kind": "auto" }`, means nothing is settled yet: look at what is available, take or offer it, and record the answer. Resolution runs on every invocation, so a method that has changed since last time is used as it now is. `{ "name": "built-in" }` uses the method the plugin ships and stops the question returning.
+
+The three keys are not three alternatives, they are one binding written from three angles, and **`name` is the one that resolves it**:
+
+- **`name`** survives what a path does not — another machine, a different profile, an uninstalled marketplace. It is matched exactly against what the environment offers, never loosely.
+- **`path`** is a record, not a binding: *this is the copy I actually read*. It is what lets the plugin tell a person they are editing a file that is not in play. When two copies of the same method exist, this is the one that answers "which".
+- **`url`** is copied in **at the moment the value is written**, from the candidate in `config/recommended.json` when the settled method is one of them. It is carried so an interviewer running somewhere else can still reach the method, and so a broken path never sends the plugin back to `config/recommended.json` at run time.
+
+A stored value that has no `url` simply has no URL known. It is not repaired silently and it is not rewritten behind the person's back; a value already on disk is never overridden by a recommendation.
 
 Note on naming: another plugin in this marketplace uses a `transcripts` source, and there it means a notetaker service. Here the source is a place where a session record lives. Two different things, so two different names. Do not merge them.
 
@@ -175,7 +195,7 @@ Never asked by the first run. This order is also their re-run order.
 
 | Key | Default until then | What triggers the ask |
 |---|---|---|
-| `connectors.interview-method` | auto | The first `run`. Step 2 of run mode already resolves it, offers with a recommendation and records the answer. A wizard asking too would duplicate that with less in hand. |
+| `connectors.interview-method` | auto | The first `run`. Step 2 of run mode already resolves it: one obvious method is taken and offered for settling, anything ambiguous is put to the person, and either way the answer is recorded. A wizard asking too would duplicate that with less in hand. |
 | `connectors.session-logs` | auto, which means ask | The first `collect` with no source configured: ask where the record is, with the record actually in hand. When the answer names somewhere that could recur, offer in one line to remember it. A one-off paste is never recorded as standing. |
 | `package.answersFile` | off | The person says their interviewer can write into files, or asks how answers get back. Offer it then, with the reason it is off by default. Never offered unprompted. |
 | `classification.labels` | the recommended five | The person disputes a label or asks for different ones while looking at an analysis. Never proactive. |

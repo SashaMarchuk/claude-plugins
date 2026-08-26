@@ -15,12 +15,11 @@
         "grilling",
         "built-in"
       ],
-      "note": "How the person is questioned while a package is prepared. Any interview or elicitation method available in the environment can answer this source, named by a local path or by a URL. Prefer one the skill can invoke or read directly; a method only a person can start still works, it is just handed over rather than driven. A method is always referenced and re-read, never stored as a copy. Leave it unset to be offered what is available, or set it to built-in to use the method the plugin ships.",
+      "note": "How the person is questioned while a package is prepared. Any interview or elicitation method available in the environment can answer this source, matched by its own name. Prefer one the skill can invoke or read directly; a method only a person can start still works, it is just handed over rather than driven. A method is always referenced and re-read, never stored as a copy. Leave it unset to be offered what is available, or set it to built-in to use the method the plugin ships. This file lists what a method could be; it is read only while one is being chosen, never to interpret one already configured.",
       "references": {
         "grilling": {
-          "local": "plugins/marketplaces/mattpocock/skills/productivity/grilling/SKILL.md",
           "url": "https://raw.githubusercontent.com/mattpocock/skills/main/skills/productivity/grilling/SKILL.md",
-          "note": "Design-tree interview worked in rounds. MIT licensed. Used when present locally; fetched from the URL when it is not."
+          "note": "Design-tree interview worked in rounds. MIT licensed. Installed copies are found by name wherever they live; this URL is for reaching the method when no local copy resolves, and is carried into the stored value so an interviewer running elsewhere can still read it."
         }
       }
     }

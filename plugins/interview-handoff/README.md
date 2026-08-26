@@ -40,6 +40,12 @@ Noisy voice records are compressed before analysis, with your say-so, losslessly
 
 Nothing is required. With no configuration at all it asks what it needs and writes the answers down. Three settings are shared with your other plugins, because they are useful beyond this one: the language to talk to you in, where your session records live, and how you like to be questioned. Everything else stays in this plugin's own file. See `references/config.md`.
 
+## How you are questioned
+
+The grill runs on an **interview method**, and the method is yours to choose. Any method installed in your environment can answer for it, whichever way you installed it — it is found by **name**, not by the place a particular install happens to put it. One obvious method and it is simply used, named out loud along with the copy that was read, and you are offered the chance to settle it so the question does not come back. Several, or none, and you are asked, with your installed methods shown next to the ones the plugin knows of. You can always name a method of your own instead.
+
+Nothing is copied: the method is read fresh on every run, so an update to it takes effect immediately. If nothing is available at all, the plugin uses the small method it ships and says so. It never depends on a method it did not ship.
+
 ## Where the rules live
 
 - `references/interviewer-prompt.md` — how questions are written, and every rule the generated prompt must carry.

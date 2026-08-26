@@ -185,13 +185,20 @@ Behaviour required by the architecture:
 
 ## Agnosticism
 
-No file under `commands/`, `skills/` or `scripts/` names a connector. The skill names the source it
-needs, `transcripts`, and reads the tool for it from the resolved config. Concrete tool names appear
-only in `config/recommended.json`. The plugin declares no fixed connector, so the hardcoding exception
-does not apply to it.
+No file under `commands/`, `skills/` or `scripts/` names a connector, and none names a method. The skill
+names the sources it needs and reads what answers them from the resolved config. Concrete tool and method
+names appear only in `config/recommended.json`. The plugin declares no fixed connector, so the hardcoding
+exception does not apply to it.
 
-`config/recommended.json` declares one source, `transcripts`, with strength `weak`: the tool that holds
-a session recording differs from person to person, and several are plausible.
+`config/recommended.json` declares two sources, both with strength `weak`:
+
+- `session-logs`, because the tool that holds a session recording differs from person to person, and
+  several are plausible.
+- `interview-method`, because the method that suits a person is theirs to pick, and any method installed
+  in their environment can answer it.
+
+That file is advisory. It is read only while a source is being **chosen**; it is never a config layer and
+never contributes to a resolved value. See `references/config.md`.
 
 ## Not in scope
 
@@ -345,3 +352,24 @@ is recorded with the words that settled it. If nothing marks either as final, it
 question showing both sides and their timing; recency alone is not finality. A contradiction touching the
 rejected list is called out, because a rejected entry that is now live policy must be corrected or the next
 interviewer will refuse to discuss it.
+
+**D37. A method is resolved by name first, and the stored value carries its URL.** (0.4.1, found by a user
+report) D31 bound a method by local path, so a path that stopped resolving — another machine, another
+profile, an uninstalled marketplace — sent the plugin past a perfectly good installed copy and out to the
+network, or to the built-in method. It is now resolved by exact name first, then the stored path, then the
+stored URL, then the built-in method. The stored value carries `name`, `path` and `url` together: the name
+resolves it, the path records which copy was actually read, and the URL is copied in at write time so the
+run-time branch never reads `config/recommended.json` and an interviewer running elsewhere is never handed
+a path it cannot open. Names are matched exactly, never loosely: two methods can have similar names, and
+choosing the wrong one silently is worse than asking. This amends D31 and does not weaken it — nothing is
+copied, everything is still a reference.
+
+**D38. On a clean first run, one obvious method is taken, not put to a vote.** (0.4.1, found by the same
+report) Step 2 said offer-and-pick for every case, so a person with exactly one method installed was asked
+a question with one real answer before the grill could start. Now: exactly one method in exactly one copy is
+taken, named out loud along with the copy that was read, and the person is **offered the chance to settle
+it** — an offer that never blocks the first round. More than one method, the same method in more than one
+copy, or none at all still goes to the person to pick, showing what is installed here alongside the
+candidates. Autopilot still writes without asking, per D28. What must never happen is the shape that
+prompted this: a difference between `config/recommended.json` and what is installed, reported as though the
+person's configuration had been contradicted, on a run where nothing was configured at all.

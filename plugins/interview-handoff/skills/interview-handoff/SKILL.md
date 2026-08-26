@@ -63,12 +63,20 @@ If a package for this topic already exists, **do not overwrite anything.** Show 
 
 How the user is questioned is a **source**, resolved like any other. Never name a specific method in this file: name the source, `interview-method`, and read what answers it from the resolved config.
 
-Resolve it in this order:
+A settled method is stored as a **name, a path and a URL** — see `references/config.md`. The name is what resolves it; the path records which copy was actually read last time; the URL is carried so a method that cannot be opened locally can still be reached. **Resolve by name first, then path, then URL, then the built-in method.** A name is matched exactly against what the environment offers. Never match loosely: two different methods can have similar names, and picking the wrong one silently is worse than asking.
 
-1. **Configured.** Use it. Before the first question, say **which method you are using and where you actually read it from**. The place you read it and the place the config names can differ, and when they do, say so rather than letting it pass silently: a person editing the file they think is in play deserves to know it is not. If you find a better or equivalent source than the one configured, use it and say why you did.
-2. **Not configured.** Look at what interview methods are available in this environment, weigh them against the candidates in `config/recommended.json`, and offer what fits with a recommendation. The user picks, and the answer is written down as configuration.
-3. **Configured but not installed here.** A method may be referenced by a URL as well as by a local path. When the local copy is absent, hand the interviewer the URL and let it fetch the method itself; when it cannot, fetch the text yourself at that moment and pass it inline. Either way you hold a reference, never a stored copy.
+Resolve in this order:
+
+1. **Configured.** Resolve the stored name in this environment; fall back to the stored path, then the stored URL. Before the first question, say **which method you are using and where you actually read it from**. The place you read it and the place the config names can differ, and when they do, say so rather than letting it pass silently: a person editing the file they think is in play deserves to know it is not. If you find a better or equivalent source than the one configured, use it and say why you did.
+2. **Not configured.** Look at what interview methods this environment offers.
+   - **Exactly one, in one copy.** Take it. Say in one line which method it is and which copy you read, and that it is not yet settled. Then **offer to settle it** so the question does not return. The offer never blocks: the first round starts whether or not it is answered.
+   - **More than one, or the same method in more than one copy.** Ask. Show what is installed here and the candidates in `config/recommended.json`, including any that are only reachable by URL, and give a recommendation. The user may name any method of their own instead. The user picks.
+   - **None.** Ask the same way, from the candidates alone.
+   - Whatever settles it is written down as configuration, and which copy was read is written with it. Under autopilot, the recommendation is taken and written without asking, like every other setting (`references/config.md`).
+3. **Configured but not resolvable here.** Neither the name nor the path finds it. Hand the interviewer the stored URL and let it fetch the method itself; when it cannot, fetch the text yourself at that moment and pass it inline. Either way you hold a reference, never a stored copy. Say that the stored path did not resolve, so the person can repair it.
 4. **Nothing available at all.** Use the built-in method in `references/interview-method.md` and say so. The plugin never depends on a method it did not ship: an absent method is a fallback, not a failure.
+
+`config/recommended.json` is read here only while a method is being **chosen**, in step 2. It is never read to interpret a method already configured: everything step 1 and step 3 need is in the stored value. See `references/config.md`.
 
 Two things decide whether a resolved method can be driven from here rather than by the user:
 
@@ -97,7 +105,7 @@ Into the configured output location, defaulting to a folder named for the topic.
 |---|---|
 | questions | **The open items this session must close**, in the order they should be worked, each with an id. May be split across several files when the items fall into real categories. |
 | context | Current state, and what has already been rejected. This is what lets the interviewer explain a question that did not land, and stops it proposing dead ideas. |
-| prompt | The prompt the user pastes into the interview session. Built from `references/interviewer-prompt.md`. **It names the resolved interview method** by path, and by URL when there is one, so the interviewer can follow the method rather than only the rules quoted in the prompt. When neither can be reached, the method's text goes into the prompt inline, fetched at that moment. |
+| prompt | The prompt the user pastes into the interview session. Built from `references/interviewer-prompt.md`. **It names the resolved interview method** by name, by path, and by URL, so the interviewer can follow the method rather than only the rules quoted in the prompt. The URL comes from the stored value, so it survives even when the method was resolved from a local copy. A path on this machine is worth little to an interviewer running elsewhere: **when there is no URL, the method's text goes into the prompt inline**, read at that moment. |
 
 **Each item carries four things and no finished question:** an **id**, one line saying **what breaks** if it is answered wrong, the **options** when there are real ones, and a **recommendation**. The interviewer words the actual question live, fitted to the conversation, and the item is the map it works from. Write finished wording instead only when `questions.style` is set to `written`.
 

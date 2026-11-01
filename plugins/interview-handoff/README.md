@@ -46,9 +46,14 @@ The grill runs on an **interview method**, and the method is yours to choose. An
 
 Nothing is copied: the method is read fresh on every run, so an update to it takes effect immediately. If nothing is available at all, the plugin uses the small method it ships and says so. It never depends on a method it did not ship.
 
+## Requirements formats
+
+If your project keeps its requirements in a structured format, `collect` can also carry your **confirmed** decisions into it, next to the analysis, never instead of it. OpenSpec is supported: confirmed behaviour becomes delta specs in the change you link to the topic, technical choices go to its design notes, and `run` can start a round from that change. Every write is shown to you first and made only on your yes, nothing unconfirmed is written, and the project's main specs, archive and task list are never touched. This is off by default (`requirements.format` is `none`): nothing is detected, asked or written, which suits interviews that produce no requirements. Turn it on by naming a template (OpenSpec ships) or `custom` with your own instruction. If the project does not have the chosen format, you are asked before it is used there. See `references/formats/`.
+
 ## Where the rules live
 
 - `references/interviewer-prompt.md` — how questions are written, and every rule the generated prompt must carry.
 - `references/analysis.md` — classification, ratification, contradictions, and reversals.
 - `references/config.md` — every key, and which file it is written to.
+- `references/formats/` — one file per requirements format, with what is eligible and where it goes.
 - `openspec/specs/interview-handoff/` (repository root) — the requirements this plugin is built to, IDs `IH-NNN`.

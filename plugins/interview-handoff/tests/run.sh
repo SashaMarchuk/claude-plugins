@@ -185,6 +185,91 @@ done
 if [[ ! -e "$PLUGIN_DIR/REQUIREMENTS.md" ]]; then pass "REQUIREMENTS.md: gone, requirements live only in openspec/"
 else fail "REQUIREMENTS.md" "back in the plugin folder (two sources of truth)"; fi
 
+# ============================================================ Requirements format (IH-073)
+OPENSPEC_REF="$PLUGIN_DIR/references/formats/openspec.md"
+if [[ -f "$OPENSPEC_REF" ]]; then pass "file exists: references/formats/openspec.md"
+else fail "file exists: formats/openspec.md" "missing at $OPENSPEC_REF"; fi
+
+HITS=$(grep -ril 'openspec' "$PLUGIN_DIR/commands" "$PLUGIN_DIR/skills" 2>/dev/null || true)
+if [[ -z "$HITS" ]]; then pass "agnosticism: no requirements format named under commands/ or skills/"
+else fail "agnosticism: format name leaked" "$HITS"; fi
+
+if grep -q 'references/formats/' "$SKILL" && grep -q 'requirements.format' "$SKILL"; then
+  pass "SKILL: collect delegates to references/formats/ via requirements.format"
+else fail "SKILL: format step" "collect does not route through requirements.format and references/formats/"; fi
+
+if grep -q 'This step runs last' "$SKILL" && grep -q 'never replaces the analysis' "$SKILL"; then
+  pass "SKILL: format step runs last and never replaces the analysis"
+else fail "SKILL: format step order" "the analysis-first / never-instead rule is gone"; fi
+
+if grep -q 'Autopilot never skips the preview' "$SKILL"; then
+  pass "SKILL: autopilot never skips the format preview (IH-035, IH-073)"
+else fail "SKILL: autopilot preview" "nothing stops autopilot from writing requirements unseen"; fi
+
+if grep -q "with the person's yes on each write, the requirements-format files" "$SKILL"; then
+  pass "SKILL: Never line amended for format writes, gated by a yes"
+else fail "SKILL: Never line" "the edit limit no longer matches IH-069"; fi
+
+for pair in \
+  "eligible only when settled + confirmed:labelled \`settled\`, ratified \`confirmed\`" \
+  "autopilot never skips preview:Autopilot never skips this" \
+  "never writes main specs or archive:Write into \`openspec/specs/\`, \`openspec/changes/archive/\`" \
+  "never sets skip_specs:Never set \`skip_specs: true\`" \
+  "never archives or syncs:Archive or sync a change" \
+  "round-2 edit in place, never ADDED+MODIFIED:Never ADDED and MODIFIED for the same name" \
+  "MODIFIED copies the whole block:with the \*\*whole\*\* existing block copied in" \
+  "rejected list never filled from OpenSpec:The rejected list is never filled from OpenSpec" \
+  "ledger prevents double writes:Nothing is written twice" \
+  "scenarios carry no dates:Scenarios carry no dates" \
+  "IDs follow the project, never reused:An ID is never reused" \
+  "analysis never replaced:Replace the analysis" ; do
+  label="${pair%%:*}"; needle="${pair#*:}"
+  if grep -q -- "$needle" "$OPENSPEC_REF" 2>/dev/null; then pass "formats/openspec.md: $label"
+  else fail "formats/openspec.md: $label" "rule missing"; fi
+done
+
+if grep -q '"requirements"' "$CONFIG_REF" && grep -q '^| `requirements.format` |' "$CONFIG_REF"; then
+  pass "config.md: requirements.format documented and in the deferred table (IH-047)"
+else fail "config.md: requirements.format" "key not documented or not enumerable"; fi
+
+if grep -q 'Nine more settings exist' "$CONFIG_REF" && grep -q "requirements format" "$CONFIG_REF"; then
+  pass "config.md: wizard close enumerates the new setting"
+else fail "config.md: wizard close" "closing line does not list requirements format"; fi
+
+# IH-074: formats are opt-in. Off by default, never detected, custom allowed, explicit ask when absent.
+if grep -q '^| `requirements.format` | `none` |' "$CONFIG_REF" && grep -q '"format": "none"' "$CONFIG_REF"; then
+  pass "config.md: requirements.format defaults to none (IH-074)"
+else fail "config.md: format default" "default is not none in the deferred table and the example block"; fi
+if grep -q 'does not look for a requirements format, does not ask about one and does not mention one' "$CONFIG_REF" \
+   && grep -q 'nothing is detected and formats are not mentioned' "$SKILL"; then
+  pass "config.md + SKILL: no detection, no question, no mention by default (IH-074)"
+else fail "format off by default" "detection or an unprompted question is back"; fi
+if grep -q '`requirements.custom`' "$CONFIG_REF" && grep -q '`requirements.custom`' "$SKILL"; then
+  pass "config.md + SKILL: custom instruction option (IH-074)"
+else fail "format custom option" "requirements.custom not documented in config.md and SKILL"; fi
+if grep -q 'ask explicitly before using it' "$CONFIG_REF" && grep -q 'ask explicitly before using it here' "$SKILL" \
+   && grep -q 'Autopilot never answers this question' "$CONFIG_REF" && grep -q 'autopilot never answers that question' "$SKILL"; then
+  pass "config.md + SKILL: explicit ask when the template is absent, never by autopilot (IH-074)"
+else fail "format ask-first" "absent-template ask or its autopilot guard is missing"; fi
+if grep -q 'ask explicitly whether to use OpenSpec here' "$OPENSPEC_REF"; then
+  pass "formats/openspec.md: asks before using OpenSpec in a project without it"
+else fail "formats/openspec.md: ask-first" "rule missing"; fi
+
+# IH-073 and its amendments live in the pending change until it is archived, then in the
+# main specs. Search both, never the archive, so the check survives `openspec archive`.
+REQ_TREES=("$SPECS" "$REPO_ROOT/openspec/changes")
+req_grep() { grep -rq --exclude-dir=archive -- "$1" "${REQ_TREES[@]}" 2>/dev/null; }
+if req_grep '^### Requirement: IH-073 '; then pass "OpenSpec: IH-073 requirements-format requirement recorded"
+else fail "OpenSpec: IH-073" "requirement not written down in specs or an active change"; fi
+if req_grep '^### Requirement: IH-074 '; then pass "OpenSpec: IH-074 formats-opt-in requirement recorded"
+else fail "OpenSpec: IH-074" "requirement not written down in specs or an active change"; fi
+if req_grep 'named only inside its own file under `references/formats/`'; then
+  pass "OpenSpec: IH-058 amended for the references/formats/ exception"
+else fail "OpenSpec: IH-058" "agnosticism requirement does not allow references/formats/"; fi
+if req_grep 'the files of the one requirements-format change the person linked to the topic'; then
+  pass "OpenSpec: IH-069 lists what the plugin may write, including the format change"
+else fail "OpenSpec: IH-069" "edit limit does not cover requirements-format writes"; fi
+
 # ============================================================ Manifest / registry
 if json_valid "$MANIFEST"; then pass "plugin.json: valid JSON"
 else fail "plugin.json: valid JSON" "does not parse"; fi

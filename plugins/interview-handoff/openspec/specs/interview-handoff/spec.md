@@ -23,7 +23,7 @@ never produced from a partial tree.
 
 #### Scenario: Acceptance
 
-Given a topic whose design tree still has unvisited branches, When `run` grills the user, Then no package is written until the frontier is empty.
+Given a topic whose design tree still has unvisited branches, When `run` grills the user, Then no first package is written until the frontier is empty.
 
 *Trace: REQUIREMENTS.md@fd6125e · D1*
 
@@ -370,7 +370,7 @@ avoid.
 
 #### Scenario: Acceptance
 
-Given autopilot (`autopilot` or `--auto`), When a setting is unset, Then values on disk are reused, the written recommendation is taken, and the plugin states what it chose and where it wrote it; it never answers a question about the subject, picks a trust level or decides what the person meant.
+Given autopilot (`autopilot` or `--auto`), When settings would be asked, Then values already on disk are reused, the written recommendation is taken for every unset one, and the plugin states what it chose and where it wrote it; it never answers a question about the subject, picks a trust level or decides what the person meant.
 
 *Trace: REQUIREMENTS.md@fd6125e · D28*
 
@@ -515,7 +515,7 @@ person's configuration had been contradicted, on a run where nothing was configu
 
 #### Scenario: Acceptance
 
-Given a clean first run with exactly one method in exactly one copy, When the grill is about to start, Then that method is taken and named together with the copy read, and the person is offered to settle it without blocking the first round; any other case goes to the person to pick.
+Given a clean first run with exactly one method in exactly one copy, When the grill is about to start, Then that method is taken and named together with the copy read, and the person is offered to settle it without blocking the first round; any other case goes to the person to pick, except under autopilot, which still writes without asking (D28).
 
 *Trace: REQUIREMENTS.md@fd6125e · D38*
 
@@ -532,6 +532,8 @@ status.
   the round that was already planned is offered unchanged.
 - Voice resources repeat the same phrase many times over. Normalisation (D18) removes the repetition
   without removing anything else.
+
+*Amended by D19.*
 
 #### Scenario: Acceptance
 
@@ -591,6 +593,8 @@ Two rules govern the writing:
 - Recognition can be wrong, the person cannot. A word, name or number that looks impossible is flagged,
   never guessed.
 
+*Amended by D19.*
+
 #### Scenario: Acceptance
 
 Given `collect` on a resource, When the analysis runs, Then it follows the seven steps in order, keeps the person's words verbatim in the language they were said, and flags, never guesses, a word, name or number that looks impossible.
@@ -626,7 +630,7 @@ Behaviour required by the architecture:
 - `config` mode starts at the first question every time, and asks whether a stored value is still
   current.
 
-*Refined by D20, D21, D24 and D27.*
+*Amended by D19 and D21. Refined by D20, D24 and D27.*
 
 #### Scenario: Acceptance
 

@@ -191,6 +191,25 @@ done
 if [[ -z "$MISSING" ]]; then pass "REQUIREMENTS: D1..D38 each recorded exactly once in the OpenSpec spec"
 else fail "REQUIREMENTS: D1..D38" "missing or duplicated:$MISSING"; fi
 
+MISSING=""
+for id in RES-1 PKG-1 ANL-1 CFG-1 AGN-1 $(seq -f 'AMD-%g' 1 10); do
+  c=$(grep -c "^### Requirement: $id · " "$REQS" || true)
+  [[ "$c" -eq 1 ]] || MISSING="$MISSING $id($c)"
+done
+for id in X-1 X-2 X-3 X-4; do
+  grep -q "^### $id · " "$PLUGIN_DIR/openspec/reference/out-of-scope.md" 2>/dev/null || MISSING="$MISSING $id"
+done
+for id in Q-1 Q-2; do
+  grep -q "^### $id · " "$PLUGIN_DIR/openspec/reference/open-questions.md" 2>/dev/null || MISSING="$MISSING $id"
+done
+if [[ -z "$MISSING" ]]; then pass "REQUIREMENTS: sections, amendments, out-of-scope and open questions all carried"
+else fail "REQUIREMENTS: carried items" "missing or duplicated:$MISSING"; fi
+
+# D39 is decided but not yet on main: it lives as a pending change until applied to the spec.
+if grep -q "^### Requirement: D39 · " "$REQS" || grep -q "^### Requirement: D39 · " "$PLUGIN_DIR/openspec/changes/add-requirements-format/specs/interview-handoff/spec.md" 2>/dev/null; then
+  pass "REQUIREMENTS: D39 recorded (in the spec, or as its pending change)"
+else fail "REQUIREMENTS: D39" "neither in the spec nor in changes/add-requirements-format"; fi
+
 if grep -q 'openspec/specs/interview-handoff/spec.md' "$REQS_POINTER" && ! grep -q '^\*\*D[0-9]' "$REQS_POINTER"; then
   pass "REQUIREMENTS.md: a pointer to the OpenSpec spec, holding no decisions of its own"
 else fail "REQUIREMENTS.md: pointer" "missing the pointer, or decisions written here again (two sources of truth)"; fi

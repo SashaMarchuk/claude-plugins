@@ -21,5 +21,14 @@ enter `specs/` before the behaviour it describes is on `main`.
 
 ## Apply
 
-The branch that ships 0.5.0 applies these deltas to `specs/interview-handoff/spec.md` and the X-2 line above in
-the same PR, then moves this folder to `changes/archive/`.
+The branch that ships 0.5.0, in the same PR:
+
+1. Applies the deltas to `specs/interview-handoff/spec.md` (`openspec archive add-requirements-format` does this
+   and moves this folder to `changes/archive/`).
+2. Edits X-2 in `reference/out-of-scope.md` by hand to the line above; archiving does not touch `reference/`.
+3. Repoints its D39 tests: `REQS` now names the spec, so `^\*\*D39\.` becomes `^### Requirement: D39 · `, the
+   `exception added by D39` check reads the spec (AGN-1), and the `since D39` check reads
+   `reference/out-of-scope.md`. The existing D39 check accepts either location, so it needs no change.
+
+D39 was smoke-validated against OpenSpec 1.16.0; this tree is validated with 1.15.0 (the version MNB pins). Both
+accept these files.

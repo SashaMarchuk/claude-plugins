@@ -9,14 +9,14 @@ written here; everything else is open (see `../../reference/open-questions.md`).
 
 ### Requirement: H-001 · The workflow is agnostic and built from replaceable elements
 
-The orchestrator's workflow MUST be assembled from replaceable elements, each chosen in configuration rather
-than fixed in the plugin. The default MUST be GSD for execution and OpenSpec for requirements. The requirements
-format MUST be swappable for any other format the user prefers, without changing the plugin's code.
+The orchestrator's workflow MUST be agnostic and built from replaceable elements. The default MUST be GSD for
+execution and OpenSpec for requirements. OpenSpec MUST be swappable for another requirements format the user
+prefers.
 
 #### Scenario: Acceptance
 
-Given no workflow is configured, When a run starts, Then GSD executes the work and OpenSpec holds the
-requirements; and Given the user has configured another requirements format, When a run starts, Then that format
-is used in place of OpenSpec and no plugin code changed to allow it.
+Given the user has chosen nothing, When a run starts, Then GSD executes the work and OpenSpec holds the
+requirements; and Given the user prefers another requirements format, When a run starts, Then that format is
+used in place of OpenSpec.
 
-*Trace: owner decision, 2026-11-01 (relayed by the orchestrator session that assigned this work)*
+*Trace: owner decision, 2026-11-01, given in the task that started this OpenSpec migration*

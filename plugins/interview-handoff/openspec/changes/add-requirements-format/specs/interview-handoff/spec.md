@@ -51,9 +51,11 @@ The plugin declares no fixed connector, so the hardcoding exception does not app
 That file is advisory. It is read only while a source is being **chosen**; it is never a config layer and
 never contributes to a resolved value. See `references/config.md`.
 
+*Amended by D39.*
+
 #### Scenario: Acceptance
 
-Given the files under `commands/`, `skills/` and `scripts/`, When they are searched for a connector or method name, Then none is found; concrete names appear only in `config/recommended.json`, which declares `session-logs` and `interview-method`, both `weak`, and is never a config layer.
+Given the files under `commands/`, `skills/` and `scripts/`, When they are searched for a connector or method name, Then none is found; concrete tool and method names appear only in `config/recommended.json`, and a requirements format is named only in its own file under `references/formats/`; `config/recommended.json` declares `session-logs` and `interview-method`, both `weak`, and is never a config layer.
 
 *Trace: REQUIREMENTS.md@74adee6 · § Agnosticism*
 
@@ -87,7 +89,9 @@ Behaviour required by the architecture:
 - `config` mode starts at the first question every time, and asks whether a stored value is still
   current.
 
-*Refined by D20, D21, D24 and D27.*
+*Amended by D19 and D21. Refined by D20, D24 and D27.*
+
+*Amended by D39.*
 
 #### Scenario: Acceptance
 

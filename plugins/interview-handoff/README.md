@@ -51,4 +51,4 @@ Nothing is copied: the method is read fresh on every run, so an update to it tak
 - `references/interviewer-prompt.md` — how questions are written, and every rule the generated prompt must carry.
 - `references/analysis.md` — classification, ratification, contradictions, and reversals.
 - `references/config.md` — every key, and which file it is written to.
-- `REQUIREMENTS.md` — the decisions this plugin was built from, and who made each one.
+- `openspec/specs/interview-handoff/` (repository root) — the requirements this plugin is built to, IDs `IH-NNN`.

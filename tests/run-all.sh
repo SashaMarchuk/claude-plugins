@@ -61,6 +61,24 @@ for plugin in "${PLUGINS[@]}"; do
   fi
 done
 
+# Requirements: every spec and change under openspec/ must pass strict validation.
+# Always the pinned CLI, so a different global install cannot change the verdict.
+echo "=================================================================="
+echo ">>> openspec validate --all --strict"
+echo "=================================================================="
+OPENSPEC_VERSION=1.16.0
+OPENSPEC=(npx -y "@fission-ai/openspec@$OPENSPEC_VERSION")
+set +e
+(cd "$REPO_ROOT" && OPENSPEC_TELEMETRY=0 "${OPENSPEC[@]}" validate --all --strict --no-interactive)
+rc=$?
+set -e
+if [[ "$rc" -eq 0 ]]; then
+  TOTAL_PASS=$((TOTAL_PASS + 1)); SUMMARIES+=("openspec validate --strict: PASS")
+else
+  TOTAL_FAIL=$((TOTAL_FAIL + 1)); SUMMARIES+=("openspec validate --strict: FAIL (exit=$rc)")
+  FAILED_PLUGINS+=("openspec")
+fi
+
 echo
 echo "=================================================================="
 echo "WS-10 master runner — aggregate summary"

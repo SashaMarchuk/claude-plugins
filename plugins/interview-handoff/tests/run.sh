@@ -6,7 +6,7 @@
 #
 # SCOPE: these are file contracts, not behaviour tests. They cannot run a grill,
 # resolve a real skill, or reproduce the two-copies incident that produced 0.4.1
-# (see D37/D38 in REQUIREMENTS.md). What they do is stop the written contract
+# (see IH-041..IH-044 and IH-051..IH-053 in openspec/specs/interview-handoff/). What they do is stop the written contract
 # from silently regressing. Behavioural coverage is still owed.
 #
 # Exits 0 on all-pass, 1 on any FAIL. Final line matches the master-runner
@@ -28,7 +28,7 @@ METHOD_REF="$PLUGIN_DIR/references/interview-method.md"
 ANALYSIS_REF="$PLUGIN_DIR/references/analysis.md"
 RECOMMENDED="$PLUGIN_DIR/config/recommended.json"
 MANIFEST="$PLUGIN_DIR/.claude-plugin/plugin.json"
-REQS="$PLUGIN_DIR/REQUIREMENTS.md"
+SPECS="$REPO_ROOT/openspec/specs/interview-handoff"
 CMD_RUN="$PLUGIN_DIR/commands/run.md"
 CMD_COLLECT="$PLUGIN_DIR/commands/collect.md"
 CMD_CONFIG="$PLUGIN_DIR/commands/config.md"
@@ -65,7 +65,8 @@ for pair in \
   "analysis.md:$ANALYSIS_REF" \
   "recommended.json:$RECOMMENDED" \
   "plugin.json:$MANIFEST" \
-  "REQUIREMENTS.md:$REQS" \
+  "spec plugin-shape:$SPECS/plugin-shape/spec.md" \
+  "spec interview-method:$SPECS/interview-method/spec.md" \
   "commands/run.md:$CMD_RUN" \
   "commands/collect.md:$CMD_COLLECT" \
   "commands/config.md:$CMD_CONFIG" ; do
@@ -98,13 +99,13 @@ NOURL=$(json_query "$RECOMMENDED" '[.connectors[] | select(.references) | .refer
 if [[ -z "$NOURL" ]]; then pass "recommended.json: every reference carries a url"
 else fail "recommended.json: reference url" "missing url for:$NOURL"; fi
 
-# D37: the marketplace-relative local hint pointed into <config-root>/plugins/,
+# IH-043: the marketplace-relative local hint pointed into <config-root>/plugins/,
 # which SKILL.md forbids touching. It must not come back.
-if ! grep -q '"local"' "$RECOMMENDED"; then pass "recommended.json: no 'local' path hint (D37)"
+if ! grep -q '"local"' "$RECOMMENDED"; then pass "recommended.json: no 'local' path hint (IH-043)"
 else fail "recommended.json: local hint" "'local' key is back; it pointed into <config-root>/plugins/"; fi
 
 if ! grep -q 'fetched from the URL when it is not' "$RECOMMENDED"; then
-  pass "recommended.json: no path-implies-fetch wording (D37)"
+  pass "recommended.json: no path-implies-fetch wording (IH-042)"
 else fail "recommended.json: fetch wording" "a missing hint path must not imply a network fetch"; fi
 
 # ============================================================ Agnosticism
@@ -114,28 +115,28 @@ else fail "agnosticism: method name leaked" "$HITS"; fi
 
 # ============================================================ SKILL.md method resolution
 if grep -q 'where you actually read it from' "$SKILL"; then
-  pass "SKILL: D35 transparency rule survives"
-else fail "SKILL: D35" "'where you actually read it from' is gone"; fi
+  pass "SKILL: IH-048 transparency rule survives"
+else fail "SKILL: IH-048" "'where you actually read it from' is gone"; fi
 
 if grep -qi 'name first' "$SKILL" && grep -qi 'built-in' "$SKILL"; then
-  pass "SKILL: D37 name-first order with built-in fallback"
-else fail "SKILL: D37" "resolution order not stated as name-first with a built-in fallback"; fi
+  pass "SKILL: IH-041 name-first order with built-in fallback"
+else fail "SKILL: IH-041" "resolution order not stated as name-first with a built-in fallback"; fi
 
 if grep -qi 'matched exactly' "$SKILL" || grep -qi 'never match loosely' "$SKILL"; then
-  pass "SKILL: D37 names matched exactly, never loosely"
-else fail "SKILL: D37 exact match" "no rule against loose name matching"; fi
+  pass "SKILL: IH-044 names matched exactly, never loosely"
+else fail "SKILL: IH-044 exact match" "no rule against loose name matching"; fi
 
 if grep -qi 'offer to settle it' "$SKILL"; then
-  pass "SKILL: D38 one obvious method is taken and offered for settling"
-else fail "SKILL: D38" "the take-say-offer rule is missing from the not-configured branch"; fi
+  pass "SKILL: IH-051 one obvious method is taken and offered for settling"
+else fail "SKILL: IH-051" "the take-say-offer rule is missing from the not-configured branch"; fi
 
 if grep -qi 'The user picks' "$SKILL"; then
-  pass "SKILL: D38 ambiguity still goes to the person"
-else fail "SKILL: D38 ask branch" "'The user picks' is gone; ambiguity must not be decided for them"; fi
+  pass "SKILL: IH-052 ambiguity still goes to the person"
+else fail "SKILL: IH-052 ask branch" "'The user picks' is gone; ambiguity must not be decided for them"; fi
 
 if grep -q 'references/interview-method.md' "$SKILL"; then
-  pass "SKILL: D23 built-in method is named as the last fallback"
-else fail "SKILL: D23" "references/interview-method.md not named in the skill"; fi
+  pass "SKILL: IH-027 built-in method is named as the last fallback"
+else fail "SKILL: IH-027" "references/interview-method.md not named in the skill"; fi
 
 if grep -q 'never read to interpret a method already configured' "$SKILL"; then
   pass "SKILL: recommended.json is choose-time only"
@@ -162,23 +163,27 @@ SLOTS=$(grep -cE '^\| [1-6] \| ' "$CONFIG_REF" || true)
 if [[ "$SLOTS" -eq 6 ]]; then pass "config.md: six config slots still declared"
 else fail "config.md: slots" "expected 6 slot rows, found $SLOTS"; fi
 
-# ============================================================ interviewer prompt (D25 + D33)
-if grep -q '<method>' "$PROMPT_REF"; then pass "interviewer-prompt: <method> slot present (D33)"
+# ============================================================ interviewer prompt (IH-031 + IH-046)
+if grep -q '<method>' "$PROMPT_REF"; then pass "interviewer-prompt: <method> slot present (IH-046)"
 else fail "interviewer-prompt: <method>" "the method slot is gone"; fi
 
 if grep -qi 'inline the method' "$PROMPT_REF" || grep -qi "inline the method's text" "$PROMPT_REF"; then
-  pass "interviewer-prompt: inline package carries the method (D25)"
-else fail "interviewer-prompt: D25" "the inline block still omits the method"; fi
+  pass "interviewer-prompt: inline package carries the method (IH-031)"
+else fail "interviewer-prompt: IH-031" "the inline block still omits the method"; fi
 
-# ============================================================ REQUIREMENTS freshness
-if grep -q 'declares two sources' "$REQS" && grep -q 'interview-method' "$REQS" && grep -q 'session-logs' "$REQS"; then
-  pass "REQUIREMENTS: agnosticism section names the real sources"
+# ============================================================ Requirements (OpenSpec) freshness
+SHAPE="$SPECS/plugin-shape/spec.md"
+if grep -q 'declare two sources' "$SHAPE" && grep -q 'interview-method' "$SHAPE" && grep -q 'session-logs' "$SHAPE"; then
+  pass "REQUIREMENTS: agnosticism requirement names the real sources"
 else fail "REQUIREMENTS: agnosticism" "still stale (one source / transcripts)"; fi
 
-for d in D37 D38; do
-  if grep -q "^\*\*$d\." "$REQS"; then pass "REQUIREMENTS: $d recorded"
-  else fail "REQUIREMENTS: $d" "decision not written down"; fi
+for id in IH-041 IH-043 IH-044 IH-051 IH-052 IH-053; do
+  if grep -q "^### Requirement: $id " "$SPECS/interview-method/spec.md"; then pass "REQUIREMENTS: $id recorded"
+  else fail "REQUIREMENTS: $id" "method-resolution requirement not written down"; fi
 done
+
+if [[ ! -e "$PLUGIN_DIR/REQUIREMENTS.md" ]]; then pass "REQUIREMENTS.md: gone, requirements live only in openspec/"
+else fail "REQUIREMENTS.md" "back in the plugin folder (two sources of truth)"; fi
 
 # ============================================================ Manifest / registry
 if json_valid "$MANIFEST"; then pass "plugin.json: valid JSON"

@@ -6,7 +6,7 @@
 #
 # SCOPE: these are file contracts, not behaviour tests. They cannot run a grill,
 # resolve a real skill, or reproduce the two-copies incident that produced 0.4.1
-# (see D37/D38 in REQUIREMENTS.md). What they do is stop the written contract
+# (see D37/D38 in openspec/specs/interview-handoff/spec.md). What they do is stop the written contract
 # from silently regressing. Behavioural coverage is still owed.
 #
 # Exits 0 on all-pass, 1 on any FAIL. Final line matches the master-runner
@@ -28,7 +28,8 @@ METHOD_REF="$PLUGIN_DIR/references/interview-method.md"
 ANALYSIS_REF="$PLUGIN_DIR/references/analysis.md"
 RECOMMENDED="$PLUGIN_DIR/config/recommended.json"
 MANIFEST="$PLUGIN_DIR/.claude-plugin/plugin.json"
-REQS="$PLUGIN_DIR/REQUIREMENTS.md"
+REQS="$PLUGIN_DIR/openspec/specs/interview-handoff/spec.md"
+REQS_POINTER="$PLUGIN_DIR/REQUIREMENTS.md"
 CMD_RUN="$PLUGIN_DIR/commands/run.md"
 CMD_COLLECT="$PLUGIN_DIR/commands/collect.md"
 CMD_CONFIG="$PLUGIN_DIR/commands/config.md"
@@ -65,7 +66,8 @@ for pair in \
   "analysis.md:$ANALYSIS_REF" \
   "recommended.json:$RECOMMENDED" \
   "plugin.json:$MANIFEST" \
-  "REQUIREMENTS.md:$REQS" \
+  "openspec spec:$REQS" \
+  "REQUIREMENTS.md pointer:$REQS_POINTER" \
   "commands/run.md:$CMD_RUN" \
   "commands/collect.md:$CMD_COLLECT" \
   "commands/config.md:$CMD_CONFIG" ; do
@@ -176,9 +178,22 @@ if grep -q 'declares two sources' "$REQS" && grep -q 'interview-method' "$REQS" 
 else fail "REQUIREMENTS: agnosticism" "still stale (one source / transcripts)"; fi
 
 for d in D37 D38; do
-  if grep -q "^\*\*$d\." "$REQS"; then pass "REQUIREMENTS: $d recorded"
+  if grep -q "^### Requirement: $d · " "$REQS"; then pass "REQUIREMENTS: $d recorded"
   else fail "REQUIREMENTS: $d" "decision not written down"; fi
 done
+
+# Lossless move into OpenSpec: every decision D1..D38 is still a requirement, none twice.
+MISSING=""
+for n in $(seq 1 38); do
+  c=$(grep -c "^### Requirement: D$n · " "$REQS" || true)
+  [[ "$c" -eq 1 ]] || MISSING="$MISSING D$n($c)"
+done
+if [[ -z "$MISSING" ]]; then pass "REQUIREMENTS: D1..D38 each recorded exactly once in the OpenSpec spec"
+else fail "REQUIREMENTS: D1..D38" "missing or duplicated:$MISSING"; fi
+
+if grep -q 'openspec/specs/interview-handoff/spec.md' "$REQS_POINTER" && ! grep -q '^\*\*D[0-9]' "$REQS_POINTER"; then
+  pass "REQUIREMENTS.md: a pointer to the OpenSpec spec, holding no decisions of its own"
+else fail "REQUIREMENTS.md: pointer" "missing the pointer, or decisions written here again (two sources of truth)"; fi
 
 # ============================================================ Manifest / registry
 if json_valid "$MANIFEST"; then pass "plugin.json: valid JSON"

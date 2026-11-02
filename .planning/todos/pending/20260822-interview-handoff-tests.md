@@ -43,6 +43,7 @@ someone else edits it, because these are exactly the invariants a well-meaning e
 
 ## Notes
 
-The owner deferred this deliberately while the plugin was being built. Two open questions from
-`plugins/interview-handoff/REQUIREMENTS.md` are still unanswered and do not block this work: whether the
-plugin ships tests of its own, and whether `REQUIREMENTS.md` stays in the plugin folder.
+The owner deferred this deliberately while the plugin was being built. One open question is still unanswered
+and does not block this work: whether the plugin ships tests of its own, and which. (The other, whether
+`REQUIREMENTS.md` stays in the plugin folder, was closed on 2026-11-03: the requirements moved to
+`openspec/specs/interview-handoff/`.)

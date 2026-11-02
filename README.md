@@ -121,6 +121,8 @@ Not `@SashaMarchuk/claude-plugins` (that's the GitHub source, which `marketplace
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to file an issue, propose a plugin, or open a PR. The quickest way to help: open an [issue](https://github.com/SashaMarchuk/claude-plugins/issues) with a concrete example of what broke or what's missing.
 
+Requirements live in [`openspec/`](openspec/) (one capability folder per plugin under `openspec/specs/<plugin>/`). The OpenSpec CLI is pinned at **1.16.0**: `npx -y @fission-ai/openspec@1.16.0 validate --all --strict`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Use it, fork it, ship your own marketplace from it.

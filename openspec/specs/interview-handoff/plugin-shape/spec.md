@@ -34,11 +34,11 @@ The plugin SHALL live in the `SashaMarchuk/claude-plugins` marketplace and SHALL
 - **THEN** it is the `SashaMarchuk/claude-plugins` marketplace
 
 ### Requirement: IH-058 No connector or method named in code
-No file under `commands/`, `skills/` or `scripts/` SHALL name a connector or a method; the skill SHALL name the sources it needs and read what answers them from the resolved config, and concrete tool and method names SHALL appear only in `config/recommended.json`.
+No file under `commands/`, `skills/` or `scripts/` SHALL name a connector, a method or a requirements format; the skill SHALL name the sources it needs and read what answers them from the resolved config; concrete tool and method names SHALL appear only in `config/recommended.json`, and a requirements format SHALL be named only inside its own file under `references/formats/`.
 
 #### Scenario: Source searched for names
-- **WHEN** the files under `commands/`, `skills/` and `scripts/` are searched for a connector or method name
-- **THEN** none is found, and concrete names appear only in `config/recommended.json`
+- **WHEN** the files under `commands/`, `skills/` and `scripts/` are searched for a connector, method or format name
+- **THEN** none is found; concrete tool and method names appear only in `config/recommended.json`, and a format name only in its own file under `references/formats/`
 
 ### Requirement: IH-059 Recommended sources are advisory
 `config/recommended.json` SHALL declare two sources, `session-logs` and `interview-method`, both with strength `weak`, and SHALL be advisory: read only while a source is being chosen, never a config layer, and never contributing to a resolved value.
@@ -55,11 +55,11 @@ The plugin SHALL NOT run the interview itself.
 - **THEN** the interview is run by a separate interviewer, not by the plugin
 
 ### Requirement: IH-069 Edits only its own output
-The plugin SHALL NOT edit anything except its own package files and the analysis output.
+The plugin SHALL NOT edit anything except its own package files, the analysis output, its own configuration settings, and, with the person's yes on each write, the files of the one requirements-format change the person linked to the topic.
 
 #### Scenario: Files written
 - **WHEN** the plugin runs
-- **THEN** the only files it changes are its package files and the analysis output
+- **THEN** the only files it changes are its package files, the analysis output, its configuration settings, and requirements-format change files the person approved write by write
 
 ### Requirement: IH-070 Never answers for the user
 The plugin SHALL NOT invent an answer and SHALL NOT close a question on the user's behalf.

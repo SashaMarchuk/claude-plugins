@@ -20,11 +20,11 @@ By default the plugin SHALL detect the language from the live conversation with 
 - **THEN** its language is the one detected from the live conversation
 
 ### Requirement: IH-023 Shared and plugin-only settings
-The language to speak to the person in and where session records live SHALL go to the general config (`shared/identity.json`); output location, package composition and the answers-file switch, per artifact language, labels, compression and context source SHALL stay in the plugin's own file (`shared/plugins/interview-handoff.json`).
+The language to speak to the person in and where session records live SHALL go to the general config (`shared/identity.json`); output location, package composition and the answers-file switch, per artifact language, labels, compression, context source and requirements format SHALL stay in the plugin's own file (`shared/plugins/interview-handoff.json`).
 
 #### Scenario: Setting stored
 - **WHEN** the plugin stores a setting
-- **THEN** the speaking language and session-record location go to `shared/identity.json`, and output location, package composition, per artifact language, labels, compression and context source go to `shared/plugins/interview-handoff.json`
+- **THEN** the speaking language and session-record location go to `shared/identity.json`, and output location, package composition, per artifact language, labels, compression, context source and requirements format go to `shared/plugins/interview-handoff.json`
 
 ### Requirement: IH-024 Config levels and placement
 Configuration SHALL use the S&F levels, paths and precedence, and a value SHALL go to the general config when anything other than this plugin can use it, and to the plugin's own file only when nothing but this plugin can use it.

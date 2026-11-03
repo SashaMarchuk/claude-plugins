@@ -115,6 +115,8 @@ An answers file is added only when configured on. Confirm it with the user befor
 
 **The context document is rewritten each round** from the previous round's result, so the user never repeats something already said. It carries links to the earlier rounds' analyses rather than restating them, and those analyses are never rewritten. Where the context document takes its starting material from is asked, not assumed: working it out yourself is one of the options, and the user picks or confirms it.
 
+**A requirements format.** Only when the person has turned `requirements.format` on and the project has that format (`references/config.md`). Otherwise do not mention it. That format's file under `references/formats/` adds one more answer to this question and says what it may bring into the round. What it brings is never the person's decision until they confirm it.
+
 ### 4. Hand it over
 
 Tell the user where the package is and what to paste.
@@ -161,7 +163,17 @@ Show what is still open and every contradiction found. Ask what to do. Offer at 
 
 If the resource answered nothing that was asked, say so and offer the round that was already planned, unchanged. Processing a resource never resets or blocks the flow.
 
-Running `collect` twice on the same resource must not double-count it. Recognise a resource you have already processed and say so instead of analysing it again.
+Running `collect` twice on the same resource must not double-count it. Recognise a resource you have already processed and say so instead of analysing it again. If step 5 never ran for it, offer step 5 alone.
+
+### 5. Carry confirmed decisions into the project's requirements format
+
+Only when the person has turned `requirements.format` on. It is `none` by default, and then this step does not run, nothing is detected and formats are not mentioned. When the chosen template is not in this project, ask explicitly before using it here, as `references/config.md` says; autopilot never answers that question. With `custom`, follow the person's instruction in `requirements.custom`. If the round confirmed nothing the format accepts, skip this step silently.
+
+Each file under `references/formats/` describes one format: how to detect it, which items are eligible, and where each one goes. Follow that file. Three things hold for every format:
+
+- **This step runs last**, after the analysis is written and after anything the person answered right now in the session. It never replaces the analysis and never touches it.
+- **Every write is previewed and made only on the person's yes.** Autopilot never skips the preview: what goes into the requirements is a decision about the subject, not a setting.
+- **Only what the person confirmed is eligible.** Anything still open stays in the next round.
 
 ---
 
@@ -180,7 +192,7 @@ If the user named a single setting in plain words, ask only that one.
 ## Never
 
 - Run the interview yourself.
-- Edit anything except this plugin's package files and its analyses.
+- Edit anything except this plugin's package files, its analyses, and, with the person's yes on each write, the requirements-format files that format's reference allows.
 - Rewrite an analysis of an earlier round.
 - Answer for the user, or record your own restatement as their decision.
 - Name a specific outside tool in this file, in a command, or in a script. Name the source, read the tool from the resolved config.

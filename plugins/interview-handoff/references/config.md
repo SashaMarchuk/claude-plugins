@@ -103,6 +103,11 @@ Everything else. None of it means anything outside this plugin.
 
   "context": {
     "source": null
+  },
+
+  "requirements": {
+    "format": "none",
+    "custom": null
   }
 }
 ```
@@ -122,6 +127,13 @@ Everything else. None of it means anything outside this plugin.
 **`compress.always`** compresses a noisy resource without asking, but only losslessly. Off by default, in which case the person is asked once per resource, and not asked at all when the resource is already clean. The original is kept whole either way.
 
 **`context.source`** is where the context document takes its starting material from. Null means ask, which includes offering to work it out and having the person confirm that choice.
+
+**`requirements.format`** is off by default. With `none`, the plugin writes the analysis only: it does not look for a requirements format, does not ask about one and does not mention one. Many interviews produce no requirements at all, and nothing here may get in their way. The person turns it on in one of two ways:
+
+- **A template**: the name of one file under `references/formats/`, which says how to recognise the format in a project and where confirmed decisions go.
+- **`custom`**: `requirements.custom` holds the person's own instruction, in their words, for what `collect` should do with confirmed decisions. It is followed with the same guards as a template.
+
+When the chosen template is not in the current project, ask explicitly before using it there, naming the format: "This project has no <format>. Use it here?". On a no, write the analysis only and record the no for that project, so it is not asked again. Autopilot never answers this question: whether a project adopts a format is not a setting. Which change a topic writes into is not config either: it lives in the context document.
 
 ## Running with nothing configured
 
@@ -173,7 +185,7 @@ Open with this:
 
 **Close** by naming every value actually written and the exact file each landed in. Name only what was written: answering Q2 with the recommendation means the language is left to detection, nothing is stored for it, and only one file is created. Do not describe a write that did not happen. Then:
 
-> Eight more settings exist: the interview method, where finished session records are found, an answers file for your interviewer, the classification labels, automatic compression, where the context document starts from, whether the interviewer words the questions live or I write them out, and who prepares the recommendation on each item. Each keeps its default until the first moment it matters, and I will ask then. To change any one of them at any time, run the config command and name the setting in your own words.
+> Nine more settings exist: the interview method, where finished session records are found, an answers file for your interviewer, the classification labels, automatic compression, where the context document starts from, whether the interviewer words the questions live or I write them out, who prepares the recommendation on each item, and whether confirmed decisions are also carried into your project's requirements format, such as a spec folder. Each keeps its default until the first moment it matters, and I will ask then. To change any one of them at any time, run the config command and name the setting in your own words.
 
 ### Autopilot
 
@@ -203,6 +215,7 @@ Never asked by the first run. This order is also their re-run order.
 | `context.source` | ask per package | Run step 3 already asks at the first context build. Recorded as standing only when the person says the choice should hold for future rounds. |
 | `questions.style` | `live` | Never asked proactively: the default is the recommended path. Offered when the person says the questions did not suit them, or when their interviewer turns out not to follow a method. Shown and re-asked on a config re-run, like every other stored value. |
 | `questions.recommendedBy` | `plugin` | Never asked proactively. Offered when the person says the recommendations are off, or wants the interviewer to form them live. Shown and re-asked on a config re-run. |
+| `requirements.format` | `none` | Never asked proactively, and never detected. Offered only when the person asks for decisions to go into their requirements, or names a format. Then: a template from `references/formats/` or `custom` with their own instruction. Autopilot never turns it on. |
 
 ### Re-run
 

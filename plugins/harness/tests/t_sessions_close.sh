@@ -1,0 +1,94 @@
+# Graceful close (design "Rebuild" reuse list), S8-27 (close by process ID plus session ID),
+# H-103 (stop only the exact process ID), PR-3 (a gone session is marked closed and no
+# terminal is touched). Acceptance (issue #40): close refuses a session of another run.
+. "$HO_TESTS_DIR/sessions-setup.sh"
+
+# ---- graceful close of a live session --------------------------------------------------
+launch c1 >/dev/null
+launch c2 >/dev/null
+p1=$(rec c1 .pid) p2=$(rec c2 .pid) h1=$(rec c1 .handle)
+assert_exit "Rebuild graceful close: close of a live session succeeds" 0 "$h" session "$run" close c1
+assert_eq "Rebuild graceful close: the session's own process has ended" "yes" "$(wait_gone "$p1" && echo yes || echo no)"
+assert_eq "Rebuild graceful close: the record is marked closed" "closed" "$(rec c1 .status)"
+assert_contains "Rebuild graceful close: the exit command was typed into that session's terminal only" "$(calls)" "send-text $h1 /exit"
+assert_eq "Rebuild graceful close: nothing was typed into another session" "" "$(calls | grep send-text | grep -vF " $h1 " || true)"
+assert_eq "H-103: a similar session of the same run keeps running" "yes" "$(alive "$p2" && echo yes || echo no)"
+assert_eq "H-103: the similar session's record is untouched" "running" "$(rec c2 .status)"
+assert_contains "Rebuild graceful close: the ledger records the close" "$(cat "$run/ledger.jsonl")" '"kind":"session-close"'
+assert_exit "Rebuild graceful close: closing a closed session again is a no-op" 0 "$h" session "$run" close c1
+
+# ---- close uses the backend the session was launched with -----------------------------------
+launch c3 >/dev/null
+h3=$(rec c3 .handle)
+jq '.terminal.app = "iterm2"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+assert_exit "Rebuild graceful close: a session launched on tmux closes after terminal.app changed" 0 "$h" session "$run" close c3
+assert_contains "Rebuild graceful close: the exit command went through tmux" "$(calls)" "tmux send-text $h3 /exit"
+assert_eq "Rebuild graceful close: nothing went to iTerm2" "" "$(calls | grep osascript || true)"
+jq '.terminal.app = "tmux"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+
+# ---- close refuses a session recorded under another run ID ---------------------------------
+run2=$("$h" run new)
+"$h" session "$run2" launch --role worker --name x1 --cwd "$proj/src" --prompt "$base/prompt.md" >/dev/null
+px=$(rec x1 .pid "$run2")
+cp "$run2/sessions/x1.json" "$run/sessions/x1.json"
+before=$(calls | wc -l)
+rc=0; out=$("$h" session "$run" close x1 2>&1) || rc=$?
+assert_eq "S8-27: close of a session recorded under another run ID is refused" "66" "$rc"
+assert_contains "S8-27: the refusal names the other run" "$out" "$(basename "$run2")"
+assert_eq "S8-27: the other run's session keeps running" "yes" "$(alive "$px" && echo yes || echo no)"
+assert_eq "S8-27: nothing is typed or closed for the other run's session" "$before" "$(calls | wc -l)"
+assert_eq "S8-27: the planted record is not changed" "running" "$(rec x1 .status)"
+assert_contains "S8-27: the refusal is recorded in this run's ledger" "$(cat "$run/ledger.jsonl")" '"kind":"session-close-refused"'
+assert_exit "S8-27: a name only another run knows is not found here" 66 "$h" session "$run" close nobody
+
+# ---- PR-3: the process is gone; the record is closed and no terminal is touched ------------
+launch g1 >/dev/null
+pg=$(rec g1 .pid)
+kill "$pg"
+wait_gone "$pg" || true
+before=$(calls | wc -l)
+assert_exit "PR-3: closing a session whose process is gone succeeds" 0 "$h" session "$run" close g1
+assert_eq "PR-3: the record is marked closed" "closed" "$(rec g1 .status)"
+assert_eq "PR-3: no close or typing is sent to any terminal" "$before" "$(calls | wc -l)"
+assert_eq "Rebuild graceful close: a close leaves its flag for the launcher" "yes" "$([ -e "$run/sessions/g1.closing" ] && echo yes || echo no)"
+lines=$(wc -l < "$HO_FAKE_CLAUDE_LOG")
+rc=0; /bin/bash "$(rec g1 .launcher)" 2>/dev/null || rc=$?
+assert_eq "Rebuild graceful close: after a close the launcher starts no further attempt" "0 $lines" "$rc $(wc -l < "$HO_FAKE_CLAUDE_LOG")"
+
+# ---- a recorded PID now held by another process is not that session ------------------------
+launch g2 >/dev/null
+pg2=$(rec g2 .pid)
+sleep 30 &
+other=$!
+printf '%s\n' "$other" >> "$base/extra.pids"
+jq --argjson p "$other" '.pid = $p' "$run/sessions/g2.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/g2.json"
+kill "$pg2"
+wait_gone "$pg2" || true
+before=$(calls | wc -l)
+assert_exit "S8-27: a reused PID without the session ID counts as gone" 0 "$h" session "$run" close g2
+assert_eq "H-103: the unrelated process that holds the PID is untouched" "yes" "$(alive "$other" && echo yes || echo no)"
+assert_eq "S8-27: no terminal call for a session whose identity no longer matches" "$before" "$(calls | wc -l)"
+
+# ---- a busy session that ignores the exit command is left open -----------------------------
+HO_FAKE_CLAUDE_HOLD=ignore launch b1 >/dev/null
+pb=$(rec b1 .pid) hb=$(rec b1 .handle)
+jq '.session.close_timeout_seconds = 1' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+assert_exit "Rebuild graceful close: a session still busy at the timeout is reported" 1 "$h" session "$run" close b1
+assert_eq "Rebuild graceful close: the busy session is left open, never forced" "yes" "$(alive "$pb" && echo yes || echo no)"
+assert_eq "Rebuild graceful close: the busy session stays recorded as running" "running" "$(rec b1 .status)"
+assert_eq "Rebuild graceful close: the busy session's terminal is not closed" "" "$(calls | grep -F "close $hb" || true)"
+assert_contains "Rebuild graceful close: the timeout is recorded in the ledger" "$(cat "$run/ledger.jsonl")" '"kind":"session-close-timeout"'
+
+# ---- records that cannot be trusted are not closed ---------------------------------------
+launch k1 >/dev/null
+pk=$(rec k1 .pid)
+jq '.status = "launching"' "$run/sessions/k1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/k1.json"
+assert_exit "Rebuild graceful close: a session still launching is not closed" 65 "$h" session "$run" close k1
+jq '.status = "running" | .session_id = ""' "$run/sessions/k1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/k1.json"
+assert_exit "S8-27: a record without a session ID is refused, not marked closed" 66 "$h" session "$run" close k1
+assert_eq "S8-27: the session behind an unusable record keeps running" "yes" "$(alive "$pk" && echo yes || echo no)"
+assert_eq "S8-27: an unusable record is not marked closed" "running" "$(rec k1 .status)"
+
+# ---- H-103: the engine has no pattern kill -------------------------------------------------
+# The bracketed pattern keeps this file itself out of the issue's grep for pattern kills.
+assert_eq "H-103: engine code holds no name-pattern kill or process search" "" "$(grep -rnE 'p[k]ill|kill[a]ll|p[g]rep' "$HO_PLUGIN_ROOT/bin" "$HO_PLUGIN_ROOT/lib" "$HO_PLUGIN_ROOT/runtimes" || true)"

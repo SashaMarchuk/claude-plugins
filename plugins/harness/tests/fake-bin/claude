@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Fake claude for tests: records argv, prints canned output, exits with a set code.
+# Opt-in hold (for session tests): with HO_FAKE_CLAUDE_HOLD=exit it stays alive until a line
+# "/exit" reaches its fake terminal input; with HO_FAKE_CLAUDE_HOLD=ignore it ignores input.
+# Either way it ends after HO_FAKE_CLAUDE_HOLD_MAX seconds (default 20).
+# HO_FAKE_CLAUDE_FAIL_MODEL=<m>: exit 1 at once when started with "--model <m>".
+# HO_FAKE_CLAUDE_SHOW_ENV=<NAME>: also log "env NAME=<value>".
 set -euo pipefail
 if [ "${1:-}" = "--version" ]; then
   echo "0.0.0 (fake claude)"
@@ -11,7 +16,29 @@ for a in "$@"; do
   if [ -z "$line" ]; then line=$a; else line="$line	$a"; fi
 done
 printf '%s\n' "$line" >> "$log"
+if [ -n "${HO_FAKE_CLAUDE_SHOW_ENV:-}" ]; then
+  printf 'env %s=%s\n' "$HO_FAKE_CLAUDE_SHOW_ENV" "$(printenv "$HO_FAKE_CLAUDE_SHOW_ENV" || true)" >> "$log"
+fi
+if [ -n "${HO_FAKE_CLAUDE_FAIL_MODEL:-}" ]; then
+  prev=""
+  for a in "$@"; do
+    [ "$prev" = --model ] && [ "$a" = "$HO_FAKE_CLAUDE_FAIL_MODEL" ] && exit 1
+    prev=$a
+  done
+fi
 if [ -n "${HO_FAKE_CLAUDE_STDOUT:-}" ]; then
   printf '%s\n' "$HO_FAKE_CLAUDE_STDOUT"
 fi
+case ${HO_FAKE_CLAUDE_HOLD:-} in
+  exit | ignore)
+    in="${HO_FAKE_TERM_DIR:-$HOME/fake-term}/$(printf '%s' "${HO_FAKE_TERM_HANDLE:-none}" | tr -c 'A-Za-z0-9-' '_').in"
+    end=$(( $(date +%s) + ${HO_FAKE_CLAUDE_HOLD_MAX:-20} ))
+    while [ "$(date +%s)" -lt "$end" ]; do
+      if [ "$HO_FAKE_CLAUDE_HOLD" = exit ] && [ -f "$in" ] && grep -qx '/exit' "$in"; then
+        exit 0
+      fi
+      sleep 0.1
+    done
+    ;;
+esac
 exit "${HO_FAKE_CLAUDE_EXIT:-0}"

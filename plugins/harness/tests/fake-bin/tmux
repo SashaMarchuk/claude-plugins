@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Fake tmux for terminal adapter tests. Implements only the calls the tmux backend makes;
+# any other call exits 2. See fake-term-lib.sh for the state it keeps.
+set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/fake-term-lib.sh"
+# The harness pins its own server; anything else (the user's default server) is refused here.
+[ "${1:-}" = -L ] && [ "${2:-}" = ho-harness ] || exit 2
+shift 2
+op=${1:-}
+[ $# -gt 0 ] && shift
+case $op in
+  -V) echo "tmux 0.0-fake" ;;
+  has-session)
+    [ "${1:-}" = -t ] || exit 2
+    grep -qxF -- "$2" "$ft_dir/sessions" 2>/dev/null
+    ;;
+  new-session | new-window)
+    ses="" fmt="" cmd=""
+    while [ $# -gt 0 ]; do
+      case $1 in
+        -d) shift ;;
+        -s | -t) ses=$2; shift 2 ;;
+        -n) shift 2 ;;
+        -P) shift ;;
+        -F) fmt=$2; shift 2 ;;
+        -*) exit 2 ;;
+        *) cmd=$1; shift ;;
+      esac
+    done
+    [ "$fmt" = '#{pane_id}' ] && [ -n "$cmd" ] && [ -n "$ses" ] || exit 2
+    if [ "$op" = new-session ]; then
+      printf '%s\n' "$ses" >> "$ft_dir/sessions"
+    else
+      grep -qxF -- "$ses" "$ft_dir/sessions" 2>/dev/null || { echo "can't find session: $ses" >&2; exit 1; }
+    fi
+    h="%$(ft_next)"
+    printf '%s\n' "$ses" > "$(ft_file "$h").session"
+    ft_log "tmux $op $h"
+    ft_start "$h" "$cmd"
+    printf '%s\n' "$h"
+    ;;
+  send-keys)
+    [ "${1:-}" = -t ] || exit 2
+    h=$2; shift 2
+    ft_known "$h" || { echo "can't find pane: $h" >&2; exit 1; }
+    f=$(ft_file "$h")
+    if [ "${1:-}" = -l ]; then
+      ft_log "tmux send-text $h $2"
+      printf '%s' "$2" >> "$f.in"
+    else
+      case ${1:-} in
+        Enter) ft_log "tmux key $h Enter"; printf '\n' >> "$f.in" ;;
+        Escape) ft_log "tmux key $h Escape"; printf '<ESC>' >> "$f.in" ;;
+        *) exit 2 ;;
+      esac
+    fi
+    ;;
+  display-message)
+    [ "${1:-}" = -p ] && [ "${2:-}" = -t ] && [ "${4:-}" = '#{session_name}' ] || exit 2
+    ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
+    cat "$(ft_file "$3").session"
+    ;;
+  capture-pane)
+    [ "${1:-}" = -p ] && [ "${2:-}" = -t ] || exit 2
+    ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
+    ft_log "tmux capture $3"
+    cat "$(ft_file "$3").out"
+    ;;
+  kill-pane)
+    [ "${1:-}" = -t ] || exit 2
+    ft_known "$2" || { echo "can't find pane: $2" >&2; exit 1; }
+    ft_log "tmux close $2"
+    : > "$(ft_file "$2").closed"
+    ;;
+  *) exit 2 ;;
+esac

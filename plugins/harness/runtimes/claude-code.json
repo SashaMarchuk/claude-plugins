@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "_comment": "Launch data for one runtime (design D37-RUNTIME-1: engine code holds no runtime name). Only the fields the session launcher and graceful close need; full runtime profiles come later (tasks.md 19.1). In argv lists, {session_id}, {model} and {title} are filled in by the engine; {prompt} becomes the prompt file's text when the session starts.",
+  "command": "claude",
+  "argv": {
+    "new": ["--session-id", "{session_id}"],
+    "resume": ["--resume", "{session_id}"],
+    "model": ["--model", "{model}"],
+    "title": ["-n", "{title}"],
+    "prompt": ["{prompt}"]
+  },
+  "permissions": {
+    "bypass": ["--dangerously-skip-permissions"],
+    "auto": ["--permission-mode", "auto"],
+    "acceptEdits": ["--permission-mode", "acceptEdits"],
+    "dontAsk": ["--permission-mode", "dontAsk"]
+  },
+  "exit_command": "/exit"
+}

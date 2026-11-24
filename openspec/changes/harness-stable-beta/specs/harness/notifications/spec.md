@@ -29,10 +29,10 @@ Source: interview 2026-11-24 R28.4, R29.3
 - **THEN** the question goes to the tracker and to Telegram only
 
 ### Requirement: H-117 Replies are watched and validated for sufficiency
-The harness SHALL watch every channel it sent a question to for a reply, and check whether a reply answers the question well enough. If it does, and the author passes the access rules (H-033, H-035), the ticket continues. If not, the harness SHALL ask again: in the tracker first, mirrored to the selected channels.
+The harness SHALL watch every channel it sent a question to for a reply, and check whether a reply answers the question well enough. If it does, and the author passes the access rules (H-033, H-035), the ticket continues. If not, the harness SHALL ask again: in the tracker first, mirrored to the selected channels. A setting SHALL limit the follow-ups.
 
 Source: interview 2026-11-24 R28.5, R29.1, R29.3; access rules R11.2, R11.3, R29.7
-OPEN: see design.md OPEN-NOTIFICATIONS-1
+Decided: design.md D37-NOTIFICATIONS-4
 
 #### Scenario: Sufficient reply from a writer
 - **WHEN** a reply in Slack fully answers the question
@@ -49,6 +49,11 @@ OPEN: see design.md OPEN-NOTIFICATIONS-1
 - **WHEN** a reply in Telegram answers only part of the question
 - **THEN** the harness posts a follow-up question to the tracker and mirrors it to the selected channels
 
+#### Scenario: The follow-up rounds are used up
+- **WHEN** the round limit is 3 and the reply to the third follow-up question is still not enough
+- **THEN** the harness asks no further question and posts one tracker comment that lists what is still missing
+- **AND** the ticket stays blocked until a writer returns it to work
+
 ### Requirement: H-118 Channel answers are written back to the tracker
 The harness SHALL write every answer that it accepts from a channel into the configured tracker. The tracker stays the source of truth, and everything else reads the answer from there (H-027). The harness MUST act on the answer as it is recorded in the tracker, not only as it exists in the channel.
 
@@ -63,7 +68,7 @@ Source: interview 2026-11-24 R28.2, R29.2, R29.4
 If answers to the same question arrive through more than one channel, the harness SHALL record only the first answer it reads. The harness MUST NOT apply any later answer. The harness SHALL tell each later sender that the answers are already recorded, give a link to the recorded answers, and say that changes must be made directly in the tracker.
 
 Source: interview 2026-11-24 R11.5, R29.5
-OPEN: see design.md OPEN-NOTIFICATIONS-4
+Decided: design.md D37-NOTIFICATIONS-5
 
 #### Scenario: Answers arrive in two channels
 - **WHEN** the harness reads an answer in Slack and, a minute later, reads another answer to the same question in Telegram
@@ -71,12 +76,16 @@ OPEN: see design.md OPEN-NOTIFICATIONS-4
 - **AND** the harness does not apply the Telegram answer
 - **AND** the Telegram sender gets a note that answers are already recorded, with a link to them, and is told to make changes in the tracker
 
+#### Scenario: First answer from an unmapped author, later answer from a writer
+- **WHEN** the first answer read comes from an author who cannot be mapped or has no write access, and a mapped writer later answers the same question in another channel
+- **THEN** the first answer stays recorded, is not applied, and the ticket is in needs-review (H-035)
+- **AND** the writer's channel answer is not applied, and the writer gets the link and is told to confirm or change the answer in the tracker (design.md D37-NOTIFICATIONS-5)
+
 ### Requirement: H-120 Channels announce run events and act as a fallback contact path
-The harness SHALL announce run events, such as a ticket taken into work or done, in the active channels. The channels SHALL also be a fallback (plan B) contact path, polled on an interval for replies. Event set and per-event switches: agent decision, design.md S8-28a. Tickets from channels: S8-28b.
+The harness SHALL announce run events, such as a ticket taken into work or done, in the active channels. The channels SHALL also be a fallback (plan B) contact path, polled on an interval for replies. Event set and per-event switches: agent decision, design.md S8-28a. Channels do not create tickets in this beta: D37-NOTIFICATIONS-2.
 
 Source: interview 2026-11-24 R28.6, R28.8; delegated decisions S8-28a, S8-28b
-OPEN: see design.md OPEN-NOTIFICATIONS-3
-OPEN: see design.md OPEN-NOTIFICATIONS-5
+Decided: design.md D37-NOTIFICATIONS-2, D37-NOTIFICATIONS-6
 
 #### Scenario: Fallback contact returns with questions
 - **WHEN** the session polls the channels and finds a reply
@@ -84,7 +93,7 @@ OPEN: see design.md OPEN-NOTIFICATIONS-5
 
 #### Scenario: A channel message asks for a new task
 - **WHEN** a user sends a new task in a channel
-- **THEN** no ticket is created, because whether channels may create tickets is not decided (delegated decision S8-28b, needs owner)
+- **THEN** no ticket is created and no work starts, because ticket intake through a channel is not in this beta (design.md D37-NOTIFICATIONS-2)
 
 #### Scenario: Ticket done is announced
 - **WHEN** a ticket reaches done and the "ticket done" event is switched on
@@ -112,8 +121,8 @@ Source: interview 2026-11-24 R28.2, R28.7, R29.2; delegated decision S8-28a
 - **THEN** the message still exists in the tracker, which stays the source of truth
 
 ### Requirement: H-122 Channel identity data maps authors to tracker access
-A channel bot SHALL be configured with identity data, such as an email address, where the channel needs it (the owner's example: a Telegram bot). The harness SHALL use it to map a channel author, by the sender ID the channel authenticates, to a tracker account and its access level (D37-NOTIFICATIONS-1). Slack, Gmail, and telling several people on one bot apart are open. Trust rules: H-033, H-035.
-OPEN: see design.md OPEN-NOTIFICATIONS-2
+A channel bot SHALL be configured with identity data, such as an email address, where the channel needs it (the owner's example: a Telegram bot). The harness SHALL use it to map a channel author, by the sender ID the channel authenticates, to a tracker account and its access level (D37-NOTIFICATIONS-1). Slack and Gmail map the same way (D37-NOTIFICATIONS-3). Trust rules: H-033, H-035.
+Decided: design.md D37-NOTIFICATIONS-3
 
 Source: interview 2026-11-24 R29.9
 

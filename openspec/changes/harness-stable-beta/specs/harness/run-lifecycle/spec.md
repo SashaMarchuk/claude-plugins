@@ -31,7 +31,7 @@ Source: interview 2026-11-24 R3.1, R3.3, R3.4
 
 ### Requirement: H-081 Worker sessions close when their task ends, and only what this run started is closed
 A worker session SHALL close automatically when its task ends; this is the default rule for all worker sessions, not a rule of standby only. The harness SHALL close only the sessions and processes that the current run started. It SHALL target each process by its exact process ID, as in H-103 (agent decision, design.md S8-27).
-OPEN: see design.md OPEN-22
+Decided: design.md D37-LIFECYCLE-3 (orchestrator and context watcher)
 Source: interview 2026-11-24 R3.6, R20.2, R27.5; S8-27; CTX-exact-pid
 
 #### Scenario: Worker finishes its task
@@ -41,6 +41,10 @@ Source: interview 2026-11-24 R3.6, R20.2, R27.5; S8-27; CTX-exact-pid
 #### Scenario: Session from another run or from the owner
 - **WHEN** a terminal session is open that the current run did not start
 - **THEN** the harness leaves it open
+
+#### Scenario: Worker finishes while the run goes on
+- **WHEN** a worker session closes because its task ended and the run is still active
+- **THEN** the orchestrator and the context watcher stay open
 
 ### Requirement: H-082 Workers stop and the orchestrator waits when only tickets on review remain
 When every remaining ticket waits on review, the harness SHALL stop the worker sessions; the orchestrator and the context watcher SHALL stay and wait for a ticket to change. When standby is off and only human-blocked tickets remain (unanswered by the owner), this SHALL be configurable through `on_only_human_blocked`, default `wait` (delegated agent decision, design.md S8-20a).
@@ -130,7 +134,7 @@ Source: interview 2026-11-24 R20.7, R20.8; D25; S8-20b; S8-27; CTX-exact-pid
 
 ### Requirement: H-088 Automatic recovery after sleep, failure or reboot; asking first is a setting
 After the laptop sleeps, a failure occurs, or the machine reboots, the harness SHALL resume the last run's sessions and continue where it stopped. By default it SHALL do this without asking. A setting SHALL let the owner require permission first. After a reboot, recovery begins at the next harness start (agent decision, design.md D32).
-OPEN: see design.md OPEN-23, OPEN-27
+Decided: design.md D37-LIFECYCLE-1, D37-LIFECYCLE-2
 Source: interview 2026-11-24 R20.10 (confirmed restatement), R20.11; D32
 
 #### Scenario: Wake after sleep, default setting
@@ -144,3 +148,7 @@ Source: interview 2026-11-24 R20.10 (confirmed restatement), R20.11; D32
 #### Scenario: After a reboot (design.md D32)
 - **WHEN** the machine reboots during a run and the default setting applies
 - **THEN** nothing starts by itself, and the next `/harness:run` or `/harness:resume` resumes the last run without asking
+
+#### Scenario: A session of the last run is dead (design.md D37-LIFECYCLE-1)
+- **WHEN** recovery finds a session of the last run that is no longer alive
+- **THEN** the harness resumes that session by its ID once if the design.md D14 conditions hold, and otherwise starts a new session with the context pack

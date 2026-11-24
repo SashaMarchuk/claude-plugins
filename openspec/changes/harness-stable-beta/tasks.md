@@ -109,8 +109,8 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 ## 20. Distribution and setup
 
-- [ ] 20.1 `/harness:config` and `/harness:project-setup`, with `onboard` and `init` as one-release aliases
-- [ ] 20.2 Blind naming test for the two skill names (D33)
+- [ ] 20.1 `/harness:config` and `/harness:ai-ready`, with `onboard` and `init` as one-release aliases (D33a)
+- [ ] 20.2 Blind naming test for the two skill names (D33; result in D33a)
 - [ ] 20.3 Short install guide, "tested with" list, newcomer section and config-folder README
 
 ## 21. Evaluation programme

@@ -262,7 +262,7 @@ Source: interview 2026-11-24 R2.7, R9.5
 ### Requirement: H-052 Permission prompts are not answered by default; answering is a setting
 By default, the harness SHALL NOT answer permission prompts in its sessions. A setting MUST be able to allow answers. For example, a model MAY analyse the prompt, accept it if it judges it acceptable, and otherwise escalate it to a human.
 Source: interview 2026-11-24 R26.3
-OPEN: see design.md OPEN-8
+Decided: design.md D37-AUTONOMY-1, D37-AUTONOMY-2
 
 #### Scenario: Default behaviour
 - **WHEN** a session shows a permission prompt and the setting is off

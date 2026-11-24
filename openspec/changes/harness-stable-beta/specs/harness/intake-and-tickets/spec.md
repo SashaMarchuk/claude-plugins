@@ -113,10 +113,10 @@ Source: interview 2026-11-24 R4.3, R4.5
 - **THEN** the harness treats the person as read-only
 
 ### Requirement: H-010 External tracker people matched to the code host by email
-For an external tracker such as ClickUp, the harness SHALL match the person who set the trigger to a code host account by email, and SHALL use that account's access level.
+For an external tracker such as ClickUp, the harness SHALL match the person who set the trigger to a code host account by email, and SHALL use that account's access level. The email comes from the tracker, and the identity map in user-level config links it to the code host account (design.md D37-INTAKE-8).
 
 Source: interview 2026-11-24 R4.5
-OPEN: see design.md OPEN-11
+Decided: design.md D37-INTAKE-8
 
 #### Scenario: A ClickUp user with a matching email
 - **WHEN** a ClickUp user sets the ready status and the user's email matches a code host account with write access
@@ -172,11 +172,11 @@ Source: interview 2026-11-24 R5.2; D6
 At pickup, by default, the AI SHALL write a structured working version of the ticket and infer missing points from the text where it can (agent decision on the owner's delegation, design.md D8). Where it goes is the `tickets.normalize` setting; rewriting the description, as the owner suggested, is one option.
 
 Source: interview 2026-11-24 R5.3, R5.5 (owner's suggestion, validated as agent decision D8)
-OPEN: see design.md OPEN-INTAKE-4
+Decided: design.md D37-INTAKE-4
 
 #### Scenario: Structured version posted as a comment
 - **WHEN** the AI writes the structured version and `tickets.normalize` is not set
-- **THEN** per design.md D8 it keeps the description and posts the structured version as a "Working brief" comment; this departs from the owner's suggestion, so it needs his ratification
+- **THEN** per design.md D8 it keeps the description as picked up and posts the structured version as a new "Working brief" comment
 
 #### Scenario: The description is rewritten
 - **WHEN** `tickets.normalize` is set to `body`
@@ -203,16 +203,26 @@ Source: interview 2026-11-24 R5.6
 If a ticket is marked ready but is not ready, the harness SHALL NOT start work on it, and SHALL change its status so that it no longer counts as ready. The reaction SHALL be configurable and SHALL depend on the autonomy level. The handling MUST stay simple. The default reaction and how it varies are an agent decision on the owner's delegation (design.md D7).
 
 Source: interview 2026-11-24 R5.7; D7
-OPEN: see design.md OPEN-INTAKE-5
+Decided: design.md D37-INTAKE-5
 
 #### Scenario: A ready ticket fails the readiness check
-- **WHEN** a ticket with the ready label fails the readiness check
+- **WHEN** a ticket with the ready label fails the readiness check and the reaction in force is `ask`
 - **THEN** the harness does not start work on it
-- **AND** the ticket leaves the ready state with the default reaction from design.md D7
+- **AND** the ticket goes to `blocked` with numbered questions, and the next ticket is taken
 
 #### Scenario: A project chooses another reaction
 - **WHEN** the project config sets a different reaction for tickets that are not ready
 - **THEN** the harness uses that reaction
+
+#### Scenario: The reaction is not set under the full profile
+- **WHEN** the reaction is not set in config and the autonomy profile is `full`
+- **THEN** the harness uses `assume`: the AI fills the gaps it can and lists every assumption in the pickup comment
+- **AND** a ticket with every gap filled counts as ready and work starts
+- **AND** a ticket with a question only a human can answer does not start and goes to `blocked` with numbered questions
+
+#### Scenario: The reaction is not set under another profile
+- **WHEN** the reaction is not set in config and the autonomy profile is not `full`
+- **THEN** the harness uses `ask`: the ticket goes to `blocked` with numbered questions and the next ticket is taken
 
 ### Requirement: H-017 Unique local ticket numbers under concurrent adds
 The local ticket backend SHALL give every new ticket a number that no other ticket has. This MUST hold when two or more tickets are added at the same time. The fix that already exists as a hand patch SHALL move into the plugin code.
@@ -242,7 +252,7 @@ Source: decided context CTX-untrusted-fence (already in the harness and staying;
 While work on a ticket is in progress, the harness SHALL watch the ticket for changes. Changes SHALL be accepted only through comments, so the harness always knows who added what. The watch mechanism is an agent decision on the owner's delegation; see design.md D9.
 
 Source: interview 2026-11-24 R6.1, R6.2; D9
-OPEN: see design.md OPEN-INTAKE-3
+Decided: design.md D37-INTAKE-7
 
 #### Scenario: A change arrives as a comment
 - **WHEN** a person adds a comment with a change to a ticket that is in progress
@@ -281,7 +291,7 @@ Source: interview 2026-11-24 R6.5, R6.6; D9; D37-INTAKE-2
 The reaction to ticket changes SHALL be configurable at launch, so people get the result they expect. The author of a change SHALL also be able to choose its reaction. Supported reactions SHALL include a new ticket once work is finished or past a set stage, and a return to execution from any status, including the last. Default: agent decision on the owner's delegation, design.md D9.
 
 Source: interview 2026-11-24 R6.7, R6.8; D9
-OPEN: see design.md OPEN-INTAKE-2
+Decided: design.md D37-INTAKE-6
 
 #### Scenario: A change arrives in a late step
 - **WHEN** a writer comments a change while the ticket is in its last execution step and the configured reaction allows it

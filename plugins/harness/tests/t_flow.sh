@@ -13,7 +13,7 @@ set_args() {
   printf '%s\0' --set RUN_ID 20261125-000000-abcdef --set TICKET_ID 41 \
     --set BRANCH lane/t8 --set BASE trunk --set WORKDIR /work/lane \
     --set STEP_RESULT_FILE /run/step-result --set VERDICT_FILE /run/verdict \
-    --file TICKET_TEXT ticket.txt
+    --file TICKET_TEXT "${TICKET_FILE:-ticket.txt}"
 }
 render() { set_args | xargs -0 "$h" flow render "$@"; }
 
@@ -68,9 +68,9 @@ assert_eq "H-064: shipped templates are plain ASCII" "" \
 weird='quote @LANE@ and {{RUN_ID}} & \1 \\ $(id) `id` %s
 second line @STEP_ID@'
 printf '%s' "$weird" > weird.txt
-out=$(set_args | xargs -0 "$h" flow render basic validator --file TICKET_TEXT weird.txt 2>&1 || true)
+out=$(TICKET_FILE=weird.txt set_args | xargs -0 "$h" flow render basic validator 2>&1 || true)
 assert_contains "Field note D3: a value that quotes placeholders goes in byte for byte" "$out" "$weird"
-rc=0; set_args | xargs -0 "$h" flow render basic validator --file TICKET_TEXT weird.txt >/dev/null 2>&1 || rc=$?
+rc=0; TICKET_FILE=weird.txt set_args | xargs -0 "$h" flow render basic validator >/dev/null 2>&1 || rc=$?
 assert_eq "Field note D3: a value that quotes placeholders does not block the render" "0" "$rc"
 
 # A template token with no value fails the render, names the token and prints nothing.

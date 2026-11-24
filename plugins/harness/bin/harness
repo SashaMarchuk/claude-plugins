@@ -24,6 +24,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/config.sh"
 # shellcheck source=../lib/run.sh
 . "$HO_ROOT/lib/run.sh"
+# shellcheck source=../lib/flow.sh
+. "$HO_ROOT/lib/flow.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -37,6 +39,7 @@ verbs:
   config     config get <jq-path> [default] | config get --int <jq-path> <default> | config check
   run        run new: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
+  flow       flow profiles: list | check <flow> | steps <flow> | render <flow> <role> ...
 USAGE
 }
 
@@ -51,6 +54,7 @@ case $verb in
   config)   ho_config_main "$@" ;;
   run)      [ "${1-}" = new ] || { ho_usage >&2; exit 64; }; ho_run_new ;;
   state)    ho_state_main "$@" ;;
+  flow)     ho_flow_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

@@ -5,7 +5,7 @@ This branch holds the stable-beta rebuild of the harness plugin. The 0.6.0 engin
 ## Engine entry point
 
 The engine has one entry script: `bin/harness <verb> [args]`.
-Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state` and `tickets`.
+Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state`, `tickets` and `flow`.
 Run `bin/harness help` for the list.
 
 ## Ticket queue
@@ -31,6 +31,16 @@ It never reads any `HARNESS_*` variable from the 0.6.0 engine.
 - **Run ledger.** `ledger.jsonl` in the run folder holds decisions, owner actions, stops, resumes and marker events, one JSON line each. Lines are only appended, under a lock, and every line carries the run ID.
 - **Markers.** Each marker file holds the run ID. A marker without this run's ID is ignored and logged once as foreign.
 - **STOP file.** `<project>/.harness/STOP` still works. It is recorded in the ledger as the default soft stop. A new run and `state ... resume` are refused while it exists.
+
+## Flow profiles
+
+A flow profile is a ready-made flow data file. Two ship: `gsd` and `basic`. Each lives in `flows/<name>/` as `flow.json` plus one prompt file per step. Both give the default cycle (H-064): classification, discussion (grilling) only when classification finds open questions, planning, execution, code review, verification, UI check and shipping, in that order. `basic` writes every step out as a plain prompt and needs no flow system. `gsd` runs the middle steps through GSD, which must be installed; classification and shipping stay harness steps.
+
+- `bin/harness flow list` prints the shipped flows. `flow check <flow>` checks the flow file, every step prompt and the role prompts. `flow steps <flow>` prints the ordered steps, one per line: number, id, `always` or `questions`, title.
+- `bin/harness flow render <flow> <role> [--step <id>] [--set NAME VALUE]... [--file NAME PATH]...` prints a role prompt. The roles are `worker` (one step; needs `--step`) and `validator`. The role prompts are in `prompts/` and are the same for every flow.
+- Placeholders have the form `@NAME@`. The engine fills `FLOW_NAME`, `FLOW_STEP_LIST`, `STEP_ID`, `STEP_TITLE` and `STEP_TEXT`. The caller sets `RUN_ID`, `TICKET_ID`, `TICKET_TEXT`, `BRANCH`, `BASE`, `WORKDIR`, `STEP_RESULT_FILE` and `VERDICT_FILE`. A placeholder with no value fails the render (exit 65), and nothing is printed. Values are inserted as they are and never scanned again, so ticket text that quotes a placeholder is safe.
+- There is no default flow. A missing or broken flow stops with exit 78 and names the flow. Engine code (`bin/`, `lib/`, `prompts/`) names no flow system; such names live only in flow data.
+- Selecting a flow, editing its steps and naming a step's runner come later (H-065 to H-068). `HO_FLOWS_DIR` points at another flows folder.
 
 ## Tests
 

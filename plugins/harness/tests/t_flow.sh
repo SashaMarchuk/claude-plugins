@@ -128,6 +128,29 @@ check_bad "an engine placeholder in a step" '.' 'printf "@STEP_TEXT@\n" > flows/
 rm -rf flows/t; mk t "$good"; printf 'not json' > flows/t/flow.json
 rc=0; "$h" flow steps t >/dev/null 2>&1 || rc=$?
 assert_eq "H-068: an unreadable flow file stops (exit 78)" "78" "$rc"
+# Review findings on the first T8 draft, each shown failing on that draft (the large value
+# fails there only where one argument is limited, as on Linux; it guards the temp-file path).
+mkdir -p outside && printf 'SECRET outside the flow\n' > outside/a.md
+check_bad "a step prompt behind a linked folder" '.steps[0].prompt = "linked/a.md"' 'ln -s "$PWD/outside" flows/t/linked'
+check_bad "a newline in a title" '.steps[0].title = "A\n9\tevil\tquestions\tX"'
+check_bad "a step id that ends in a newline" '.steps[1].id = "a\n"'
+rm -rf flows/t; mk t "$good"; mv flows/t outside/t2; ln -s "$PWD/outside/t2" flows/t
+assert_eq "H-064: a linked flow folder is read from its real place" "flow t OK" "$("$h" flow check t 2>&1)"
+rm -f flows/t; mk t "$good"
+printf 'Step @STEP_ID@ is @STEP_TITLE@; quoted: @RUN_ID@.\n' > flows/t/steps/a.md
+rc=0; out=$("$h" flow render t worker --step a --set RUN_ID '@STEP_TEXT@ @TICKET_ID@ {{x}}' --set TICKET_ID 1 \
+  --set WORKDIR /w --set BRANCH b --set STEP_RESULT_FILE /r --set TICKET_TEXT t 2>&1) || rc=$?
+assert_eq "H-064: a step prompt may use its own step id and title" "0" "$rc"
+assert_contains "Field note D3: a worker step value goes in literally, in both render passes" "$out" \
+  "Step a is A; quoted: @STEP_TEXT@ @TICKET_ID@ {{x}}."
+awk 'BEGIN { for (i = 0; i < 40000; i++) printf "0123456789abcdefghijklmnopqrstuvwxyz\n" }' > big.txt
+rc=0; out=$(TICKET_FILE=big.txt set_args | HO_FLOWS_DIR= xargs -0 "$h" flow render basic validator --set RUN_ID late 2>&1) || rc=$?
+assert_eq "H-064: a 1.4 MB ticket value followed by --set renders" "0" "$rc"
+assert_contains "H-064: the large value arrives whole" "$out" "$(tail -n 1 big.txt)"
+printf 'ab\377\376cd' > bad.txt
+rc=0; out=$(HO_FLOWS_DIR= "$h" flow render basic validator --set RUN_ID r --file TICKET_TEXT bad.txt 2>&1) || rc=$?
+assert_eq "H-064: a value that is not UTF-8 is refused, not changed (exit 65)" "65" "$rc"
+assert_contains "H-064: the refusal names the value" "$out" "TICKET_TEXT"
 unset HO_FLOWS_DIR
 
 # D37-FLOW-1: engine code holds no flow-system name, in text or in file names. The one

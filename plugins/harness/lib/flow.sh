@@ -12,8 +12,10 @@
 #
 # Placeholders are @NAME@ (upper-case letters, digits, underscores). Rendering is one jq
 # pass over the tokens of the template: each value is inserted literally and never scanned
-# again, so a value may hold any text, placeholders included (field note D3). A template
-# token with no value fails the render and nothing is printed.
+# again, so a value may hold any UTF-8 text, placeholders included (field note D3). A value
+# that is not valid UTF-8 is refused (exit 65), never changed. A template token with no
+# value fails the render and nothing is printed. Values reach jq through files, never as
+# one big argument.
 #
 # Settings: HO_FLOWS_DIR (default <plugin>/flows). Requires lib/common.sh.
 
@@ -53,11 +55,14 @@ HO_JQ_TOKENS='[match("@[A-Z0-9_]+@"; "g") | .string[1:-1]]'
 # ho_flow_load <name>: check the whole flow profile; set HO_FLOW_DIR and HO_FLOW_JSON.
 # Any problem stops with exit 78 and names the flow. It never falls back to another flow.
 ho_flow_load() {
-  local name=$1 dir f why step_tokens allowed t tok
+  local name=$1 dir f why step_tokens allowed t tok real
   ho_flow_name_ok "$name"
   dir="$(ho_flows_dir)/$name"
+  [ -f "$dir/flow.json" ] || ho_flow_fail "$name" "flow file not found: $dir/flow.json"
+  # Work on the physical folder, so a linked folder or file cannot lead outside it.
+  dir=$(cd -P "$dir" && pwd -P) || ho_flow_fail "$name" "cannot open the flow folder"
   f="$dir/flow.json"
-  [ -f "$f" ] || ho_flow_fail "$name" "flow file not found: $f"
+  [ ! -L "$f" ] || ho_flow_fail "$name" "flow file is a link: $f"
   why=$(jq -r --arg name "$name" --argjson schema "$HO_FLOW_SCHEMA" '
     def bad($m): $m;
     if type != "object" then bad("not a JSON object")
@@ -67,11 +72,11 @@ ho_flow_load() {
     elif (.steps | type) != "array" or (.steps | length) == 0 then bad("steps must be a non-empty list")
     else
       [ .steps[] | select(type != "object"
-          or ((.id | type) != "string") or (.id | test("^[a-z0-9][a-z0-9-]*$") | not)
-          or ((.title | type) != "string") or .title == ""
+          or ((.id | type) != "string") or (.id | test("\\A[a-z0-9][a-z0-9-]*\\z") | not)
+          or ((.title | type) != "string") or .title == "" or (.title | test("[[:cntrl:]]"))
           or (.when | IN("always", "questions") | not)
           or ((.prompt | type) != "string")
-          or (.prompt | test("^[A-Za-z0-9_-][A-Za-z0-9_./-]*$") | not)
+          or (.prompt | test("\\A[A-Za-z0-9_-][A-Za-z0-9_./-]*\\z") | not)
           or (.prompt | split("/") | any(. == ".." or . == "."))) ] as $bad
       | if ($bad | length) > 0 then bad("bad step: \($bad[0] | tojson)")
         elif ([.steps[].id] | unique | length) != (.steps | length) then bad("step ids must be unique")
@@ -82,6 +87,8 @@ ho_flow_load() {
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     [ -f "$dir/$t" ] && [ ! -L "$dir/$t" ] || ho_flow_fail "$name" "step prompt is not a plain file: $dir/$t"
+    real=$(cd -P "$(dirname "$dir/$t")" && pwd -P) || ho_flow_fail "$name" "cannot open the folder of $dir/$t"
+    case "$real/" in "$dir"/*) ;; *) ho_flow_fail "$name" "step prompt leads outside the flow folder: $dir/$t" ;; esac
     if grep -qE '\{\{|\}\}' "$dir/$t"; then ho_flow_fail "$name" "double-brace token in $dir/$t; use @NAME@"; fi
     step_tokens=$(jq -Rsr "$HO_JQ_TOKENS | .[]" "$dir/$t") || ho_flow_fail "$name" "cannot read $dir/$t"
     for tok in $step_tokens; do
@@ -123,11 +130,15 @@ ho_flow_steps() {
 
 # ho_flow_render <flow> <role> [--step <id>] [--set NAME VALUE]... [--file NAME PATH]...
 ho_flow_render() {
-  local flow=${1-} role=${2-} step="" vals='{}' name tmp rc=0 step_prompt=/dev/null role_file
+  local flow=${1-} role=${2-} step="" name tmpd rc=0 step_prompt=/dev/null role_file
+  local -a valargs=()
   [ -n "$flow" ] && [ -n "$role" ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }
   shift 2
   ho_flow_load "$flow"
   role_file=$(ho_flow_role_file "$role")
+  tmpd=$(mktemp -d "${TMPDIR:-/tmp}/ho-flow.XXXXXX") || ho_die "mktemp failed"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmpd'" EXIT
   while [ $# -gt 0 ]; do
     case $1 in
       --step) [ $# -ge 2 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; step=$2; shift 2 ;;
@@ -139,10 +150,14 @@ ho_flow_render() {
           *) printf 'harness: cannot set %s; settable names: %s\n' "$name" "$HO_FLOW_CALLER_TOKENS" >&2; exit "$HO_EXIT_USAGE" ;;
         esac
         if [ "$1" = --set ]; then
-          vals=$(jq -cn --argjson v "$vals" --arg k "$name" --arg x "$3" '$v + {($k): $x}')
+          printf '%s' "$3" > "$tmpd/$name" || ho_die "cannot write a temp file"
         else
           [ -f "$3" ] && [ -r "$3" ] || { printf 'harness: cannot read value file for %s: %s\n' "$name" "$3" >&2; exit "$HO_EXIT_USAGE"; }
-          vals=$(jq -cn --argjson v "$vals" --arg k "$name" --rawfile x "$3" '$v + {($k): $x}')
+          cat -- "$3" > "$tmpd/$name" || ho_die "cannot write a temp file"
+        fi
+        if ! iconv -f UTF-8 -t UTF-8 < "$tmpd/$name" >/dev/null 2>&1; then
+          printf 'harness: the value of %s is not valid UTF-8 text\n' "$name" >&2
+          exit "$HO_EXIT_DATA"
         fi
         shift 3
         ;;
@@ -158,10 +173,11 @@ ho_flow_render() {
     [ -n "$step_prompt" ] || { printf 'harness: flow %s has no step %s\n' "$flow" "$step" >&2; exit "$HO_EXIT_USAGE"; }
     step_prompt="$HO_FLOW_DIR/$step_prompt"
   fi
-  # The vals object can be large (ticket text), so it goes through a file, not an argument.
-  tmp=$(mktemp "${TMPDIR:-/tmp}/ho-flow.XXXXXX") || ho_die "mktemp failed"
-  printf '%s' "$vals" > "$tmp"
-  jq -nj --arg flow "$flow" --arg step "$step" --slurpfile vals "$tmp" \
+  # Each value reaches jq as a file (--rawfile V_<NAME>), so a large value is no argument.
+  for name in $HO_FLOW_CALLER_TOKENS; do
+    [ -f "$tmpd/$name" ] && valargs+=(--rawfile "V_$name" "$tmpd/$name")
+  done
+  jq -nj --arg flow "$flow" --arg step "$step" ${valargs[@]+"${valargs[@]}"} \
     --slurpfile cfg "$HO_FLOW_JSON" --rawfile role "$role_file" --rawfile steptpl "$step_prompt" '
     def render($v):
       . as $t
@@ -172,7 +188,8 @@ ho_flow_render() {
           | .pos = $m.offset + $m.length)
       | .out += $t[.pos:];
     $cfg[0] as $c
-    | ($vals[0] + {
+    | ($ARGS.named | with_entries(select(.key | startswith("V_")) | .key |= .[2:])) as $vals
+    | ($vals + {
         FLOW_NAME: $flow,
         FLOW_STEP_LIST: ([$c.steps | to_entries[]
           | "\(.key + 1). \(.value.title) (\(.value.id))"
@@ -181,21 +198,20 @@ ho_flow_render() {
       }) as $base
     | (if $step == "" then $base
        else ($c.steps[] | select(.id == $step)) as $s
-         | ($steptpl | render($base)) as $st
+         | ($base + {STEP_ID: $s.id, STEP_TITLE: $s.title}) as $sb
+         | ($steptpl | render($sb)) as $st
          | if ($st.missing | length) > 0 then error("missing values: \($st.missing | unique | join(" "))")
-           else $base + {STEP_ID: $s.id, STEP_TITLE: $s.title, STEP_TEXT: $st.out} end
+           else $sb + {STEP_TEXT: $st.out} end
        end) as $all
     | ($role | render($all)) as $r
     | if ($r.missing | length) > 0 then error("missing values: \($r.missing | unique | join(" "))")
       else $r.out end
-  ' 2>"$tmp.err" || rc=$?
+  ' 2>"$tmpd/.err" || rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'harness: flow %s, role %s: cannot render: %s\n' "$flow" "$role" \
-      "$(sed -e 's/^jq: error (at <unknown>): //' "$tmp.err")" >&2
-    rm -f "$tmp" "$tmp.err"
+      "$(sed -e 's/^jq: error (at <unknown>): //' "$tmpd/.err")" >&2
     exit "$HO_EXIT_DATA"
   fi
-  rm -f "$tmp" "$tmp.err"
 }
 
 ho_flow_main() {

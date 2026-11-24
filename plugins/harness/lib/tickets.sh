@@ -166,8 +166,9 @@ ho_tk_gh_show() {
   local id=$1 json state
   json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json number,title,body,labels,comments) ||
     { ho_tk_err "no ticket #$id"; return 66; }
-  state=$(printf '%s' "$json" | jq -r --arg p "$HO_TK_PREFIX:" \
-    '[.labels[].name | select(startswith($p)) | ltrimstr($p)] | join(" ")')
+  # Only the five state names reach the header line; any other label text stays out.
+  state=$(printf '%s' "$json" | jq -r --arg p "$HO_TK_PREFIX:" --arg s "$HO_STATES" \
+    '[.labels[].name | select(startswith($p)) | ltrimstr($p) | select(. as $x | $s | split(" ") | index($x))] | join(" ")')
   printf '### Ticket %s (state: %s)\n' "$id" "${state:-none}"
   printf '%s' "$json" | jq -r '
     "Title: \(.title)", "", (.body // ""),
@@ -193,7 +194,8 @@ ho_tk_gh_comment() { # <id> <body-file>
 # glob sees it. A second guard refuses an id that any file already carries, so a
 # bypassed lock (stolen or a file added by hand) fails loudly instead of silently.
 # Status changes and comments take the same lock, so no write is lost.
-ho_tk_lock_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# GNU stat first: there "-f" means file system and would print other data.
+ho_tk_lock_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
 ho_tk_lock_drop() {
   if [ -n "${HO_TK_LOCK:-}" ]; then rm -rf "$HO_TK_LOCK" 2>/dev/null || true; fi
   HO_TK_LOCK=""
@@ -241,7 +243,14 @@ ho_tk_l_file() { # <id> -> path
   printf '%s\n' "$f"
 }
 ho_tk_l_header() { awk '/^$/ { exit } { print }' "$1"; }
-ho_tk_l_state() { ho_tk_l_header "$1" | sed -n 's/^status: *//p' | head -1; }
+ho_tk_l_state() { # one of the five states, or "unknown": file text never reaches the header line
+  local st
+  st=$(ho_tk_l_header "$1" | sed -n 's/^status: *//p' | head -1)
+  case " $HO_STATES " in
+    *" $st "*) [ -n "$st" ] && printf '%s\n' "$st" || echo unknown ;;
+    *) echo unknown ;;
+  esac
+}
 ho_tk_l_title() { ho_tk_l_header "$1" | sed -n 's/^title: *//p' | head -1; }
 ho_tk_l_write() { # <file>; content on stdin; atomic
   local tmp

@@ -5,7 +5,7 @@ This branch holds the stable-beta rebuild of the harness plugin. The 0.6.0 engin
 ## Engine entry point
 
 The engine has one entry script: `bin/harness <verb> [args]`.
-Current verbs are `version`, `help` and `selftest`.
+Current verbs are `version`, `help`, `selftest`, `config`, `run` and `state`.
 Run `bin/harness help` for the list.
 
 ## Variable names
@@ -13,6 +13,14 @@ Run `bin/harness help` for the list.
 The new engine's own environment variables use the prefix `HO_` (Harness Orchestrator), for example `HO_HOME`.
 It never reads any `HARNESS_*` variable from the 0.6.0 engine.
 `bin/harness selftest` fails when a 0.6.0 variable is set or a 0.6.0 engine script is on `PATH`.
+
+## Config and run state
+
+- **Config lookup.** A project value beats a user value, and a user value beats the engine default. The project config is `<project>/.harness/config.json`. The user config is `$HO_USER_DIR/config.json`, by default `~/.claude/harness/config.json`. Only a missing key or `null` falls through to the next layer. Every config file must have `"schemaVersion": 2`; any other file is refused (exit 78) and the message names the file. The templates are in `templates/`.
+- **Run stamp.** `bin/harness run new` creates `<project>/.harness/runs/<run-id>/` with a `run.json` stamp. Every `bin/harness state <run-dir> ...` verb checks the stamp first. A folder without a valid stamp, such as a 0.6.0 run, is refused (exit 66) and nothing in it changes.
+- **Run ledger.** `ledger.jsonl` in the run folder holds decisions, owner actions, stops, resumes and marker events, one JSON line each. Lines are only appended, under a lock, and every line carries the run ID.
+- **Markers.** Each marker file holds the run ID. A marker without this run's ID is ignored and logged once as foreign.
+- **STOP file.** `<project>/.harness/STOP` still works. It is recorded in the ledger as the default soft stop. A new run and `state ... resume` are refused while it exists.
 
 ## Tests
 

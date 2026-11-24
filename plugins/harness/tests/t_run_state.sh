@@ -75,7 +75,7 @@ check_grows() {
   "$@" >/dev/null 2>&1 || true
   after=$(cat "$run/ledger.jsonl"; printf x)
   before=${before%x}; after=${after%x}
-  case $after in "$before"?*) ;; *) grew_ok="no after: $*" ;; esac
+  case $after in "$before"*) ;; *) grew_ok="no after: $*" ;; esac
 }
 printf '%s\n' '{"ts":"t","run":"'"$id"'","kind":"note","by":"another writer"}' >> "$run/ledger.jsonl"
 check_grows "$h" state "$run" marker set lane-e.done
@@ -85,20 +85,26 @@ check_grows "$h" state "$run" decision "t" "multi
 line reason"
 check_grows "$h" state "$run" owner-action a b c d
 check_grows "$h" state "$run" stop "owner asked"
-assert_eq "Rebuild ledger: every verb appends and never rewrites an earlier line" "yes" "$grew_ok"
+assert_eq "Rebuild ledger: no verb rewrites or removes an earlier line" "yes" "$grew_ok"
 assert_eq "D1: a line appended by another writer survives later writes" "another writer" "$(jq -r 'select(.kind == "note") | .by' "$run/ledger.jsonl")"
 assert_eq "Rebuild ledger: a multi-line reason stays on one ledger line" "multi
 line reason" "$(jq -r 'select(.kind == "decision" and .title == "t") | .reason' "$run/ledger.jsonl")"
 bad_lines=$(while IFS= read -r l; do printf '%s' "$l" | jq -e . >/dev/null 2>&1 || echo bad; done < "$run/ledger.jsonl")
 assert_eq "Rebuild ledger: every ledger line is valid JSON" "" "$bad_lines"
 
-# Parallel writers each get exactly one whole line.
+# Parallel writers each get exactly one whole line, even near the line cap
+# (bash can split one printf of about 4 KB into several writes).
+big=$(printf '%3800s' | tr ' ' y)
 lines_before=$(wc -l < "$run2/ledger.jsonl")
 i=0
-while [ $i -lt 20 ]; do "$h" state "$run2" decision "p$i" "parallel" & i=$((i + 1)); done
+while [ $i -lt 40 ]; do "$h" state "$run2" decision "p$i" "$big" & i=$((i + 1)); done
 wait
-assert_eq "Rebuild ledger: 20 parallel writers add 20 lines" "$((lines_before + 20))" "$(($(wc -l < "$run2/ledger.jsonl")))"
-assert_eq "Rebuild ledger: 20 parallel lines are all whole JSON" "20" "$(jq -r 'select(.reason == "parallel") | .title' "$run2/ledger.jsonl" | sort -u | wc -l | tr -d ' ')"
+assert_eq "Rebuild ledger: 40 parallel writers add 40 lines" "$((lines_before + 40))" "$(($(wc -l < "$run2/ledger.jsonl")))"
+assert_eq "Rebuild ledger: 40 parallel lines are all whole JSON" "40" "$(jq -cR 'fromjson? | select(.reason == "'"$big"'") | .title' "$run2/ledger.jsonl" | sort -u | wc -l | tr -d ' ')"
+assert_eq "Rebuild ledger: no lock is left behind" "" "$(ls -A "$run2" | grep lock || true)"
+mkdir "$run2/ledger.jsonl.lock"
+touch -t 202001010000 "$run2/ledger.jsonl.lock"
+assert_exit "Rebuild ledger: a lock left by a killed writer is taken over" 0 "$h" state "$run2" decision stale-lock ok
 
 # ---- STOP: the file is kept for users and recorded in the ledger -----------------
 assert_exit "H-086: a run with no STOP reads as not stopped" 1 "$h" state "$run2" stopped
@@ -119,6 +125,8 @@ printf '{"ts":"t","run":"%s","kind":"sto' "$(basename "$run2")" >> "$run2/ledger
 rc=0; err=$("$h" state "$run2" stopped 2>&1) || rc=$?
 assert_eq "I1: an unreadable ledger line makes the stop check unknown (exit 2), never not-stopped" "2" "$rc"
 assert_contains "I1: the unknown stop check says the ledger is unreadable" "$err" "unreadable"
+"$h" state "$run2" decision after-torn ok
+assert_eq "Rebuild ledger: a line appended after a torn line is still whole" "ok" "$(jq -cR 'fromjson? | select(.title == "after-torn") | .reason' "$run2/ledger.jsonl" | tr -d '"')"
 
 # ---- a 0.6.0 run, or any run without a valid stamp, is refused and left byte-identical
 old="$proj/.harness/runs/20261124-174036"

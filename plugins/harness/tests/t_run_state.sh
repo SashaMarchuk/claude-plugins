@@ -222,6 +222,20 @@ rc=0; "$h" state "$PWD/runs-link/$(basename "$run6")" resume >/dev/null 2>&1 || 
 assert_eq "H-086: a run path through a symlink refuses resume while STOP exists (exit 75)" "75" "$rc"
 rm "$proj/.harness/STOP"
 
+# A project whose .harness/runs is itself a link to another place: STOP in the
+# project still stops the run (PR #87 re-check, B2).
+proj2="$PWD/proj2"; mkdir -p "$proj2/.harness" "$PWD/elsewhere-runs"
+cp "$proj/.harness/config.json" "$proj2/.harness/config.json"
+ln -s "$PWD/elsewhere-runs" "$proj2/.harness/runs"
+run8=$(cd "$proj2" && HO_PROJECT_DIR="$proj2" "$h" run new)
+assert_eq "H-086 setup: a run starts in a project with a linked runs folder" "yes" "$([ -n "$run8" ] && [ -d "$run8" ] && echo yes || echo no)"
+: > "$proj2/.harness/STOP"
+rc=0; (cd "$proj2" && HO_PROJECT_DIR="$proj2" "$h" state "$run8" stopped) >/dev/null 2>&1 || rc=$?
+assert_eq "H-086: a linked runs folder still sees the project STOP file (stopped exits 0)" "0" "$rc"
+rc=0; (cd "$proj2" && HO_PROJECT_DIR="$proj2" "$h" state "$run8" resume) >/dev/null 2>&1 || rc=$?
+assert_eq "H-086: a linked runs folder refuses resume while STOP exists (exit 75)" "75" "$rc"
+rm "$proj2/.harness/STOP"
+
 # TERM while an append holds the ledger lock: the lock is freed, the process exits 143 and
 # appends nothing (PR #87 review, Codex P2). A fake tail holds the append inside the lock.
 run7=$("$h" run new)

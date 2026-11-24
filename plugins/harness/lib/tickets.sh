@@ -268,6 +268,9 @@ ho_tk_l_each() {
   local f n
   for f in "$HO_TK_DIR"/[0-9]*-*.md; do
     [ -f "$f" ] || continue
+    # A name with a newline or a tab would forge a second <id><TAB><path> record.
+    case $f in *"
+"*|*"$(printf '\t')"*) continue ;; esac
     n=$(basename "$f")
     n=$(ho_tk_id "${n%%-*}") || continue
     printf '%s\t%s\n' "$n" "$f"

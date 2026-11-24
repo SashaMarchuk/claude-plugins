@@ -29,9 +29,13 @@ ho_run_open() {
   local dir=${1-} id why=""
   # The STOP file is found from the run folder, so a bare run ID or ./<id> must become
   # an absolute path first, or a run started inside .harness/runs would miss STOP.
-  # The path is resolved physically (pwd -P): a symlinked path must not hide STOP.
+  # Both the logical path (as given, made absolute) and the physical path (links
+  # resolved) are kept: a STOP file beside either one stops the run, so neither a
+  # linked runs folder nor a linked path to it can hide STOP.
+  HO_RUN_DIR_PHYS=""
   if [ -n "$dir" ] && [ -d "$dir" ]; then
-    dir=$(cd -P "$dir" && pwd -P) || dir=${1-}
+    HO_RUN_DIR_PHYS=$(cd -P "$dir" && pwd -P) || HO_RUN_DIR_PHYS=""
+    dir=$(cd "$dir" && pwd) || dir=${1-}
   fi
   id=$(basename "$dir")
   if [ -z "$dir" ] || [ ! -d "$dir" ]; then
@@ -51,7 +55,21 @@ ho_run_open() {
   HO_RUN_ID=$id
 }
 
-ho_stop_file() { printf '%s/STOP\n' "$(dirname "$(dirname "$HO_RUN_DIR")")"; }
+# ho_stop_file: the first STOP file that exists beside the logical or the physical run path, or in the current project;
+# with none, the place beside the logical run path (where a STOP would be written).
+ho_stop_file() {
+  local d f
+  for d in "$HO_RUN_DIR" ${HO_RUN_DIR_PHYS:+"$HO_RUN_DIR_PHYS"}; do
+    f="$(dirname "$(dirname "$d")")/STOP"
+    [ -e "$f" ] && { printf '%s\n' "$f"; return 0; }
+  done
+  # The project the engine runs in counts too: its runs folder may be a link elsewhere.
+  if d=$(ho_project_root 2>/dev/null); then
+    f="$d/.harness/STOP"
+    [ -e "$f" ] && { printf '%s\n' "$f"; return 0; }
+  fi
+  printf '%s/STOP\n' "$(dirname "$(dirname "$HO_RUN_DIR")")"
+}
 
 # ho_ledger_append <kind> [<key> <value>]...: append one line. Never rewrites the file.
 ho_ledger_append() {
@@ -226,6 +244,7 @@ ho_run_new() {
   jq -n --argjson schema "$HO_RUN_SCHEMA" --arg engine "$HO_ENGINE" --arg id "$id" --arg ts "$(ho_now)" \
     '{schemaVersion: $schema, engine: $engine, runId: $id, created: $ts}' | ho_atomic_write "$dir/run.json" || exit 1
   HO_RUN_DIR=$dir
+  HO_RUN_DIR_PHYS=""
   HO_RUN_ID=$id
   ho_ledger_append run-start
   printf '%s\n' "$dir"

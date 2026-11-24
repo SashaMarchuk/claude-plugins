@@ -100,3 +100,24 @@ export HO_TICKETS_DIR="$PWD/ro2/tickets"
 run_bounded "H-017 read-only parent: add without a ticket folder exits 73" 73 add Again body.md
 assert_contains "H-017 read-only parent: the error names the ticket folder" "$(cat bounded.err)" "cannot create the ticket folder"
 chmod 755 "$PWD/ro2"
+
+# A ticket file name with a newline or a tab must not forge an <id><TAB><path> record
+# (PR #87 re-check, B1): no command runs, no id appears, no file outside the folder is touched.
+export HO_TICKETS_DIR="$PWD/nl/tickets"
+mkdir -p "$HO_TICKETS_DIR"
+"$h" tickets add "Real one" body.md >/dev/null 2>&1 || true
+nl=$(printf '\nX')
+tab=$(printf '\t')
+: > "$HO_TICKETS_DIR/2-a${nl%X}9 + HOME[\$(touch pwned)]${tab}y.md"
+printf 'title: victim\nstatus: ready\n\nbody\n' > "$PWD/victim.md"
+: > "$HO_TICKETS_DIR/3-a${nl%X}7${tab}victim.md"
+cp "$PWD/victim.md" "$PWD/victim.before"
+"$h" tickets add "Next one" body.md >/dev/null 2>&1 || true
+assert_eq "H-017 names: a file name with a newline never runs as code" "no" "$([ -e "$PWD/pwned" ] && echo yes || echo no)"
+ids=$("$h" tickets ids 2>/dev/null | tr '\n' ' ')
+assert_eq "H-017 names: a forged record adds no id" "1 2 " "$ids"
+rc=0; "$h" tickets show 7 >/dev/null 2>&1 || rc=$?
+assert_eq "H-017 names: show of a forged id finds nothing (exit 66)" "66" "$rc"
+printf 'x\n' > why.md
+"$h" tickets comment 7 why.md >/dev/null 2>&1 || true
+assert_eq "H-017 names: a file outside the ticket folder stays unchanged" "same" "$(cmp -s "$PWD/victim.md" "$PWD/victim.before" && echo same || echo changed)"

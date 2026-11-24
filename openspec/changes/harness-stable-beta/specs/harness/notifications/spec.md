@@ -112,7 +112,7 @@ Source: interview 2026-11-24 R28.2, R28.7, R29.2; delegated decision S8-28a
 - **THEN** the message still exists in the tracker, which stays the source of truth
 
 ### Requirement: H-122 Channel identity data maps authors to tracker access
-A channel bot SHALL be configured with identity data, such as an email address, where the channel needs it (the owner's example: a Telegram bot). The harness SHALL use it to map a channel author to a tracker account and its access level. Slack, Gmail, and telling several people on one bot apart are open. Trust rules for mapped and unmapped authors: H-033, H-035.
+A channel bot SHALL be configured with identity data, such as an email address, where the channel needs it (the owner's example: a Telegram bot). The harness SHALL use it to map a channel author, by the sender ID the channel authenticates, to a tracker account and its access level (D37-NOTIFICATIONS-1). Slack, Gmail, and telling several people on one bot apart are open. Trust rules: H-033, H-035.
 OPEN: see design.md OPEN-NOTIFICATIONS-2
 
 Source: interview 2026-11-24 R29.9
@@ -124,6 +124,10 @@ Source: interview 2026-11-24 R29.9
 #### Scenario: Author cannot be mapped
 - **WHEN** an answer arrives from a channel user with no configured identity data
 - **THEN** the harness marks the author as unmapped for the access rules
+
+#### Scenario: Shared or ambiguous identity counts as unmapped
+- **WHEN** an answer arrives from a channel sender whose mapping entry is shared by more than one person, or whose sender ID matches no single entry
+- **THEN** the harness marks the author as unmapped, and the answer waits for a writer to revalidate it (H-035)
 
 ### Requirement: H-123 Connections are checked before the build, and the owner is asked for what only he can do
 Before the build starts, the session SHALL check that every connection the notification channels need exists. For anything that depends on the owner, the session SHALL ask the owner for it before the build. How the check works is an agent decision; see design.md D36. The owner's example of a session given computer use for Telegram was uncertain and is not a requirement.

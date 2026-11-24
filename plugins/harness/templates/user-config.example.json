@@ -1,4 +1,8 @@
 {
   "schemaVersion": 2,
-  "_comment": "~/.claude/harness/config.json: your personal defaults for every project. A project config overrides any key set here. A missing key or null falls through to the engine default. Later releases add their keys here."
+  "_comment": "~/.claude/harness/config.json: your personal defaults for every project. A project config overrides any key set here. A missing key or null falls through to the engine default. Later releases add their keys here.",
+  "accounts": {
+    "roles": {},
+    "list": {}
+  }
 }

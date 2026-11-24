@@ -44,8 +44,8 @@ assert_eq "Rebuild launcher guarded cd: shell text in a folder name stays litera
 cat > "$user/config.json" <<'JSON'
 {"schemaVersion": 2, "runtime": {"main": "claude-code"},
  "accounts": {"roles": {"default": "main", "validator": "second", "question": "ghost", "watcher": "broken", "orchestrator": "junk"},
-              "list": {"main": {"env_command": "echo HO_ACCT=main"},
-                       "second": {"env_command": "printf 'export HO_ACCT=\"second\"\\n'"},
+              "list": {"main": {"env_command": "echo TEST_ACCT=main"},
+                       "second": {"env_command": "printf 'export TEST_ACCT=\"second\"\\n'"},
                        "broken": {"env_command": "exit 3"},
                        "junk": {"env_command": "echo not an assignment"}}}}
 JSON
@@ -53,14 +53,14 @@ refused a1 "Rebuild per-role account: a worker asked to run on the validator's a
 refused a2 "Rebuild per-role account: a role mapped to an unknown account" 65 --role question --cwd "$proj/src" --prompt "$p"
 refused a3 "Rebuild per-role account: an account command that fails" 65 --role watcher --cwd "$proj/src" --prompt "$p"
 refused a4 "Rebuild per-role account: an account command that prints no assignment" 65 --role orchestrator --cwd "$proj/src" --prompt "$p"
-HO_FAKE_CLAUDE_SHOW_ENV=HO_ACCT "$h" session "$run" launch --role validator --name a5 --cwd "$proj/src" --prompt "$p" >/dev/null
-assert_eq "Rebuild per-role account: the validator runs on its own account" "env HO_ACCT=second" "$(grep '^env HO_ACCT=' "$HO_FAKE_CLAUDE_LOG" | tail -n 1)"
+HO_FAKE_CLAUDE_SHOW_ENV=TEST_ACCT "$h" session "$run" launch --role validator --name a5 --cwd "$proj/src" --prompt "$p" >/dev/null
+assert_eq "Rebuild per-role account: the validator runs on its own account" "env TEST_ACCT=second" "$(grep '^env TEST_ACCT=' "$HO_FAKE_CLAUDE_LOG" | tail -n 1)"
 assert_eq "Rebuild per-role account: the registry names the account" "second" "$(jq -r .account "$run/sessions/a5.json")"
-HO_FAKE_CLAUDE_SHOW_ENV=HO_ACCT "$h" session "$run" launch --role worker --account main --name a6 --cwd "$proj/src" --prompt "$p" >/dev/null
-assert_eq "Rebuild per-role account: a worker on the default account" "env HO_ACCT=main" "$(grep '^env HO_ACCT=' "$HO_FAKE_CLAUDE_LOG" | tail -n 1)"
-assert_eq "Rebuild per-role account: the account command's output is not written into the launcher" "" "$(grep -F 'HO_ACCT=second' "$run/launchers/a5.sh" || true)"
+HO_FAKE_CLAUDE_SHOW_ENV=TEST_ACCT "$h" session "$run" launch --role worker --account main --name a6 --cwd "$proj/src" --prompt "$p" >/dev/null
+assert_eq "Rebuild per-role account: a worker on the default account" "env TEST_ACCT=main" "$(grep '^env TEST_ACCT=' "$HO_FAKE_CLAUDE_LOG" | tail -n 1)"
+assert_eq "Rebuild per-role account: the account command's output is not written into the launcher" "" "$(grep -F 'TEST_ACCT=second' "$run/launchers/a5.sh" || true)"
 
 # Accounts in the project config (inside the repository) are refused, not silently used.
-jq '.accounts = {"roles": {"default": "main"}, "list": {"main": {"env_command": "echo HO_ACCT=repo"}}}' "$proj/.harness/config.json" > "$base/c.json"
+jq '.accounts = {"roles": {"default": "main"}, "list": {"main": {"env_command": "echo TEST_ACCT=repo"}}}' "$proj/.harness/config.json" > "$base/c.json"
 mv "$base/c.json" "$proj/.harness/config.json"
 refused a7 "Rebuild per-role account: accounts set in the project config" 65 --role worker --cwd "$proj/src" --prompt "$p"

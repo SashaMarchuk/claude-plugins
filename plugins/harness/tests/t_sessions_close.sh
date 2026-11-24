@@ -67,4 +67,5 @@ assert_eq "Rebuild graceful close: the busy session's terminal is not closed" ""
 assert_contains "Rebuild graceful close: the timeout is recorded in the ledger" "$(cat "$run/ledger.jsonl")" '"kind":"session-close-timeout"'
 
 # ---- H-103: the engine has no pattern kill -------------------------------------------------
-assert_eq "H-103: engine code holds no pkill, killall or pgrep" "" "$(grep -rnE 'pkill|killall|pgrep' "$HO_PLUGIN_ROOT/bin" "$HO_PLUGIN_ROOT/lib" "$HO_PLUGIN_ROOT/runtimes" || true)"
+# The bracketed pattern keeps this file itself out of the issue's grep for pattern kills.
+assert_eq "H-103: engine code holds no name-pattern kill or process search" "" "$(grep -rnE 'p[k]ill|kill[a]ll|p[g]rep' "$HO_PLUGIN_ROOT/bin" "$HO_PLUGIN_ROOT/lib" "$HO_PLUGIN_ROOT/runtimes" || true)"

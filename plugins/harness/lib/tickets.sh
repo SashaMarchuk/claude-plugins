@@ -235,12 +235,17 @@ ho_tk_lock_take() {
 ho_tk_locked() { # <function> [args...]
   (
     HO_TK_LOCK=""
-    trap 'ho_tk_lock_drop' EXIT
+    # bash 3.2 reports $? = 0 inside the EXIT trap after an abort such as an
+    # unbound variable. So the code starts as 70 (abnormal end) and becomes the
+    # real result only when the locked command returns. A failure never reads as success.
+    ho_tk_rc=70
+    trap 'ho_tk_trap_rc=$?; ho_tk_lock_drop; [ "$ho_tk_trap_rc" -ne 0 ] && exit "$ho_tk_trap_rc"; exit "$ho_tk_rc"' EXIT
     trap 'ho_tk_lock_drop; exit 130' INT
     trap 'ho_tk_lock_drop; exit 143' TERM
     mkdir -p "$HO_TK_DIR" 2>/dev/null || { ho_tk_err "no change made: cannot create the ticket folder $HO_TK_DIR"; exit 73; }
     ho_tk_lock_take || exit $?
     "$@"
+    ho_tk_rc=$?
   )
 }
 

@@ -91,3 +91,18 @@ err=$(bash probe.sh 2>&1 || true)
 assert_contains "Id guard: an id already on disk exits 70" "$err" "rc=70"
 assert_contains "Id guard: the error names the id" "$err" "ticket id 1 is already on disk"
 case $err in *pwned*|*name.md*|*HOSTILE*) bad "Id guard: the error does not print the file name" "[$err]" ;; *) ok "Id guard: the error does not print the file name" ;; esac
+
+# The stat dialect is chosen once (PR #87, Codex finding on d21e455): with a GNU-like stat
+# whose -c fails once for a vanished lock, the mtime read never falls back to -f.
+mkdir -p gnu-bin
+cat > gnu-bin/stat <<'GNU'
+#!/bin/sh
+case "$1" in
+  -c) [ "$3" = / ] && { echo 1; exit 0; }; exit 1 ;;
+  -f) echo "  File: \"$2\""; echo "    ID: 0 Namelen: 255"; exit 0 ;;
+esac
+exit 1
+GNU
+chmod +x gnu-bin/stat
+out=$(PATH="$PWD/gnu-bin:$PATH" bash -c '. "$1/lib/tickets.sh"; ho_tk_lock_mtime /no/such/lock' _ "$HO_PLUGIN_ROOT" 2>&1)
+assert_eq "Ticket lock: a GNU stat never falls back to -f (mtime of a vanished lock reads 0)" "0" "$out"

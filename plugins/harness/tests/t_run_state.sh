@@ -260,3 +260,18 @@ rc=0; wait "$pid" || rc=$?
 assert_eq "Rebuild ledger: TERM under the ledger lock exits 143" "143" "$rc"
 assert_eq "Rebuild ledger: TERM under the ledger lock appends nothing" "$lines" "$(wc -l < "$run7/ledger.jsonl" | tr -d ' ')"
 assert_eq "Rebuild ledger: TERM under the ledger lock frees the lock" "no" "$([ -e "$run7/ledger.jsonl.lock" ] && echo yes || echo no)"
+
+# A run folder whose ledger, markers or stamp is a link is refused, and nothing is
+# appended through the link (PR #87, Codex security finding on d21e455).
+for what in ledger markers stamp; do
+  runL=$("$h" run new)
+  printf 'outside\n' > "$PWD/outside-$what.txt"; cp "$PWD/outside-$what.txt" "$PWD/outside-$what.before"
+  case $what in
+    ledger)  rm "$runL/ledger.jsonl"; ln -s "$PWD/outside-$what.txt" "$runL/ledger.jsonl" ;;
+    markers) rm -rf "$runL/markers"; mkdir -p "$PWD/outside-markers"; ln -s "$PWD/outside-markers" "$runL/markers" ;;
+    stamp)   mv "$runL/run.json" "$PWD/stamp-$what.json"; ln -s "$PWD/stamp-$what.json" "$runL/run.json" ;;
+  esac
+  rc=0; "$h" state "$runL" stop >/dev/null 2>&1 || rc=$?
+  assert_eq "Rebuild ledger: a run with a linked $what is refused (exit 66)" "66" "$rc"
+  assert_eq "Rebuild ledger: nothing is written through a linked $what" "same" "$(cmp -s "$PWD/outside-$what.txt" "$PWD/outside-$what.before" && [ -z "$(ls -A "$PWD/outside-markers" 2>/dev/null)" ] && echo same || echo changed)"
+done

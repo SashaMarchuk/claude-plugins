@@ -212,8 +212,16 @@ ho_tk_gh_comment() { # <id> <body-file>
 # glob sees it. A second guard refuses an id that any file already carries, so a
 # bypassed lock (stolen or a file added by hand) fails loudly instead of silently.
 # Status changes and comments take the same lock, so no write is lost.
-# GNU stat first: there "-f" means file system and would print other data.
-ho_tk_lock_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+# The stat dialect is chosen once, never per call: on GNU "-f" means file system, so
+# falling back to it when the lock vanished between two calls would read other data.
+if stat -c %Y / >/dev/null 2>&1; then HO_TK_STAT_GNU=1; else HO_TK_STAT_GNU=""; fi
+ho_tk_lock_mtime() {
+  local t
+  if [ -n "$HO_TK_STAT_GNU" ]; then t=$(stat -c %Y "$1" 2>/dev/null) || t=0
+  else t=$(stat -f %m "$1" 2>/dev/null) || t=0; fi
+  case $t in ''|*[!0-9]*) t=0 ;; esac
+  printf '%s\n' "$t"
+}
 ho_tk_lock_drop() {
   if [ -n "${HO_TK_LOCK:-}" ]; then rm -rf "$HO_TK_LOCK" 2>/dev/null || true; fi
   HO_TK_LOCK=""

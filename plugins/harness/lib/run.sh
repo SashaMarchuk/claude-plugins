@@ -42,6 +42,8 @@ ho_run_open() {
     why="no such run folder"
   elif [ ! -f "$dir/run.json" ]; then
     why="it has no run.json stamp (a 0.6.0 run, or not a run of this engine)"
+  elif [ -L "$dir/run.json" ] || [ -L "$dir/ledger.jsonl" ] || [ -L "$dir/markers" ]; then
+    why="its run.json, ledger.jsonl or markers is a link (a run folder must hold plain files)"
   elif ! jq -e --arg id "$id" --arg engine "$HO_ENGINE" --argjson schema "$HO_RUN_SCHEMA" \
       'type == "object" and .schemaVersion == $schema and .engine == $engine and .runId == $id' \
       "$dir/run.json" >/dev/null 2>&1; then
@@ -88,6 +90,12 @@ ho_ledger_append() {
   fi
   # bash may split one printf into several writes, so parallel writers take a lock.
   ho_ledger_lock "$f.lock"
+  # Never append through a link: the ledger must be a plain file of this run.
+  if [ -L "$f" ]; then
+    ho_ledger_unlock
+    echo "harness: the run ledger is a link; refusing to append" >&2
+    exit "$HO_EXIT_REFUSED"
+  fi
   # A signal frees the lock and ends the process: after the lock is gone this writer
   # must not append.
   trap 'rm -rf "$HO_LEDGER_LOCK"; exit 130' INT

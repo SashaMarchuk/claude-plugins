@@ -165,18 +165,26 @@ Decided: design.md D37-VERIFICATION-1 (offered, and on only after a yes), D37-VE
 - **THEN** the harness does not call the skill
 
 ### Requirement: H-061 External code-review comments are handled by default
-By default, when an external code-review system comments on a pull request, the harness SHALL react to the comments: take them into account and fix what it accepts. It MAY decline a comment, and a separate skill MAY handle the comments.
+By default, when an external code-review system comments on a pull request, the harness SHALL react to the comments: take them into account and fix what it accepts. It MAY decline a comment, and a separate skill MAY handle the comments. It SHALL act by itself only on comments from a trusted author.
 
 Source: interview 2026-11-24 R15.10
 Decided: design.md D37-VERIFICATION-5
 
 #### Scenario: External reviewer comments
-- **WHEN** an external code-review system posts comments on a harness pull request and the default applies
+- **WHEN** an external code-review system posts comments on a harness pull request, its account is a trusted author, and the default applies
 - **THEN** the harness reacts to the comments, takes them into account and fixes what it accepts
 
 #### Scenario: A comment is not accepted
 - **WHEN** the harness judges that an external review comment should not be applied
 - **THEN** it may decline that comment instead of applying it
+
+#### Scenario: An outside commenter posts a review
+- **WHEN** an account that has no write access to the repository, or whose access is unknown, and that is not a listed review bot, posts a review on a harness pull request
+- **THEN** the harness records the review in the ticket thread and does not apply it, in every profile
+
+#### Scenario: A listed review bot comments
+- **WHEN** a review bot named in the project's list of approved review bots comments on a harness pull request
+- **THEN** the harness treats it as a trusted author (design.md D37-VERIFICATION-5)
 
 #### Scenario: A separate skill handles the comments
 - **WHEN** a separate skill is configured to handle external review comments and such comments appear

@@ -109,7 +109,7 @@ Source: interview 2026-11-24 R18.6
 
 ### Requirement: H-096 A deterministic outage monitor without a model session, separate from the context watcher
 Unless Claude Code resumes by itself after an outage, the harness SHALL include a deterministic outage monitor with no model session, not the context watcher. It SHALL check the service status, and the internet only if an internet drop really stops the orchestrator. It SHALL log the last value, check more often while down, and tell the orchestrator when service returns.
-OPEN: see design.md OPEN-SESSIONS-3
+Decided: design.md D37-SESSIONS-3
 
 Source: interview 2026-11-24 R18.7, R18.8; D22 (build)
 
@@ -131,7 +131,7 @@ Source: interview 2026-11-24 R18.7, R18.8; D22 (build)
 
 #### Scenario: Service comes back
 - **WHEN** the monitor sees that the service and the connection are back
-- **THEN** it tells the orchestrator to continue
+- **THEN** it tells the orchestrator to continue, unless the orchestrator already continued by itself (design.md D37-SESSIONS-3)
 
 #### Scenario: The context watcher is not the monitor
 - **WHEN** the outage monitor runs
@@ -145,6 +145,7 @@ Source: interview 2026-11-24 R18.7, R18.8; D22 (build)
 When the orchestrator works again after an outage, it SHALL mark an "I am back" status, so that the outage monitor stops asking it to start. Where a deterministic check that work has resumed is possible, the harness SHALL use it. The default "back" marker is an agent decision; see design.md D22.
 
 Source: interview 2026-11-24 R18.9; D22
+Decided: design.md D37-SESSIONS-3
 
 #### Scenario: Orchestrator resumes
 - **WHEN** the orchestrator resumes work after the monitor told it to continue
@@ -154,9 +155,13 @@ Source: interview 2026-11-24 R18.9; D22
 - **WHEN** the monitor told the orchestrator to continue and no "back" status appears
 - **THEN** the monitor keeps treating the orchestrator as not resumed
 
+#### Scenario: Orchestrator continued by itself
+- **WHEN** the service is back, the orchestrator's last turn did not end with an API error, and a hook event from the orchestrator arrives within the wait
+- **THEN** that event is the "back" status and the monitor sends no message (design.md D37-SESSIONS-3)
+
 ### Requirement: H-098 The orchestrator and the context watcher supervise each other, and the orchestrator starts the context watcher
 The orchestrator SHALL start the context watcher and SHALL restart it if it stopped. The context watcher SHALL watch the orchestrator, also in standby, and SHALL be able to trigger an orchestrator restart if something goes wrong with it. Default restart path and deterministic backstop: design.md D23. Who plays the context watcher, and both sessions down: design.md D32.
-OPEN: see design.md OPEN-SESSIONS-4
+Decided: design.md D37-SESSIONS-4
 
 Source: interview 2026-11-24 R3.4, R3.5, R3.8; D23, D32
 

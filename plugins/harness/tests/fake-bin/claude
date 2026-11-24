@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Fake claude for tests: records argv, prints canned output, exits with a set code.
+set -euo pipefail
+if [ "${1:-}" = "--version" ]; then
+  echo "0.0.0 (fake claude)"
+  exit 0
+fi
+log=${HO_FAKE_CLAUDE_LOG:-$HOME/fake-claude.log}
+line=""
+for a in "$@"; do
+  if [ -z "$line" ]; then line=$a; else line="$line	$a"; fi
+done
+printf '%s\n' "$line" >> "$log"
+if [ -n "${HO_FAKE_CLAUDE_STDOUT:-}" ]; then
+  printf '%s\n' "$HO_FAKE_CLAUDE_STDOUT"
+fi
+exit "${HO_FAKE_CLAUDE_EXIT:-0}"

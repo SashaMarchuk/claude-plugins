@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Harness Orchestrator entry point: harness <verb> [args]
+set -euo pipefail
+
+# Resolve this script's real path, following symlinks one hop at a time.
+ho_src=${BASH_SOURCE[0]}
+while [ -L "$ho_src" ]; do
+  ho_dir=$(cd -P "$(dirname "$ho_src")" && pwd)
+  ho_src=$(readlink "$ho_src")
+  case $ho_src in /*) ;; *) ho_src="$ho_dir/$ho_src" ;; esac
+done
+HO_ROOT=$(cd -P "$(dirname "$ho_src")/.." && pwd)
+export HO_ROOT
+
+# shellcheck source=../lib/common.sh
+. "$HO_ROOT/lib/common.sh"
+# shellcheck source=../lib/isolation.sh
+. "$HO_ROOT/lib/isolation.sh"
+
+ho_usage() {
+  cat <<USAGE
+usage: harness <verb> [args]
+
+verbs:
+  version    print the plugin version
+  help       print this help
+  selftest   check that no 0.6.0 variable or script can leak into this engine
+USAGE
+}
+
+verb=${1:-}
+[ $# -gt 0 ] && shift
+
+case $verb in
+  version)  printf 'harness %s\n' "$(ho_version)" ;;
+  help|-h|--help) ho_usage ;;
+  selftest) ho_isolation_check ;;
+  *)
+    [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
+    ho_usage >&2
+    exit 64
+    ;;
+esac

@@ -19,10 +19,10 @@ Source: interview 2026-11-24 R15.1, R15.13
 - **THEN** the ticket does not move to shipping
 
 ### Requirement: H-065 A flow configuration, separate from the profile, that the orchestrator follows
-The harness SHALL have a flow configuration that describes, step by step from start to end, what happens when a ticket enters work, including how it is tested. The orchestrator MUST follow it. It SHALL be a setting of its own, separate from the profile, possibly per person (design.md S8-16b). Where the step list lives: design.md S8-15.
+The harness SHALL have a flow configuration that describes, step by step from start to end, what happens when a ticket enters work, including how it is tested. The orchestrator MUST follow it. It SHALL be a setting of its own, separate from the autonomy profile (design.md D12), possibly per person (design.md S8-16b). Where the step list lives: design.md S8-15.
 
 Source: interview 2026-11-24 R15.2, R15.15; S8-15
-OPEN: see design.md OPEN-18
+Decided: design.md D37-FLOW-3
 
 #### Scenario: The orchestrator follows the configured steps
 - **WHEN** a ticket enters work
@@ -30,13 +30,13 @@ OPEN: see design.md OPEN-18
 
 #### Scenario: The flow is changed without changing the profile
 - **WHEN** the user changes the flow configuration
-- **THEN** the profile stays unchanged
+- **THEN** the autonomy profile file stays unchanged
 
 ### Requirement: H-066 Steps can be reordered, added, switched off and given a runner
 Per project, the flow configuration SHALL let the user reorder, add and switch off steps, and name each step's runner. A step MAY be switched off when something else does it. Custom steps MAY be added between steps, for example before or after code review. Code review before the PR is opened SHALL be an allowed order.
 
 Source: interview 2026-11-24 R15.3, R15.4, R15.5, R15.9
-OPEN: see design.md OPEN-16 (custom steps inside a chosen system's flow)
+Decided: design.md D37-FLOW-2 (steps between steps need an own step list)
 
 #### Scenario: A version bump step
 - **WHEN** the flow configuration adds a version-bump step
@@ -74,7 +74,7 @@ OPEN: see design.md OPEN-16 (custom steps inside a chosen system's flow)
 A flow configuration MAY point to a chosen flow system with its own workflow, for example GSD. The harness SHALL check that workflow and apply it. The step mechanism MUST be simple and reliable. On conflict, the harness SHALL follow the rule in design.md D17 (delegated agent decision; the owner's lean in R15.7 matches): the chosen system owns its steps, as the scenarios detail.
 
 Source: interview 2026-11-24 R15.6, R15.7, R15.8; D17
-OPEN: see design.md OPEN-16
+Decided: design.md D37-FLOW-2
 
 #### Scenario: A chosen system's workflow is applied
 - **WHEN** the flow configuration points to GSD
@@ -93,11 +93,21 @@ OPEN: see design.md OPEN-16
 - **WHEN** a chosen system runs a ticket's steps
 - **THEN** the harness still applies its own lifecycle gates to that ticket
 
+#### Scenario: A flow config names both a system and its own step list
+- **WHEN** a flow configuration points to a chosen system and also holds its own step list
+- **THEN** the harness stops at start with a clear message
+- **AND** it does not merge the two lists
+
+#### Scenario: A step is placed inside a chosen system's steps
+- **WHEN** a flow configuration that uses a chosen system places a step between that system's steps
+- **THEN** the harness stops at start and names the step
+- **AND** the message names the route: copy the system's step list into an own flow
+
 ### Requirement: H-068 Any flow system is supported; a ready-made or own flow is chosen explicitly
-The harness MUST support any flow system; named ones (GSD, superpowers) are examples only. Nothing SHALL restrict the choice, and no flow system's name SHALL be hard-coded in the plugin. The user SHALL explicitly pick a ready-made flow or set up their own. Generic ready-made flow and its name: design.md S8-16a.
+The harness MUST support any flow system; named ones (GSD, superpowers) are examples only. Nothing SHALL restrict the choice, and no flow system's name SHALL be hard-coded in engine code. The user SHALL explicitly pick a ready-made flow or set up their own. Generic ready-made flow and its name: design.md S8-16a.
 
 Source: interview 2026-11-24 R16.1, R16.2; S8-16a; context (rejected: binding to one flow or hard-coding a vendor name)
-OPEN: see design.md OPEN-16
+Decided: design.md D37-FLOW-1 (H-001: see OPEN-1)
 
 #### Scenario: The user picks a ready-made flow
 - **WHEN** the user picks a ready-made flow during setup
@@ -112,11 +122,21 @@ OPEN: see design.md OPEN-16
 - **WHEN** the user points the flow configuration to a flow system that is not among the named examples
 - **THEN** the harness does not refuse it because of its name
 
+#### Scenario: No flow is selected
+- **WHEN** a run starts and no flow is selected
+- **THEN** the harness does not pick a flow by itself
+- **AND** it follows H-072
+
+#### Scenario: The chosen flow cannot be loaded
+- **WHEN** a run starts and the named flow file is missing or unreadable
+- **THEN** the harness stops at start and names the flow
+- **AND** it does not fall back to another flow
+
 ### Requirement: H-069 Setup recommends the flow the person already uses
-At setup, the configuration flow SHALL check the person's memory and existing setup. If it finds an existing flow (the owner's words allow two readings: any flow the person already uses, or only one that is also tested), it SHALL recommend that flow. If it finds none, it SHALL propose that the person creates their own flow. The recommendation MUST NOT replace the person's explicit choice.
+At setup, the configuration flow SHALL check the person's memory and existing setup. If it finds an existing flow, it SHALL recommend that flow and say whether it is on the tested list (design.md D37-FLOW-6). If it finds none, it SHALL propose that the person creates their own flow. The recommendation MUST NOT replace the person's explicit choice.
 
 Source: interview 2026-11-24 R16.6
-OPEN: see design.md OPEN-17
+Decided: design.md D37-FLOW-6
 
 #### Scenario: An existing flow is found
 - **WHEN** setup finds that the person already uses GSD
@@ -126,6 +146,11 @@ OPEN: see design.md OPEN-17
 #### Scenario: No existing flow is found
 - **WHEN** setup finds no flow in the person's memory or setup
 - **THEN** setup proposes creating the person's own flow
+
+#### Scenario: The found flow is not on the tested list
+- **WHEN** setup finds a flow system that the README does not list as tested
+- **THEN** setup still recommends it and says that it is not tested with the harness
+- **AND** the person still confirms or changes the choice
 
 ### Requirement: H-070 Configs, profiles and flows may live in the repo, named for their owner
 Harness configuration files (settings, profiles and flows) MAY live in the project repo, and the harness SHALL be able to reuse them. These files SHALL be configuration only. A person without the harness MUST be able to work their own way, unaffected; nobody SHALL be forced to use the committed workflow. A config file MAY be named to show whose it is. The harness SHALL run by the config that is selected.
@@ -148,7 +173,7 @@ Source: interview 2026-11-24 R17.1, R17.2, R17.3
 A local file on each machine SHALL select which committed config the harness uses. Two machines that clone the same repo MUST be able to do a short harness setup and then reuse the same committed workflow. Whether the flow is chosen per project or per person is set in design.md S8-16b.
 
 Source: interview 2026-11-24 R17.4; S8-16b
-OPEN: see design.md OPEN-7 (where the local file lives, whether it is git-ignored, and what remote config means)
+Decided: design.md D37-FLOW-5 (where the local file lives, that it is not committed, and what remote config means)
 
 #### Scenario: A second machine reuses the committed workflow
 - **WHEN** a second machine clones a repo with a committed workflow and runs the short harness setup
@@ -159,11 +184,16 @@ OPEN: see design.md OPEN-7 (where the local file lives, whether it is git-ignore
 - **WHEN** two people select different committed configs in their local files
 - **THEN** each person's harness runs by the config that person selected
 
+#### Scenario: The local file is not committed
+- **WHEN** the configuration skill writes the local file
+- **THEN** git does not track that file
+- **AND** the repository's shared ignore file is unchanged
+
 ### Requirement: H-072 A missing local selection stops the harness and offers setup
-When no local file selects a config, the harness SHALL NOT continue with development (hard stop; the owner's likely, not firm, answer). If the repo holds a config, the harness SHALL ask whether to use it and, on yes, create a local file that points to it; otherwise a new workflow SHALL be created.
+When no local file selects a config, the harness SHALL NOT continue with development (hard stop; design.md D37-FLOW-4). If the repo holds a config, the harness SHALL ask whether to use it and, on yes, create a local file that points to it; otherwise a new workflow SHALL be created.
 
 Source: interview 2026-11-24 R17.9
-OPEN: see design.md OPEN-3 (the whole of R17.9 still needs the owner's ratification)
+Decided: design.md D37-FLOW-4 (the hard stop is an agent decision)
 
 #### Scenario: A committed config is found and accepted
 - **WHEN** the harness starts with no local selection and the repo holds a config
@@ -176,17 +206,22 @@ OPEN: see design.md OPEN-3 (the whole of R17.9 still needs the owner's ratificat
 
 #### Scenario: No config exists anywhere
 - **WHEN** the harness starts with no local selection and the repo holds no config
-- **THEN** harness setup may block harness work until the first config files exist, if the hard stop in design.md OPEN-3 is ratified
+- **THEN** the harness stops and offers the configuration skill, and harness work stays blocked until the first config files exist
 
 #### Scenario: A developer without the harness is not blocked
 - **WHEN** a developer who does not use the harness works in the same repo
 - **THEN** nothing in the harness blocks that developer's work
 
+#### Scenario: The selection names a missing config
+- **WHEN** the local file names a config that is missing or unreadable
+- **THEN** the harness stops as with no selection
+- **AND** it does not fall back to another config or to a shipped default config
+
 ### Requirement: H-073 Flow systems are linked, never vendored, and checked present at start
-Flow systems themselves, such as GSD or superpowers, SHALL NOT be stored in the project repo. Configs SHALL only link to them. When the harness starts development, it MUST check that every technology and skill the flow names is present, because a linked system may be absent from a given machine. What happens when one is missing is not decided yet.
+Flow systems themselves, such as GSD or superpowers, SHALL NOT be stored in the project repo. Configs SHALL only link to them. When the harness starts development, it MUST check that every technology and skill the flow names is present, because a linked system may be absent from a given machine. If one is missing, the harness SHALL stop before work starts, name it and install nothing (design.md D37-RUNTIME-3).
 
 Source: interview 2026-11-24 R17.5, R17.6
-OPEN: see design.md OPEN-20
+Decided: design.md D37-RUNTIME-3
 
 #### Scenario: All named tools are present
 - **WHEN** the harness starts development and every technology and skill the flow names is installed
@@ -194,7 +229,8 @@ OPEN: see design.md OPEN-20
 
 #### Scenario: A named skill is missing
 - **WHEN** the harness starts development and a skill the flow names is not installed
-- **THEN** the harness detects that the named skill is absent
+- **THEN** the harness stops before any work starts and prints the missing skill with its install step
+- **AND** it installs nothing
 
 #### Scenario: The repo holds only links
 - **WHEN** a flow config uses GSD
@@ -214,10 +250,10 @@ Source: interview 2026-11-24 R17.8
 - **THEN** the newcomer can learn from the repo that the harness is used and how to install it
 
 ### Requirement: H-075 Per-step runtime, including Codex for steps with the same result
-Each flow step SHALL be able to name its agent runtime. Steps with the same result SHALL be able to run on Codex, configurable with profiles (part of the beta). No runtime name SHALL be hard-coded in the plugin. Details: design.md D30, D31.
+Each flow step SHALL be able to name its agent runtime. Steps with the same result SHALL be able to run on Codex, configurable with profiles (part of the beta). No runtime name SHALL be hard-coded in engine code; such names live in data files. Details: design.md D30, D31.
 
 Source: interview 2026-11-24 R24.5, R24.6; D30, D31; context (rejected: hard-coding a vendor name)
-OPEN: see design.md OPEN-19 (Codex execution depth and Codex profile details) and OPEN-16 (hard-coded names)
+Decided: design.md D37-RUNTIME-1, D37-RUNTIME-2
 
 #### Scenario: UI review runs on Codex
 - **WHEN** the flow configuration sets the UI review step to run on Codex
@@ -225,7 +261,7 @@ OPEN: see design.md OPEN-19 (Codex execution depth and Codex profile details) an
 
 #### Scenario: Execution on Codex needs careful checking
 - **WHEN** the user wants the execution step to run on Codex
-- **THEN** it runs there only after careful checking
+- **THEN** it runs there only when the flow config names Codex for that step, and the harness marks it experimental until a comparison run gives the same result (design.md D37-RUNTIME-2)
 
 #### Scenario: Code review runs on Codex
 - **WHEN** the flow configuration sets the code review step to run on Codex and the other steps on Claude Code
@@ -237,10 +273,10 @@ OPEN: see design.md OPEN-19 (Codex execution depth and Codex profile details) an
 - **THEN** the harness offers it as experimental (design.md D30)
 
 ### Requirement: H-076 Optional requirements format, with an offer to set up OpenSpec
-The harness SHALL be able to offer OpenSpec setup as a project's requirements format; for now it is the only one. Using one MUST be optional and configurable, including whether grilling uses the requirements. A project without OpenSpec SHALL be a valid, normal case. Defaults: design.md D41 (agent decision on the owner's delegation; he did not know the answer); they clash with H-001.
+The harness SHALL be able to offer OpenSpec setup as a project's requirements format; for now it is the only one. Using one MUST be optional and configurable, including whether grilling uses the requirements. A project without OpenSpec SHALL be a valid, normal case. Defaults: design.md D41 and D37-FLOW-7 (agent decisions on the owner's delegation); the default format is none.
 
 Source: interview 2026-11-24 R30.2, R30.3; D41
-OPEN: see design.md OPEN-1
+Decided: design.md D37-FLOW-7 (H-001: see OPEN-1)
 
 #### Scenario: OpenSpec is offered and accepted
 - **WHEN** the user picks OpenSpec as the requirements format and the project has none

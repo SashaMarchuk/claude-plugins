@@ -2,7 +2,7 @@
 
 ### Requirement: H-089 Liveness from simple, low-cost hooks
 The harness SHALL use simple Claude Code hooks that record what each session does, so the harness can check that the session works. The hooks SHALL stay simple, SHALL spend few credits, and SHALL keep clutter low. The concrete cost rule is an agent decision; see design.md S8-SESSIONS.
-OPEN: see design.md OPEN-SESSIONS-1
+Decided: design.md D37-SESSIONS-2 (hook events)
 
 Source: interview 2026-11-24 R19.1; S8-SESSIONS
 
@@ -74,7 +74,7 @@ Source: interview 2026-11-24 R18.4; D20
 
 ### Requirement: H-094 Configurable recovery attempts
 The harness SHALL make three recovery attempts for a worker session by default. The number of attempts and the waits between them SHALL be configurable. The owner gave starting guesses for the waits; the defaults that replace them are an agent decision, see design.md D21.
-OPEN: see design.md OPEN-SESSIONS-2
+Decided: design.md D37-SESSIONS-1
 
 Source: interview 2026-11-24 R18.5; D21
 
@@ -88,7 +88,11 @@ Source: interview 2026-11-24 R18.5; D21
 
 #### Scenario: Attempts run out (design default D21)
 - **WHEN** all configured recovery attempts for a ticket have failed
-- **THEN** following the design.md D21 default, the ticket goes to `blocked` with a reason
+- **THEN** following the design.md D21 default, the ticket goes to `blocked` with a reason and one comment, and the queue continues
+
+#### Scenario: Late attempt (design.md D37-SESSIONS-1)
+- **WHEN** a ticket has been blocked for 12 hours because its recovery attempts ran out, the run is still alive, and no human-stop signal exists
+- **THEN** the harness makes one more attempt with a new session and the context pack, and if it fails the ticket stays blocked and nothing more is tried
 
 ### Requirement: H-095 No prompts are sent while the service is down
 When the Claude Code service is down, the harness MUST NOT keep sending prompts that will fail. It SHALL wait until the service is back and then continue.

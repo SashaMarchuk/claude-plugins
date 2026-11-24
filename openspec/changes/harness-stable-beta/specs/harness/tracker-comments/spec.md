@@ -135,7 +135,7 @@ Source: interview 2026-11-24 R11.1, R11.6, R29.1; S8-11
 Only a reply from a person with confirmed write access, or higher, SHALL return a waiting ticket to work. A reply from a person without write access, or whose access cannot be confirmed, SHALL change the ticket's status to needs-review and MUST NOT resume the ticket.
 
 Source: interview 2026-11-24 R11.2, R11.3
-OPEN: see design.md OPEN-11
+Decided: design.md D37-COMMENTS-2 (identity data)
 
 #### Scenario: Writer answers
 - **WHEN** a person with confirmed write access answers the numbered questions
@@ -164,10 +164,10 @@ Source: interview 2026-11-24 R29.6; D13
 - **THEN** the harness ignores the field and treats the platform author as the author, as set in design.md D13
 
 ### Requirement: H-035 Answers from unmapped authors need revalidation by a writer
-An answer whose author maps to a tracker account with write access or higher SHALL be trusted. An answer whose author cannot be mapped MUST NOT be applied until a person with write access revalidates it. Until then, the ticket SHALL move to needs-review, as in H-033 (agent decision under D37, design.md D37-COMMENTS-1).
+An answer whose author maps to a tracker account with write access or higher SHALL be trusted. An answer whose author cannot be mapped, or has no write access, MUST NOT be applied until a person with write access revalidates it. Until then, the ticket SHALL move to needs-review, as in H-033 (agent decision under D37, design.md D37-COMMENTS-1).
 
 Source: interview 2026-11-24 R29.7; agent decision D37-COMMENTS-1 (from R11.2, R11.3)
-OPEN: see design.md OPEN-11, OPEN-21
+Decided: design.md D37-COMMENTS-2, D37-COMMENTS-3
 
 #### Scenario: Mapped writer answers in a channel
 - **WHEN** an answer arrives from a channel author whose identity maps to a tracker account with write access
@@ -181,3 +181,8 @@ OPEN: see design.md OPEN-11, OPEN-21
 #### Scenario: Unmapped author who really has write access
 - **WHEN** an answer arrives from an author who cannot be mapped to a tracker account but who really has write access
 - **THEN** the harness still does not apply the answer until a person with write access revalidates it
+
+#### Scenario: Known non-writer answers in a channel
+- **WHEN** an answer arrives from a channel author whose identity maps to a tracker account without write access
+- **THEN** the harness records the answer with its author but does not apply it
+- **AND** the ticket moves to needs-review until a person with write access revalidates the answer

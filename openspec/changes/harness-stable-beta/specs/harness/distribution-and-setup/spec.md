@@ -30,18 +30,18 @@ Source: interview 2026-11-24 R27.6
 - **AND** the guide is short
 
 ### Requirement: H-127 Two separate setup skills: harness configuration and project setup
-The plugin SHALL provide two separate skills with different names: harness configuration fits the harness to a project, and project setup sets the project up for AI development. Names: see the scenarios and design.md D33.
+The plugin SHALL provide two separate skills with different names: harness configuration fits the harness to a project, and project setup sets the project up for AI development. Names: design.md D33a.
 
 Source: interview 2026-11-24 R27.7, R27.8, R27.9; D33
-OPEN: see design.md OPEN-DISTRIBUTION-2
+Decided: design.md D33a
 
 #### Scenario: Final skill names
 - **WHEN** the builder names the two skills
-- **THEN** the working names are "config" and "setup", and the builder chooses the final names by careful analysis and a reinforcement loop (delegated to the builder; chosen names in design.md D33)
+- **THEN** the working names are "config" and "setup", and the builder chooses the final names by careful analysis and a reinforcement loop (delegated to the builder; chosen names in design.md D33a: `/harness:config` and `/harness:ai-ready`)
 
 #### Scenario: Which name fits which job
 - **WHEN** the two jobs are assigned to the working names
-- **THEN** each skill's job is taken from the content of R27.8 and R27.9, and the owner has not confirmed which working name goes with which job
+- **THEN** each skill's job is taken from the content of R27.8 and R27.9: `/harness:config` is the harness configuration skill, and `/harness:ai-ready` is the project setup skill (design.md D33a)
 
 #### Scenario: A user wants to change harness settings
 - **WHEN** a user wants to change how the harness behaves in a project, such as its autonomy level
@@ -72,18 +72,18 @@ Source: interview 2026-11-24 R27.8
 - **THEN** every setting the plugin offers, including the autonomy settings, can be set through this skill
 
 ### Requirement: H-129 The project setup skill applies AI-development practices
-The project setup skill SHALL apply AI-development best practices to the repository, so that AI development there is more reliable. The scenarios give examples; the list is open, not the full set. The skill MUST NOT set up the item the owner excluded in the interview; reading that item as the flow system (GSD) is an interpretation.
+The project setup skill SHALL apply AI-development best practices to the repository, so that AI development there is more reliable. The scenarios give examples; the list is open, not the full set. The skill MUST NOT set up a flow system such as GSD (design.md D37-DISTRIBUTION-1).
 
 Source: interview 2026-11-24 R27.9
-OPEN: see design.md OPEN-DISTRIBUTION-1
+Decided: design.md D37-DISTRIBUTION-1
 
 #### Scenario: Hooks are added
 - **WHEN** a person runs the project setup skill and hooks fit the repository
 - **THEN** the skill may add hooks as one of its AI-development practices
 
-#### Scenario: The excluded item is not set up
+#### Scenario: No flow system is set up
 - **WHEN** a person runs the project setup skill
-- **THEN** the skill does not set up the item the owner excluded, read as the flow system (GSD)
+- **THEN** the skill does not install or configure a flow system such as GSD
 
 #### Scenario: SECURITY.md is missing
 - **WHEN** a person runs the project setup skill in a repository without SECURITY.md

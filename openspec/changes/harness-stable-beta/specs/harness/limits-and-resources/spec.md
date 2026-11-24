@@ -30,7 +30,7 @@ Source: interview 2026-11-24 R21.2; D26a. S8-21 only rules out a free-memory che
 
 ### Requirement: H-106 A confirmed out-of-memory stop lowers the cap by one
 When a container stops because the machine ran out of memory, and that cause is confirmed, the harness SHALL lower the worker cap by one automatically. When the cap is already 1, the harness SHALL keep the cap at 1 and restart the task. The harness MUST NOT lower the cap for a stop whose cause is not confirmed as lack of memory.
-OPEN: see design.md OPEN-LIMITS-1, OPEN-LIMITS-2, OPEN-LIMITS-4, OPEN-16
+Decided: design.md D37-LIMITS-1, D37-LIMITS-2, D37-LIMITS-4, D37-LIMITS-6
 Source: interview 2026-11-24 R21.3
 
 #### Scenario: Confirmed out-of-memory stop with a cap above one
@@ -42,8 +42,20 @@ Source: interview 2026-11-24 R21.3
 - **THEN** the cap stays at 1 and the task restarts
 
 #### Scenario: Stop with an unconfirmed cause
-- **WHEN** a container stops and the cause cannot be confirmed as lack of memory
+- **WHEN** a container stops and the engine's check of the container runtime's own record does not say out of memory, or the record cannot be read
 - **THEN** the worker cap does not change
+
+#### Scenario: The same stop is reported twice (design.md D37-LIMITS-1)
+- **WHEN** the worker cap is 3 and one confirmed out-of-memory stop is reported two times
+- **THEN** the cap becomes 2, not 1
+
+#### Scenario: The lowered cap lasts for the run only (design.md D37-LIMITS-2)
+- **WHEN** a run lowered the cap from 3 to 2, the run is resumed, and later a new run starts
+- **THEN** the resumed run keeps a cap of 2, the configured value is still 3, and the new run starts with a cap of 3
+
+#### Scenario: The stopped task after the cap is lowered (design.md D37-LIMITS-4)
+- **WHEN** the worker cap is 3, three workers run, and one ticket's container stops with a confirmed lack of memory
+- **THEN** the cap becomes 2, the other two workers continue, and the stopped task restarts when a slot is free under the cap of 2
 
 ### Requirement: H-107 Per-stage and heavy-operation limits
 The harness SHALL support limits per stage, such as a browser or UI check, next to the overall worker cap, and one shared limit for heavy operations. The owner left the choice of heavy operations to the orchestrator or a recommended list; as an agent decision, a default list is fixed and stage and heavy limits default to 1 (design.md D26). The orchestrator MAY extend the list but MUST NOT raise a limit.
@@ -83,7 +95,7 @@ Source: interview 2026-11-24 R21.6; D26b; context rejected entry 4
 
 ### Requirement: H-109 Limits are read for every added account, including a possible 5-hour window
 The harness SHALL read the subscription limits of every account added to it, and SHALL account for a possible 5-hour limit, which only some subscriptions have. The owner accepted the current reading method and welcomed a better or more efficient one. The reading source is an agent decision (design.md D28, S8-23).
-OPEN: see design.md OPEN-LIMITS-5
+Decided: design.md D37-LIMITS-5
 Source: interview 2026-11-24 R23.1, R23.2, R23.4; D28, S8-23
 
 #### Scenario: Direct endpoint read is opt-in

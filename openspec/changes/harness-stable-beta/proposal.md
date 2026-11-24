@@ -35,7 +35,7 @@ The owner's interview of 2026-11-24 fixed the features of a stable beta. The goa
 - `harness/distribution-and-setup`
 
 ### Modified Capabilities
-None. `harness/orchestrator-workflow` (H-001) is unchanged; its tension with optional OpenSpec is recorded in design.md OPEN-1.
+None. `harness/orchestrator-workflow` (H-001) is unchanged. The requirements format default is decided in design.md D37-FLOW-7. The H-001 rewording waits for the owner (design.md OPEN-1).
 
 ## Non-goals
 

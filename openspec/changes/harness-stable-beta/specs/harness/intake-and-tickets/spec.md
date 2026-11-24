@@ -78,7 +78,7 @@ Source: interview 2026-11-24 R1.7, R1.8 (fallback); R4.3, R4.4 and D1 (the trigg
 ### Requirement: H-008 Write access or higher required for the ready trigger
 Before taking a ticket, the harness SHALL check the access level of whoever set the ready label or status, and take it only if that person has write access or higher to the repository and the ticket is ready. A bot or automation SHALL be able to queue a ticket only through write access: its own, or that of the person it acts for.
 
-Source: interview 2026-11-24 R4.1, R4.2, R4.6 (confirmed restatement covers both cases)
+Source: interview 2026-11-24 R4.1, R4.2, R4.6 (confirmed restatement covers both cases); every target repository: D37-INTAKE-9
 OPEN: see design.md OPEN-INTAKE-1
 
 #### Scenario: A writer sets the label
@@ -99,6 +99,11 @@ OPEN: see design.md OPEN-INTAKE-1
 - **THEN** the harness judges the trigger by the bot account's own access
 - **AND** it may take the ticket into work
 
+
+#### Scenario: The ticket targets a repository where the person has no write access
+- **WHEN** a writer of the ticket repository sets the ready label on a ticket whose scope names a configured repository where that person has no write access, or access cannot be read
+- **THEN** the harness does not take the ticket into work
+- **AND** it moves the ticket to the needs-review state with one comment that names the repository
 ### Requirement: H-009 Unknown or unmatchable access counts as read-only
 If the harness cannot determine the access level of the person who set the trigger, it SHALL treat that person as read-only. This MUST also apply when a person from an external tracker cannot be matched to a code host account.
 

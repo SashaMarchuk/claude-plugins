@@ -53,6 +53,8 @@ ho_tk_settings() {
   HO_TK_SOURCE=${HO_TICKETS_SOURCE:-local}
   HO_TK_REPO=${HO_TICKETS_REPO:-}
   HO_TK_DIR=${HO_TICKETS_DIR:-$PWD/.harness/tickets}
+  case $HO_TK_DIR in *"
+"*) ho_tk_err "the ticket folder path holds a line break; move the project to a path without one"; return 64 ;; esac
   HO_TK_PREFIX=${HO_STATE_PREFIX:-harness}
   HO_TK_LOCK_WAIT=${HO_TICKET_LOCK_WAIT:-30}
   HO_TK_LOCK_STALE=${HO_TICKET_LOCK_STALE:-120}
@@ -265,18 +267,30 @@ ho_tk_locked() { # <function> [args...]
 # ho_tk_l_each: every ticket file as <id><TAB><path>. Only <digits>-<slug>.md with at most
 # 9 digits is a ticket; "7 IGNORE ... -x.md" is not ticket 7.
 ho_tk_l_each() {
+  local LC_ALL=C   # byte-wise ranges in the name check below
   local f n
   for f in "$HO_TK_DIR"/[0-9]*-*.md; do
     [ -f "$f" ] || continue
-    # A name with a newline or a tab would forge a second <id><TAB><path> record.
-    case $f in *"
-"*|*"$(printf '\t')"*) continue ;; esac
-    n=$(basename "$f")
+    n=${f##*/}
+    # Allow list on the file name only: <digits>-<letters, digits, . _ ->.md. A name
+    # with a newline, tab, space or other control byte could forge a record; skip it.
+    case $n in *[!A-Za-z0-9._-]*) continue ;; esac
     n=$(ho_tk_id "${n%%-*}") || continue
     printf '%s\t%s\n' "$n" "$f"
   done
 }
-ho_tk_l_max_id() { ho_tk_l_each | cut -f1 | sort -n | tail -1; }
+# ho_tk_l_max_id: the highest id carried by ANY file name <digits>-*.md, valid ticket name
+# or not, so a stray file never blocks the next id forever. Only the digits are read.
+ho_tk_l_max_id() {
+  local LC_ALL=C f p max=0
+  for f in "$HO_TK_DIR"/[0-9]*-*.md; do
+    [ -e "$f" ] || continue
+    p=${f##*/}; p=${p%%-*}
+    p=$(ho_tk_id "$p") || continue
+    [ "$p" -gt "$max" ] && max=$p
+  done
+  printf '%s\n' "$max"
+}
 ho_tk_l_find() { # <id> -> path of the file with that id, or nothing
   ho_tk_l_each | awk -F '\t' -v id="$1" '$1 == id && !found { found = 1; sub(/^[^\t]*\t/, ""); print }'
 }
@@ -354,7 +368,11 @@ ho_tk_l_add_locked() { # <title> <body-file> <state>
   slug=$(printf '%s' "$title" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)
   [ -n "$slug" ] || slug=ticket
   # Only the id is printed: a file name is untrusted text and stays out of messages.
-  if [ -n "$(ho_tk_l_find "$n")" ]; then
+  # Any file that carries the id blocks it (approved hand patch), also one whose name is
+  # not a valid ticket name, so a stray file is never silently shadowed.
+  local g taken=""
+  for g in "$HO_TK_DIR/$n"-*.md; do [ -e "$g" ] && taken=1; break; done
+  if [ -n "$taken" ] || [ -n "$(ho_tk_l_find "$n")" ]; then
     ho_tk_err "ticket id $n is already on disk; no ticket was created. Ids are never reused: run the add again."
     return 70
   fi

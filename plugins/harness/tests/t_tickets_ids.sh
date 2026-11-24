@@ -2,7 +2,9 @@
 h="$HO_PLUGIN_ROOT/bin/harness"
 printf '## Outcome\nx\n\n## Scope\ny\n\n## Acceptance criteria\nz\n' > body.md
 
+# A long lock wait: under heavy machine load 50 writers can need more than the 30 s default.
 for n in 2 20 50; do
+  export HO_TICKET_LOCK_WAIT=180
   export HO_TICKETS_DIR="$PWD/q$n/tickets"
   mkdir -p "out$n"
   pids=""
@@ -34,6 +36,7 @@ for n in 2 20 50; do
   assert_eq "H-017 $n parallel adds: each ticket file holds its own title" "0" "$mism"
   assert_eq "H-017 $n parallel adds: the lock is released" "no" "$( [ -e "$PWD/q$n/.tickets.lock" ] && echo yes || echo no)"
 done
+unset HO_TICKET_LOCK_WAIT
 
 # A lock held by a live add makes a second add wait, then give up with 75 and create nothing.
 export HO_TICKETS_DIR="$PWD/held/tickets"
@@ -115,9 +118,24 @@ cp "$PWD/victim.md" "$PWD/victim.before"
 "$h" tickets add "Next one" body.md >/dev/null 2>&1 || true
 assert_eq "H-017 names: a file name with a newline never runs as code" "no" "$([ -e "$PWD/pwned" ] && echo yes || echo no)"
 ids=$("$h" tickets ids 2>/dev/null | tr '\n' ' ')
-assert_eq "H-017 names: a forged record adds no id" "1 2 " "$ids"
+assert_eq "H-017 names: a forged record adds no id (stray files 2 and 3 are skipped; the next add takes 4)" "1 4 " "$ids"
 rc=0; "$h" tickets show 7 >/dev/null 2>&1 || rc=$?
 assert_eq "H-017 names: show of a forged id finds nothing (exit 66)" "66" "$rc"
 printf 'x\n' > why.md
 "$h" tickets comment 7 why.md >/dev/null 2>&1 || true
 assert_eq "H-017 names: a file outside the ticket folder stays unchanged" "same" "$(cmp -s "$PWD/victim.md" "$PWD/victim.before" && echo same || echo changed)"
+
+# The name check reads the file name only: a tab in the ticket folder path is fine
+# (PR #87 third check, B1); a line break in the folder path is refused clearly.
+tabdir="$PWD/with$(printf '\t')tab/tickets"
+mkdir -p "$tabdir"
+o1=$(HO_TICKETS_DIR="$tabdir" "$h" tickets add "Same title" body.md 2>&1); o2=$(HO_TICKETS_DIR="$tabdir" "$h" tickets add "Same title" body.md 2>&1)
+assert_eq "H-017 names: a tab in the folder path still gives ids 1 and 2" "1 2 " "$(HO_TICKETS_DIR="$tabdir" "$h" tickets ids 2>/dev/null | tr '\n' ' ')"
+assert_eq "H-017 names: no ticket is overwritten under a tab path" "2" "$(ls "$tabdir" | wc -l | tr -d ' ')"
+for c in "$(printf '\r')" "$(printf '\033')" "$(printf '\001')" ' '; do
+  : > "$tabdir/9-a${c}b.md"
+done
+assert_eq "H-017 names: control bytes and spaces in a name are not tickets" "1 2 " "$(HO_TICKETS_DIR="$tabdir" "$h" tickets ids 2>/dev/null | tr '\n' ' ')"
+nldir="$PWD/with$(printf '\nX')"; nldir="${nldir%X}line/tickets"
+rc=0; HO_TICKETS_DIR="$nldir" "$h" tickets add "x" body.md >/dev/null 2>&1 || rc=$?
+assert_eq "H-017 names: a line break in the ticket folder path is refused (exit 64)" "64" "$rc"

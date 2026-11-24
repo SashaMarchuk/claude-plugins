@@ -8,9 +8,10 @@ This file is a filtered copy. It keeps only what helps to build or test the rebu
 
 How to read a record:
 
-- The text states what happened. It gives no recommendation.
+- The text states what happened. It gives no recommendation and sets no rule; requirements live only in `openspec/`.
 - **Why it matters** is one line that ties the record to the new engine.
-- **Relates to** names requirement IDs (`H-…`) and design decisions (`D…`, `S8-…`) from the change `harness-stable-beta`. "No requirement" means none fits.
+- **Relates to** names requirement IDs (`H-…`), design decisions (`D…`, `S8-…`), open questions (`OPEN-…`) or the design reuse list, all from the change `harness-stable-beta`. "No requirement" means none fits.
+- Record labels (A1, D1 and so on) are local to this file. A record label D1 is not design decision D1; a design decision is always cited after **Relates to**.
 
 The raw logs these records come from are in a private project and are not public. Session, branch and ticket names are removed. Where the source contradicts itself, the record says so and does not pick a side.
 
@@ -26,8 +27,8 @@ Context for section A: the old engine called a session stalled when three things
 *Why it matters:* "a child process exists" and "tool calls keep coming" are not progress.
 *Relates to:* H-089, H-090.
 
-**A3. A session burned its context on polling.** One worker waited for subagents by running `echo idle` in a loop instead of ending its turn. Of its 3,626 shell calls, 3,466 were that command, one every 2.5 seconds for 3 hours 15 minutes. The idle replies added 445k tokens of context, 77% of all growth in that window, against 135k from real work. The session reached 91% of its window. It stopped within one minute of being told to end its turn. Eleven other workers in the same run never polled. The polling worker had loaded the `Monitor` tool and never used it. Its prompt warned that subagents may hang; the source names that warning as the likely cause (see also C3). A different worker built up 58 concurrent `sleep` shells over two hours; each returned output into the session.
-*Why it matters:* a hook log full of tool calls can describe a session that does nothing; worker prompts must say how to wait, and a warning in a prompt can cause defensive behaviour.
+**A3. A session burned its context on polling.** One worker waited for subagents by running `echo idle` in a loop instead of ending its turn. Of its 3,626 shell calls, 3,466 were that command, one every 2.5 seconds for 3 hours 15 minutes. The source gives both figures, and they do not agree: 3,466 calls at 2.5 seconds take about 2 hours 25 minutes. The idle replies added 445k tokens of context, 77% of all growth in that window, against 135k from real work. The session reached 91% of its window. It stopped within one minute of being told to end its turn. Eleven other workers in the same run never polled. The polling worker had loaded the `Monitor` tool and never used it. Its prompt warned that subagents may hang; the source names that warning as the likely cause (see also C3). A different worker built up 58 concurrent `sleep` shells over two hours; each returned output into the session.
+*Why it matters:* a test scenario: a hook log full of tool calls from a session that does nothing. The record also shows that a warning in a prompt can cause defensive behaviour.
 *Relates to:* H-089, H-091.
 
 **A4. The heartbeat was also wrong in the other direction.** In the first run the orchestrator sat idle for more than 35 minutes with eight ready tickets and no workers. The watcher had logged it as "held", so nothing reacted. Separately, its heartbeat file had stopped moving at an earlier date although the session showed real activity after that.
@@ -38,12 +39,12 @@ Context for section A: the old engine called a session stalled when three things
 *Why it matters:* test recovery against a session that repeats one failing command, and against one that is simply silent.
 *Relates to:* H-091, H-094, D20.
 
-**A6. A dead orchestrator went unnoticed for hours.** The typed Enter was the only escalation the engine had. Nothing stronger fired at any age. The longest stale age before a nudge was 47 minutes in the second run and about 12.4 hours in the first. The first run ended with stale ages of 6457 s, 9924 s and 13578 s, then a full teardown after three dead checks. The run's own report, written by its fifth orchestrator, records thirteen merges, green full-suite gates and no ticket left in progress. The run did not end cleanly. A project script that watched the dead run wrote the same line every three minutes for about five days: 1085 times, never resolved.
+**A6. A dead orchestrator went unnoticed for hours.** For a stale session, the typed Enter was the only escalation the engine had; the only other reaction was the full teardown described below. Nothing between the two fired at any age. The longest stale age before a nudge was 47 minutes in the second run and about 12.4 hours in the first. The first run ended with stale ages of 6457 s, 9924 s and 13578 s, then a full teardown after three dead checks. The run's own report, written by its fifth orchestrator, records thirteen merges, green full-suite gates and no ticket left in progress. The run did not end cleanly. A project script that watched the dead run wrote the same line every three minutes for about five days: 1085 times, never resolved. The source gives both figures, and they do not agree: 1085 lines three minutes apart span about 54 hours.
 *Why it matters:* this is the gap the watch script and the restart path close; a run also needs one clear end state.
 *Relates to:* H-098, H-088, H-079, D23; no requirement for repeated alerts.
 
 **A7. A finished session was closed by nobody.** A question-role session answered its question and then stayed open and registered for 28 hours. The watcher logged it as "finished, awaiting close" for hours and had no duty to close it. The orchestrator that started it had moved on. A human closed it. Its terminal title made a human read it as a second orchestrator.
-*Why it matters:* close-when-done must hold for every role, not only workers.
+*Why it matters:* a test case for a non-worker session that finishes its job. Whether every role must close when done is open (OPEN-22).
 *Relates to:* H-081, OPEN-22.
 
 **A8. Closing without force worked.** Four sessions hit the close timeout while a job still ran. Each was left open, as designed, and was later found finished on its own.
@@ -79,7 +80,7 @@ Five instructions were lost this way in the second run. At one point a thirteent
 *Relates to:* H-101.
 
 **B4. Long text failed without an error.** A typed message of about 1100 characters produced no error and never appeared. A 450-character version of the same message landed. These two sizes are the only measured pair. The source also states a limit of "roughly 200 characters", taken from a separate reference.
-*Why it matters:* the typed fallback needs a length test and a size limit.
+*Why it matters:* a test scenario for the typed fallback: a long message that is never delivered and raises no error.
 *Relates to:* H-101.
 
 **B5. A typed command was eaten as a plain message.** A slash command was typed three times into the same session. With an empty input line and no background shell it worked once. With background shells running it failed twice; once it was consumed as an ordinary user message.
@@ -105,7 +106,7 @@ Five instructions were lost this way in the second run. At one point a thirteent
 *Relates to:* H-067, S8-07.
 
 **C5. Moving a checked-out branch by ref corrupted the tree.** `git update-ref` moved the trunk to the remote tip while the trunk was checked out. HEAD moved; the index and working tree did not. `git status` then showed the newest committed content as a staged deletion, one commit away from reverting it.
-*Why it matters:* the engine must not move a branch that is checked out anywhere.
+*Why it matters:* a test scenario: a branch moved by ref while it is checked out in some worktree.
 *Relates to:* H-046; local integration branch (design reuse list).
 
 **C6. Merge checks that misfired.** A merge-equivalence check failed falsely because it diffed the wrong pair of trees (554 unrelated files) instead of the paths the merge introduced against the paths the branch changed. Holding a merge locally did not keep it off the remote while another writer existed, so the gate moved to "right after each merge". Validators had to wait until no browser-test process was running before they started the gate suite.
@@ -117,11 +118,11 @@ Five instructions were lost this way in the second run. At one point a thirteent
 - A test run cut short by memory pressure reported 346 passed, 0 failed. Only arithmetic caught it: 346 passed plus 35 not reached did not equal the declared 382. The missing test was not in the not-reached list either. It followed a host with about 75 MB free.
 - A test file that crashed at collection reported `No tests found`, which reads as "zero tests", not as a failure.
 
-*Why it matters:* the case for the non-zero check and for the sum check; the expected total must come from the test collector, because the not-reached list was itself incomplete.
+*Why it matters:* the case for the non-zero check and for the sum check. The not-reached list was itself incomplete, so it could not supply the expected total.
 *Relates to:* H-056, H-057, OPEN-VERIFICATION-2.
 
 **C8. A worktree can commit without the project's commit hooks.** In a fresh worktree, a dependency install with scripts disabled never installed the pre-commit hooks. Commits from that worktree passed no gate.
-*Why it matters:* a worktree does not inherit the main checkout's safety net; the validator must not assume it.
+*Why it matters:* a test scenario: a fresh worktree has none of the main checkout's commit hooks.
 *Relates to:* H-055; no requirement for the hooks themselves.
 
 ## D. Tickets, labels and state files
@@ -188,11 +189,11 @@ Five instructions were lost this way in the second run. At one point a thirteent
 2. The fix put a slow lookup between the two files that mark a pause. A restart in that window read the stop file as a manual stop and exited instead of resuming.
 3. After the two writes were made serial, the stop file was still written even when the marker write failed. That left a stop with no recorded cause.
 
-*Why it matters:* the same three scenarios apply to the engine's own wait-for-reset and STOP handling; a pause must be one atomic record with its cause.
+*Why it matters:* the same three scenarios are test cases for the engine's own wait-for-reset and STOP handling.
 *Relates to:* H-114, D28c, D25b.
 
 **F5. A status-line pattern missed a model name.** A pattern that parsed the session status line did not match a model version with a decimal point. The watch fell back to a broken capture for three sessions and said nothing.
-*Why it matters:* the new limits read parses the status line; no model names in engine code, and a parse miss must be reported.
+*Why it matters:* the new limits read parses the status line. A test scenario: a model name with a decimal point, and a parse miss that goes unreported.
 *Relates to:* H-109, D28.
 
 ## G. Measured timings and costs
@@ -250,11 +251,11 @@ Thirteen of nineteen planned phases merged in the first 34 hours. Later phases t
 *Relates to:* H-099, H-113.
 
 **I3. "OK" with nothing checked.** A comparison check printed `OK, 0 files compared` when run from a subfolder. A sweep returned exit 0 against a real diff. A patch script printed `SYNTAX OK` while its search anchor never matched and nothing was written; that was the third such case in one day. A scanner ignored a bare path argument and read clean over files it never opened. The same scanner called files over 32 MB "unreadable" and skipped them without a word. The comparison check named first existed only as prose; no automation ran it.
-*Why it matters:* a check must fail when it checked zero items, and "could not read" must never read as "clean".
+*Why it matters:* test scenarios for any check: zero items checked, and a file that could not be read. Both read as clean here.
 *Relates to:* H-056, H-046; same principle as D28b (unknown is never OK).
 
 **I4. Secrets reached a session transcript.** A test tool's trace mode printed two local passwords into a transcript. Nothing scans tool output or transcripts.
-*Why it matters:* never commit a real transcript or screen capture as a test fixture without reading it.
+*Why it matters:* a real transcript or screen capture used as a test fixture can carry secrets.
 *Relates to:* no requirement (scrubbing is a non-goal).
 
 **I5. Detached scripts start with no environment.** Scripts started by `nohup` or by the system scheduler did not inherit the shell environment. Each had to set the tracker CLI's account itself, or the CLI could not reach the repository.

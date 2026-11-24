@@ -130,5 +130,5 @@ Read the matching section before you change one of these areas, and when you wri
 - worker cap defaults, usage history, timeouts — section G
 - any detector, probe or gate that reads a screen, a log or an exit code — section I
 
-Each record names the requirement it relates to, or says that none fits.
+Each record names the requirement or design decision it relates to, or says that none fits.
 A record is covered when a test fails without the fix.

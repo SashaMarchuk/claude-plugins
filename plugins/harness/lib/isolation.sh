@@ -12,24 +12,30 @@ HO_OLD_SCRIPTS="harness-run.sh harness-tickets.sh harness-spawn.sh harness-term.
 # Print one "ISOLATION FAIL:" line per problem. Exit 65 on any problem,
 # else print "ISOLATION OK" and return 0.
 ho_isolation_check() {
-  local problems=0 var dir script
-  for var in $HO_OLD_VARS; do
+  local problems=0 var dir script rest seen=""
+  # Every HARNESS_* variable counts: the 0.6.0 engine owns that prefix (the named list is the known set).
+  for var in $HO_OLD_VARS $(env | sed -n 's/^\(HARNESS_[A-Za-z0-9_]*\)=.*/\1/p' | sort -u); do
+    case " $seen " in *" $var "*) continue ;; esac
+    seen="$seen $var"
     if printenv "$var" >/dev/null 2>&1; then
       printf 'ISOLATION FAIL: old variable %s is set\n' "$var"
       problems=$((problems + 1))
     fi
   done
-  while IFS= read -r dir; do
-    [ -n "$dir" ] || continue
+  # Split PATH by hand: a trailing ":" is an empty component too, and
+  # command substitution would drop it. An empty component means the current folder.
+  rest="${PATH:-}:"
+  while [ -n "$rest" ]; do
+    dir=${rest%%:*}
+    rest=${rest#*:}
+    [ -n "$dir" ] || dir=.
     for script in $HO_OLD_SCRIPTS; do
       if [ -f "$dir/$script" ]; then
         printf 'ISOLATION FAIL: old script %s on PATH in %s\n' "$script" "$dir"
         problems=$((problems + 1))
       fi
     done
-  done <<PATHS
-$(printf '%s\n' "${PATH:-}" | tr ':' '\n')
-PATHS
+  done
   if [ "$problems" -gt 0 ]; then
     exit 65
   fi

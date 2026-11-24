@@ -5,20 +5,34 @@ h="$HO_PLUGIN_ROOT/bin/harness"
 assert_eq "Rebuild isolation: selftest passes in the scrubbed runner" "ISOLATION OK" "$("$h" selftest 2>&1)"
 assert_eq "Rebuild isolation: runner environment has no HARNESS_ variable" "" "$(env | grep '^HARNESS_' || true)"
 
-rc=0; out=$(HARNESS_PROJECT=/tmp/x "$h" selftest 2>&1) || rc=$?
-assert_eq "Rebuild isolation: selftest exits 65 with HARNESS_PROJECT set" "65" "$rc"
-assert_contains "Rebuild isolation: selftest names HARNESS_PROJECT" "$out" "ISOLATION FAIL: old variable HARNESS_PROJECT"
-
-rc=0; out=$(HARNESS_USER_DIR=/tmp/x "$h" selftest 2>&1) || rc=$?
-assert_eq "Rebuild isolation: selftest exits 65 with HARNESS_USER_DIR set" "65" "$rc"
-assert_contains "Rebuild isolation: selftest names HARNESS_USER_DIR" "$out" "ISOLATION FAIL: old variable HARNESS_USER_DIR"
+. "$HO_PLUGIN_ROOT/lib/isolation.sh"
+for v in $HO_OLD_VARS HARNESS_SOMETHING_NEW; do
+  rc=0; out=$(env "$v=/tmp/x" "$h" selftest 2>&1) || rc=$?
+  assert_eq "Rebuild isolation: selftest exits 65 with $v set" "65" "$rc"
+  assert_contains "Rebuild isolation: selftest names $v" "$out" "ISOLATION FAIL: old variable $v"
+done
 
 mkdir old-bin
-printf '#!/bin/sh\nexit 0\n' > old-bin/harness-run.sh
-chmod +x old-bin/harness-run.sh
-rc=0; out=$(PATH="$PWD/old-bin:$PATH" "$h" selftest 2>&1) || rc=$?
-assert_eq "Rebuild isolation: selftest exits 65 with an old script on PATH" "65" "$rc"
-assert_contains "Rebuild isolation: selftest names the old script" "$out" "ISOLATION FAIL: old script harness-run.sh"
+for sname in $HO_OLD_SCRIPTS; do
+  rm -f old-bin/*
+  printf '#!/bin/sh\nexit 0\n' > "old-bin/$sname"
+  chmod +x "old-bin/$sname"
+  rc=0; out=$(PATH="$PWD/old-bin:$PATH" "$h" selftest 2>&1) || rc=$?
+  assert_eq "Rebuild isolation: selftest exits 65 with old $sname on PATH" "65" "$rc"
+  assert_contains "Rebuild isolation: selftest names old $sname" "$out" "ISOLATION FAIL: old script $sname"
+done
+
+# An empty PATH component means the current folder (found by Codex review on PR #86).
+mkdir cwd-old && printf '#!/bin/sh\nexit 0\n' > cwd-old/harness-run.sh && chmod +x cwd-old/harness-run.sh
+for where in trailing leading middle; do
+  case $where in
+    trailing) p="$PATH:" ;;
+    leading) p=":$PATH" ;;
+    middle) p=$(printf '%s' "$PATH" | sed 's/:/::/') ;;
+  esac
+  rc=0; out=$(cd cwd-old && PATH="$p" "$h" selftest 2>&1) || rc=$?
+  assert_eq "Rebuild isolation: a $where empty PATH component counts as the current folder" "65" "$rc"
+done
 
 assert_eq "Rebuild isolation: claude resolves to the fake" "$HO_PLUGIN_ROOT/tests/fake-bin/claude" "$(command -v claude)"
 assert_eq "Rebuild isolation: fake claude --version" "0.0.0 (fake claude)" "$(claude --version)"
@@ -32,7 +46,7 @@ rc=0; out=$(HO_FAKE_CLAUDE_STDOUT="canned" HO_FAKE_CLAUDE_EXIT=3 HO_FAKE_CLAUDE_
 assert_eq "Rebuild isolation: fake claude prints canned stdout" "canned" "$out"
 assert_eq "Rebuild isolation: fake claude exits with the set code" "3" "$rc"
 
-hits=$(cd "$HO_PLUGIN_ROOT" && grep -rlE 'HARNESS_PROJECT|HARNESS_USER_DIR|HARNESS_USER_CONFIG' bin lib | grep -v '^lib/isolation.sh$' || true)
+hits=$(cd "$HO_PLUGIN_ROOT" && grep -rlE 'HARNESS_[A-Z_]+' bin lib | grep -v '^lib/isolation.sh$' || true)
 assert_eq "Rebuild isolation: only lib/isolation.sh names old variables in bin/ and lib/" "" "$hits"
 
 syntax=""

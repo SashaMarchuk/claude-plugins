@@ -4,11 +4,13 @@
 # Every helper returns 0, so a failed check never stops the test file.
 
 ok() {
+  set -- "$(printf '%s' "$1" | tr '\n' ' ')"
   printf 'PASS  %s\n' "$1"
   printf 'PASS\t%s\n' "$1" >> "$HO_TEST_RESULTS"
 }
 
 bad() {
+  set -- "$(printf '%s' "$1" | tr '\n' ' ')" "${2:-}"
   printf 'FAIL  %s: %s\n' "$1" "${2:-}"
   printf 'FAIL\t%s\n' "$1" >> "$HO_TEST_RESULTS"
   return 0

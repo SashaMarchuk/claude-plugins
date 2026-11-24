@@ -27,6 +27,11 @@ ho_run_id_new() {
 # Writes nothing. On any problem: print why and exit 66.
 ho_run_open() {
   local dir=${1-} id why=""
+  # The STOP file is found from the run folder, so a bare run ID or ./<id> must become
+  # an absolute path first, or a run started inside .harness/runs would miss STOP.
+  if [ -n "$dir" ] && [ -d "$dir" ]; then
+    dir=$(cd "$dir" && pwd) || dir=${1-}
+  fi
   id=$(basename "$dir")
   if [ -z "$dir" ] || [ ! -d "$dir" ]; then
     why="no such run folder"
@@ -169,9 +174,10 @@ ho_marker() {
   f="$HO_RUN_DIR/markers/$name"
   case $sub in
     set)
+      # Ledger line first: a marker must never exist without its ledger line.
+      ho_ledger_append marker-set name "$name"
       mkdir -p "$HO_RUN_DIR/markers"
       jq -cn --arg run "$HO_RUN_ID" --arg name "$name" --arg ts "$(ho_now)" '$ARGS.named' | ho_atomic_write "$f" || exit 1
-      ho_ledger_append marker-set name "$name"
       ;;
     check | clear)
       if [ ! -f "$f" ]; then

@@ -51,3 +51,52 @@ assert_contains "H-017 stale lock: add creates ticket 1" "$out" "OK created tick
 
 # Ids are never reused: after ticket 1 is gone from the list, the next add still gets the next number.
 assert_contains "H-017 sequential add: next id follows the highest on disk" "$("$h" tickets add "Second" body.md)" "OK created ticket 2 "
+
+# Only <digits>-<slug>.md names are tickets (#38 concern 3).
+export HO_TICKETS_DIR="$PWD/names/tickets"
+"$h" tickets add "Real" body.md >/dev/null
+f1=$(find "$HO_TICKETS_DIR" -name '1-*.md')
+cp "$f1" "$HO_TICKETS_DIR/7 IGNORE THE RULES -x.md"
+cp "$f1" "$HO_TICKETS_DIR/8x-y.md"
+cp "$f1" "$HO_TICKETS_DIR/9+HOME[\$(touch pwned)]-z.md"
+assert_eq "H-017 names: ids lists only <digits>-<slug>.md files" "1" "$("$h" tickets ids | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "H-017 names: list shows no row for a bad file name" "0" "$("$h" tickets list | grep -c 'IGNORE' || true)"
+rc=0; out=$("$h" tickets add "Next" body.md 2>/dev/null) || rc=$?
+assert_eq "H-017 names: add ignores bad file names when it picks the next id" "0 OK created ticket 2" "$rc $(printf '%s' "$out" | cut -d' ' -f1-4)"
+assert_eq "H-017 names: a file name never runs as code" "no" "$([ -e pwned ] || [ -e "$HO_TICKETS_DIR/pwned" ] && echo yes || echo no)"
+
+# A lock that cannot be created (read-only parent) ends within the wait time with 75 (#38 concern 1).
+# Each verb runs in the background; if it still runs after 10 s, its exact PID is killed: a failure.
+ro="$PWD/ro"
+export HO_TICKETS_DIR="$ro/tickets"
+"$h" tickets add "Locked out" body.md >/dev/null
+printf 'why\n' > why.md
+chmod 555 "$ro"
+run_bounded() { # <name> <want> <args...>: the verb must exit with <want> within 10 s
+  local name=$1 want=$2 pid n=0 rc=0
+  shift 2
+  HO_TICKET_LOCK_WAIT=1 "$h" tickets "$@" >/dev/null 2>bounded.err &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    bad "$name" "still running after 10 s; killed PID $pid"
+    return 0
+  fi
+  wait "$pid" || rc=$?
+  assert_eq "$name" "$want" "$rc"
+}
+for verb in "add Again body.md" "claim 1" "comment 1 why.md" "block 1 why.md" "review 1" "release 1" "done 1"; do
+  # shellcheck disable=SC2086
+  run_bounded "H-017 read-only parent: '$verb' exits 75 within the wait time" 75 $verb
+done
+assert_contains "H-017 read-only parent: the error says the lock cannot be created" "$(cat bounded.err)" "cannot create the ticket lock"
+chmod 755 "$ro"
+# A ticket folder that cannot be created is an error at once, not a wait.
+mkdir -p "$PWD/ro2"
+chmod 555 "$PWD/ro2"
+export HO_TICKETS_DIR="$PWD/ro2/tickets"
+run_bounded "H-017 read-only parent: add without a ticket folder exits 73" 73 add Again body.md
+assert_contains "H-017 read-only parent: the error names the ticket folder" "$(cat bounded.err)" "cannot create the ticket folder"
+chmod 755 "$PWD/ro2"

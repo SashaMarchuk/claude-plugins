@@ -73,3 +73,16 @@ sed "s/^status: ready\$/status: $inject/" "$f" > hostile.md && mv hostile.md "$f
 check_fenced "H-018 local hostile status line" hostile.out 1 "### Ticket 1 (state: unknown)"
 err=$("$h" tickets claim 1 2>&1 >/dev/null || true)
 assert_eq "H-018 local hostile status line: the claim error does not echo it" "" "$(printf '%s' "$err" | grep -F "$inject" || true)"
+
+# An invalid UTF-8 byte under a UTF-8 locale must not leave the fence open (#38 concern 2).
+unset HO_TICKETS_SOURCE HO_TICKETS_REPO
+export HO_TICKETS_DIR="$PWD/utf8/tickets"
+printf '## Outcome\nbad byte \377 here\n\n## Scope\ny\n\n## Acceptance criteria\nz\n' > bad-utf8.md
+"$h" tickets add "Bad byte" bad-utf8.md >/dev/null
+rc=0; LC_ALL=en_US.UTF-8 "$h" tickets fence 1 < bad-utf8.md > utf8-fence.out 2>/dev/null || rc=$?
+assert_eq "H-018 fence: a \\xff byte under LC_ALL=en_US.UTF-8 exits 0" "0" "$rc"
+check_fenced "H-018 fence: a \\xff byte under LC_ALL=en_US.UTF-8" utf8-fence.out 1
+rc=0; LC_ALL=en_US.UTF-8 "$h" tickets show 1 > utf8-show.out 2>/dev/null || rc=$?
+assert_eq "H-018 show: a \\xff byte under LC_ALL=en_US.UTF-8 exits 0" "0" "$rc"
+check_fenced "H-018 show: a \\xff byte under LC_ALL=en_US.UTF-8" utf8-show.out 1 "### Ticket 1 (state: ready)"
+assert_contains "H-018 show: the text after the \\xff byte is kept" "$(LC_ALL=C cat utf8-show.out)" "## Acceptance criteria"

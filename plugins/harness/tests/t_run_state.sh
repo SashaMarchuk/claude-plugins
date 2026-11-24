@@ -192,3 +192,22 @@ rc=0; "$h" state "$run3" stopped >/dev/null 2>&1 || rc=$?
 assert_eq "I1: an unreadable line after the last resume makes the stop state unknown again" "2" "$rc"
 "$h" state "$run3" stop "owner"
 assert_exit "I1: a stop after an unreadable line reads as stopped" 0 "$h" state "$run3" stopped
+
+# A bare run ID or ./<id>, typed inside .harness/runs, still finds the STOP file (#37 concern 1).
+run4=$("$h" run new)
+id4=$(basename "$run4")
+: > "$proj/.harness/STOP"
+for form in "$id4" "./$id4"; do
+  rc=0; (cd "$proj/.harness/runs" && "$h" state "$form" stopped >/dev/null 2>&1) || rc=$?
+  assert_eq "H-086: run path '$form' typed inside .harness/runs sees the STOP file (stopped exits 0)" "0" "$rc"
+  rc=0; (cd "$proj/.harness/runs" && "$h" state "$form" resume >/dev/null 2>&1) || rc=$?
+  assert_eq "H-086: run path '$form' typed inside .harness/runs refuses resume while STOP exists (exit 75)" "75" "$rc"
+done
+rm "$proj/.harness/STOP"
+
+# marker set writes its ledger line first: when the ledger cannot be written, no marker appears.
+chmod 444 "$run4/ledger.jsonl"
+rc=0; "$h" state "$run4" marker set lane-z.done >/dev/null 2>&1 || rc=$?
+chmod 644 "$run4/ledger.jsonl"
+assert_eq "Rebuild ledger: marker set fails when the ledger cannot be written" "yes" "$([ "$rc" -ne 0 ] && echo yes || echo no)"
+assert_eq "Rebuild ledger: no marker exists without its ledger line" "no" "$([ -e "$run4/markers/lane-z.done" ] && echo yes || echo no)"

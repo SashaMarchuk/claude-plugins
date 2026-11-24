@@ -1,0 +1,76 @@
+# H-100 (interactive terminal sessions by default) and the design "Rebuild" reuse list:
+# launcher generation (clean PATH, guarded cd, per-role account, fixed session ID) and one
+# registry record per session. S8-27: identity is process ID plus session ID.
+. "$HO_TESTS_DIR/sessions-setup.sh"
+uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+# ---- a default worker launch is an interactive session in a terminal ----------------
+mkdir -p "$base/oldbin"
+: > "$base/oldbin/harness-spawn.sh"
+out=$(PATH=".:rel/bin:$base/oldbin:$PATH" launch w1)
+assert_contains "H-100: launch reports the session" "$out" "name=w1"
+assert_contains "H-100: the worker opens in a terminal, not in print mode" "$(calls)" "tmux new-session"
+sid=$(rec w1 .session_id)
+pid=$(rec w1 .pid)
+assert_eq "H-100: the registry records the session as running" "running" "$(rec w1 .status)"
+assert_eq "Rebuild launcher: the session ID is a fixed UUID" "yes" "$(printf '%s' "$sid" | grep -Eq "$uuid_re" && echo yes || echo no)"
+assert_eq "S8-27: the registry holds the session's live process ID" "yes" "$(alive "$pid" && echo yes || echo no)"
+assert_contains "S8-27: the recorded process is the session started with that session ID" "$(ps -o command= -p "$pid")" "$sid"
+args=$(head -n 1 "$HO_FAKE_CLAUDE_LOG")
+assert_contains "Rebuild launcher: the session starts with its fixed session ID" "$args" "--session-id	$sid"
+assert_contains "H-100: the prompt file's text reaches the session" "$args" "do the work"
+assert_eq "H-100: no print mode flag" "" "$(printf '%s' "$args" | tr '\t' '\n' | grep -x -- '-p' || true)"
+assert_eq "Rebuild launcher: the registry record carries this run's ID" "$(basename "$run")" "$(rec w1 .run)"
+assert_eq "Rebuild launcher: the registry records the terminal handle for addressing only" "yes" "$([ -n "$(rec w1 .handle)" ] && echo yes || echo no)"
+assert_eq "Drop list: no terminal device is recorded as identity" "null" "$(rec w1 .tty)"
+
+# ---- the launcher itself ---------------------------------------------------------
+launcher=$(rec w1 .launcher)
+path_line=$(grep '^export PATH=' "$launcher")
+assert_eq "Rebuild launcher: PATH has no relative or empty entry" "" "$(printf '%s' "${path_line#export PATH=}" | tr -d "'" | tr ':' '\n' | grep -v '^/' || true)"
+assert_eq "Rebuild launcher: PATH drops a folder that holds a 0.6.0 engine script" "" "$(printf '%s' "$path_line" | grep -F "$base/oldbin" || true)"
+assert_contains "Rebuild launcher: the cd is guarded and stops the launch on failure" "$(grep '^cd ' "$launcher")" "|| ho_fatal"
+assert_contains "Rebuild launcher: 0.6.0 variables are removed" "$(cat "$launcher")" "unset HARNESS_PROJECT"
+assert_exit "Rebuild launcher: the generated launcher is valid bash" 0 bash -n "$launcher"
+
+# ---- one registry record per session, each with process ID and session ID ------------
+launch w2 >/dev/null
+launch w3 >/dev/null
+n=0 bad_recs="" pids="" sids=""
+for f in "$run"/sessions/*.json; do
+  case $f in */windows.json) continue ;; esac
+  n=$((n + 1))
+  p=$(jq -r .pid "$f") s=$(jq -r .session_id "$f")
+  if ! alive "$p" || ! printf '%s' "$s" | grep -Eq "$uuid_re" || ! ps -o command= -p "$p" | grep -qF -- "$s"; then
+    bad_recs="$bad_recs $(basename "$f")"
+  fi
+  pids="$pids $p" sids="$sids $s"
+done
+assert_eq "S8-27: three launches give three registry records" "3" "$n"
+assert_eq "S8-27: every record holds a live process ID and its own session ID" "" "$bad_recs"
+assert_eq "S8-27: process IDs are distinct" "3" "$(printf '%s\n' $pids | sort -u | wc -l | tr -d ' ')"
+assert_eq "S8-27: session IDs are distinct" "3" "$(printf '%s\n' $sids | sort -u | wc -l | tr -d ' ')"
+assert_exit "Rebuild launcher: a second launch under a registered name is refused" 65 launch w1
+assert_eq "Rebuild launcher: the refused duplicate leaves the record unchanged" "$sid" "$(rec w1 .session_id)"
+
+# ---- resume by ID keeps the given session ID ----------------------------------------
+rid=0b9e4e1c-5d4f-4a8e-9a43-0123456789ab
+"$h" session "$run" launch --role worker --name w4 --cwd "$proj/src" --resume "$rid" >/dev/null
+assert_eq "Rebuild launcher: a resume launch records the given session ID" "$rid" "$(rec w4 .session_id)"
+assert_contains "Rebuild launcher: a resume launch starts the runtime's resume form" "$(grep -F "$rid" "$HO_FAKE_CLAUDE_LOG" | head -n 1)" "--resume	$rid"
+assert_exit "Rebuild launcher: a resume ID that is not a UUID is refused" 65 "$h" session "$run" launch --role worker --name w5 --cwd "$proj/src" --resume 'x;y'
+
+# ---- model chain a|b: a start failure falls through, the PID is the one that runs ------
+jq '.models.worker = "m-bad | m-good"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+HO_FAKE_CLAUDE_FAIL_MODEL=m-bad launch w6 >/dev/null
+assert_contains "Rebuild model chain: the first model is tried first" "$(grep -F "$(rec w6 .session_id)" "$HO_FAKE_CLAUDE_LOG" | head -n 1)" "--model	m-bad"
+assert_contains "Rebuild model chain: a start failure falls through to the next model" "$(grep -F "$(rec w6 .session_id)" "$HO_FAKE_CLAUDE_LOG" | tail -n 1)" "--model	m-good"
+assert_contains "S8-27: after a fallback the registry holds the running process" "$(ps -o command= -p "$(rec w6 .pid)")" "m-good"
+assert_exit "Rebuild model chain: an empty chain is refused" 65 launch w7 --model ' | '
+assert_exit "Rebuild model chain: a model name with shell characters is refused" 65 launch w8 --model 'a;b'
+
+# ---- a stopped run launches nothing -------------------------------------------------
+"$h" state "$run" stop "test" >/dev/null
+before=$(calls | wc -l)
+assert_exit "Rebuild launcher: a launch during a stop is refused" 75 launch w9
+assert_eq "Rebuild launcher: a refused launch opens no terminal" "$before" "$(calls | wc -l)"

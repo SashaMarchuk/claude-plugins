@@ -8,7 +8,8 @@
 #
 #   <run>/sessions/<name>.json     the registry record, one per session
 #   <run>/sessions/<name>.pid      "<pid> <run-id> <session-id>", written by the launcher
-#   <run>/sessions/<name>.closing  present once a close was asked for (stops model fallback)
+#   <run>/sessions/<name>.closing  present while a close is under way (stops model fallback)
+#   <run>/sessions/<name>.failed   written by the launcher when the session could not start
 #   <run>/launchers/<name>.sh      the generated launcher
 #   <run>/logs/launcher.log        what the launchers report
 #
@@ -212,7 +213,7 @@ ho_session_live_pid() {
   pid=$(jq -r '.pid // ""' "$rec")
   fpid=$(ho_session_pidfile_pid "$(jq -r '.pid_file // ""' "$rec")" "$sid")
   if [ -n "$fpid" ] && [ "$fpid" != "$pid" ] && ho_session_identity "$fpid" "$sid"; then
-    ho_session_set "$rec" '.pid = ($p | tonumber)' --arg p "$fpid"
+    ho_session_set "$rec" '.pid = ($p | tonumber)' --arg p "$fpid" || return 1
     pid=$fpid
   fi
   ho_session_identity "$pid" "$sid" && printf '%s\n' "$pid"
@@ -237,7 +238,7 @@ ho_session_launcher_text() {
   printf 'set -u\n'
   printf 'HO_LOG=%s\n' "$(ho_q "$log")"
   printf 'ho_note() { printf '"'"'[%%s %%s] %%s\\n'"'"' "$(date -u +%%H:%%M:%%S)" %s "$*" >> "$HO_LOG"; printf '"'"'%%s\\n'"'"' "$*" >&2; }\n' "$(ho_q "$name")"
-  printf 'ho_fatal() { ho_note "FATAL: $2"; sleep %s; exit "$1"; }\n' "$hold"
+  printf 'ho_fatal() { ho_note "FATAL: $2"; printf '"'"'%%s\\n'"'"' "$2" > %s; sleep %s; exit "$1"; }\n' "$(ho_q "${pidfile%.pid}.failed")" "$hold"
   printf 'unset %s\n' "$HO_OLD_VARS"
   printf 'export PATH=%s\n' "$(ho_q "$path")"
   printf 'export HO_PROJECT_DIR=%s HO_RUN_DIR=%s HO_RUN_ID=%s\n' "$(ho_q "$HO_PROJECT_DIR")" "$(ho_q "$HO_RUN_DIR")" "$(ho_q "$HO_RUN_ID")"
@@ -400,17 +401,17 @@ ho_session_launch() {
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
       runtime: $runtime, session_id: $sid, pid: null, backend: $backend, handle: null, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts}' \
-    | ho_atomic_write "$rec" || return 1
+    | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"
 
   local handle rc=0
   handle=$(ho_term_open "$group" "$title" "$launcher") || rc=$?
   if [ "$rc" -ne 0 ]; then
-    ho_session_set "$rec" '.status = "launch-failed"'
+    ho_session_set "$rec" '.status = "launch-failed"' || rm -f "$rec"
     ho_ledger_append session-launch-failed name "$name" reason "terminal did not open"
     return "$rc"
   fi
-  ho_session_set "$rec" '.handle = $h' --arg h "$handle"
+  ho_session_set "$rec" '.handle = $h' --arg h "$handle" || { printf 'harness: session %s opened as %s but its record could not be written\n' "$name" "$handle" >&2; return 1; }
 
   # ---- boot check: the launcher reports the PID; it must be alive with this session ID ----
   local deadline pid="" last="" stable=0
@@ -424,12 +425,15 @@ ho_session_launch() {
     sleep 0.2
   done
   if [ "$stable" -lt 2 ]; then
-    ho_session_set "$rec" '.status = "boot-failed"'
+    ho_session_set "$rec" '.status = "boot-failed"' || true
     ho_ledger_append session-boot-failed name "$name" session_id "$sid"
     printf 'harness: session %s did not start; see %s\n' "$name" "$HO_RUN_DIR/logs/launcher.log" >&2
     return 69
   fi
-  ho_session_set "$rec" '.pid = ($p | tonumber) | .status = "running" | .started = $ts' --arg p "$pid" --arg ts "$(ho_now)"
+  ho_session_set "$rec" '.pid = ($p | tonumber) | .status = "running" | .started = $ts' --arg p "$pid" --arg ts "$(ho_now)" || {
+    printf 'harness: session %s runs as pid %s but its record could not be written\n' "$name" "$pid" >&2
+    return 1
+  }
   ho_ledger_append session-started name "$name" session_id "$sid" pid "$pid" handle "$handle"
   printf 'OK name=%s pid=%s session=%s handle=%s\n' "$name" "$pid" "$sid" "$handle"
 }
@@ -451,10 +455,18 @@ ho_session_close() {
   fi
   status=$(jq -r '.status // ""' "$rec")
   [ "$status" = closed ] && { printf 'session %s already closed\n' "$name"; return 0; }
+  if [ "$status" = launching ]; then
+    printf 'harness: session %s is still launching; close it once the launch has finished\n' "$name" >&2
+    return 65
+  fi
   sid=$(jq -r '.session_id // ""' "$rec")
-  pid=$(ho_session_live_pid "$rec")
+  if ! ho_session_uuid_ok "$sid" 2>/dev/null || [ -z "$(jq -r '.pid_file // ""' "$rec")" ]; then
+    printf 'harness: the record of session %s has no usable session ID or PID file; nothing was closed\n' "$name" >&2
+    return 66
+  fi
+  pid=$(ho_session_live_pid "$rec") || return 1
   if [ -z "$pid" ]; then
-    ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "process-gone"' --arg ts "$(ho_now)"
+    ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "process-gone"' --arg ts "$(ho_now)" || return 1
     ho_ledger_append session-close name "$name" session_id "$sid" result process-gone
     printf 'session %s: process already gone; marked closed\n' "$name"
     return 0
@@ -470,6 +482,7 @@ ho_session_close() {
   local rc=0
   ho_term_send "$handle" "$exitcmd" || rc=$?
   if [ "$rc" -ne 0 ]; then
+    rm -f "$HO_RUN_DIR/sessions/$name.closing"
     ho_ledger_append session-close-failed name "$name" reason "exit command not delivered"
     printf 'harness: could not reach the terminal of session %s; left open\n' "$name" >&2
     return 70
@@ -478,6 +491,7 @@ ho_session_close() {
   deadline=$(( $(date +%s) + $(ho_cfg_int '.session.close_timeout_seconds' 90) ))
   while ho_session_identity "$pid" "$sid"; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
+      rm -f "$HO_RUN_DIR/sessions/$name.closing"
       ho_ledger_append session-close-timeout name "$name" session_id "$sid" pid "$pid"
       printf 'harness: session %s (pid %s) is still busy; left open, never forced. Close it again later.\n' "$name" "$pid" >&2
       return 1
@@ -486,19 +500,22 @@ ho_session_close() {
   done
   # The session process has ended; its tab or pane may already have closed by itself.
   ho_term_close "$handle" 2>/dev/null || true
-  ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "exited"' --arg ts "$(ho_now)"
+  ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "exited"' --arg ts "$(ho_now)" || return 1
   ho_ledger_append session-close name "$name" session_id "$sid" result exited
   printf 'session %s closed\n' "$name"
 }
 
 ho_session_list() {
-  local f
+  local f line
   printf 'NAME\tROLE\tSTATUS\tPID\tSESSION\tHANDLE\n'
   for f in "$HO_RUN_DIR"/sessions/*.json; do
     [ -f "$f" ] || continue
     case $f in */windows.json) continue ;; esac
-    jq -r '[.name, .role, .status, (.pid // "-" | tostring), .session_id, (.handle // "-")] | @tsv' "$f" 2>/dev/null \
-      || printf '%s\tunreadable\n' "$(basename "$f" .json)"
+    line=$(jq -r '[.name, .role, .status, (.pid // "-" | tostring), .session_id, (.handle // "-")] | @tsv' "$f" 2>/dev/null || true)
+    [ -n "$line" ] || line="$(basename "$f" .json)	-	unreadable"
+    # A launcher that could not start its session leaves a .failed note.
+    [ -f "${f%.json}.failed" ] && line="$line	(start failed: $(head -n 1 "${f%.json}.failed"))"
+    printf '%s\n' "$line"
   done
 }
 

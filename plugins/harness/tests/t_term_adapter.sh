@@ -47,6 +47,8 @@ for backend in tmux iterm2; do
   assert_exit "$t: an unknown key is refused" 64 ho_term_key "$h2" tab
   assert_eq "$t: refused calls never reach the terminal" "$before" "$(wc -l < "$HO_FAKE_TERM_DIR/calls.log")"
 done
+printf 'not json' > "$HO_RUN_DIR/sessions/windows.json"
+assert_exit "Rebuild terminal adapter (iterm2): an unreadable window file still opens the session" 0 ho_term_open work ho-worker-c "$launcher"
 assert_eq "Rebuild terminal adapter (iterm2): sessions of one group share one window" "1" "$(jq 'length' "$HO_RUN_DIR/sessions/windows.json")"
 
 set_app terminal

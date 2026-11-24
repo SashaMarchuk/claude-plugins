@@ -121,7 +121,9 @@ ho_term_iterm2_open() {
   local group=$1 title=$2 launcher=$3 f winid out w h
   f=$(ho_term_windows_file)
   mkdir -p "$(dirname "$f")"
-  winid=$(jq -r --arg g "$group" '.[$g] // ""' "$f" 2>/dev/null || true)
+  # A missing or unreadable group file only means "no window yet": start a fresh one.
+  jq -e 'type == "object"' "$f" >/dev/null 2>&1 || printf '{}\n' | ho_atomic_write "$f" || return 70
+  winid=$(jq -r --arg g "$group" '.[$g] // "" | strings' "$f")
   [ -z "$winid" ] || ho_term_safe "$winid" 2>/dev/null || winid=""
   out=$(osascript <<OSA
 tell application "iTerm2"
@@ -148,7 +150,9 @@ OSA
   w=${out%% *}
   h=${out#* }
   ho_term_safe "$w" 2>/dev/null && ho_term_safe "$h" 2>/dev/null || { echo "harness: iTerm2 returned no usable session ID" >&2; return 70; }
-  { [ -f "$f" ] && cat "$f" || echo '{}'; } | jq --arg g "$group" --arg w "$w" '.[$g] = $w' | ho_atomic_write "$f" || return 70
+  # The session already runs: a failed group write only costs the next tab its window.
+  jq --arg g "$group" --arg w "$w" '.[$g] = $w' "$f" 2>/dev/null | ho_atomic_write "$f" \
+    || echo "harness: warning: could not record the window of group $group" >&2
   printf '%s\n' "$h"
 }
 

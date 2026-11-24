@@ -66,6 +66,16 @@ assert_eq "Rebuild graceful close: the busy session stays recorded as running" "
 assert_eq "Rebuild graceful close: the busy session's terminal is not closed" "" "$(calls | grep -F "close $hb" || true)"
 assert_contains "Rebuild graceful close: the timeout is recorded in the ledger" "$(cat "$run/ledger.jsonl")" '"kind":"session-close-timeout"'
 
+# ---- records that cannot be trusted are not closed ---------------------------------------
+launch k1 >/dev/null
+pk=$(rec k1 .pid)
+jq '.status = "launching"' "$run/sessions/k1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/k1.json"
+assert_exit "Rebuild graceful close: a session still launching is not closed" 65 "$h" session "$run" close k1
+jq '.status = "running" | .session_id = ""' "$run/sessions/k1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/k1.json"
+assert_exit "S8-27: a record without a session ID is refused, not marked closed" 66 "$h" session "$run" close k1
+assert_eq "S8-27: the session behind an unusable record keeps running" "yes" "$(alive "$pk" && echo yes || echo no)"
+assert_eq "S8-27: an unusable record is not marked closed" "running" "$(rec k1 .status)"
+
 # ---- H-103: the engine has no pattern kill -------------------------------------------------
 # The bracketed pattern keeps this file itself out of the issue's grep for pattern kills.
 assert_eq "H-103: engine code holds no name-pattern kill or process search" "" "$(grep -rnE 'p[k]ill|kill[a]ll|p[g]rep' "$HO_PLUGIN_ROOT/bin" "$HO_PLUGIN_ROOT/lib" "$HO_PLUGIN_ROOT/runtimes" || true)"

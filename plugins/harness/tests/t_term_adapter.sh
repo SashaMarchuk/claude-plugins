@@ -49,7 +49,7 @@ id"
   assert_exit "$t: an unknown key is refused" 64 ho_term_key "$h2" tab
   assert_eq "$t: refused calls never reach the terminal" "$before" "$(wc -l < "$HO_FAKE_TERM_DIR/calls.log")"
 done
-printf 'not json' > "$HO_RUN_DIR/sessions/windows.json"
+printf 'not json' > "$HO_RUN_DIR/terminal/windows.json"
 assert_exit "Rebuild terminal adapter (iterm2): an unreadable window file still opens the session" 0 ho_term_open work ho-worker-c "$launcher"
 assert_eq "Rebuild terminal adapter (iterm2): the first two sessions of one group share one window" "W1" "$(head -n 1 "$base/term-iterm2/windows")"
 assert_eq "Rebuild terminal adapter (iterm2): only the unreadable window file caused a second window" "2" "$(wc -l < "$base/term-iterm2/windows" | tr -d ' ')"

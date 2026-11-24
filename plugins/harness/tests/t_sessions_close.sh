@@ -17,6 +17,15 @@ assert_eq "H-103: the similar session's record is untouched" "running" "$(rec c2
 assert_contains "Rebuild graceful close: the ledger records the close" "$(cat "$run/ledger.jsonl")" '"kind":"session-close"'
 assert_exit "Rebuild graceful close: closing a closed session again is a no-op" 0 "$h" session "$run" close c1
 
+# ---- close uses the backend the session was launched with -----------------------------------
+launch c3 >/dev/null
+h3=$(rec c3 .handle)
+jq '.terminal.app = "iterm2"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+assert_exit "Rebuild graceful close: a session launched on tmux closes after terminal.app changed" 0 "$h" session "$run" close c3
+assert_contains "Rebuild graceful close: the exit command went through tmux" "$(calls)" "tmux send-text $h3 /exit"
+assert_eq "Rebuild graceful close: nothing went to iTerm2" "" "$(calls | grep osascript || true)"
+jq '.terminal.app = "tmux"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+
 # ---- close refuses a session recorded under another run ID ---------------------------------
 run2=$("$h" run new)
 "$h" session "$run2" launch --role worker --name x1 --cwd "$proj/src" --prompt "$base/prompt.md" >/dev/null
@@ -41,6 +50,10 @@ before=$(calls | wc -l)
 assert_exit "PR-3: closing a session whose process is gone succeeds" 0 "$h" session "$run" close g1
 assert_eq "PR-3: the record is marked closed" "closed" "$(rec g1 .status)"
 assert_eq "PR-3: no close or typing is sent to any terminal" "$before" "$(calls | wc -l)"
+assert_eq "Rebuild graceful close: a close leaves its flag for the launcher" "yes" "$([ -e "$run/sessions/g1.closing" ] && echo yes || echo no)"
+lines=$(wc -l < "$HO_FAKE_CLAUDE_LOG")
+rc=0; /bin/bash "$(rec g1 .launcher)" 2>/dev/null || rc=$?
+assert_eq "Rebuild graceful close: after a close the launcher starts no further attempt" "0 $lines" "$rc $(wc -l < "$HO_FAKE_CLAUDE_LOG")"
 
 # ---- a recorded PID now held by another process is not that session ------------------------
 launch g2 >/dev/null

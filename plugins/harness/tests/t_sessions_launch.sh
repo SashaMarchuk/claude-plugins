@@ -38,7 +38,6 @@ launch w2 >/dev/null
 launch w3 >/dev/null
 n=0 bad_recs="" pids="" sids=""
 for f in "$run"/sessions/*.json; do
-  case $f in */windows.json) continue ;; esac
   n=$((n + 1))
   p=$(jq -r .pid "$f") s=$(jq -r .session_id "$f")
   if ! alive "$p" || ! printf '%s' "$s" | grep -Eq "$uuid_re" || ! ps -o command= -p "$p" | grep -qF -- "$s"; then
@@ -52,6 +51,14 @@ assert_eq "S8-27: process IDs are distinct" "3" "$(printf '%s\n' $pids | sort -u
 assert_eq "S8-27: session IDs are distinct" "3" "$(printf '%s\n' $sids | sort -u | wc -l | tr -d ' ')"
 assert_exit "Rebuild launcher: a second launch under a registered name is refused" 65 launch w1
 assert_eq "Rebuild launcher: the refused duplicate leaves the record unchanged" "$sid" "$(rec w1 .session_id)"
+
+# ---- a session named like the iTerm2 window map is an ordinary session ---------------------
+jq '.terminal.app = "iterm2"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+launch windows >/dev/null
+launch windows-b >/dev/null
+assert_contains "Rebuild launcher: a session named windows is listed" "$("$h" session "$run" list)" "windows	worker	running"
+assert_eq "Rebuild launcher: its record is a session record" "windows" "$(rec windows .name)"
+jq '.terminal.app = "tmux"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 
 # ---- resume by ID keeps the given session ID ----------------------------------------
 rid=0b9e4e1c-5d4f-4a8e-9a43-0123456789ab

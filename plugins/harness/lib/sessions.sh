@@ -525,7 +525,6 @@ ho_session_list() {
   printf 'NAME\tROLE\tSTATUS\tPID\tSESSION\tHANDLE\n'
   for f in "$HO_RUN_DIR"/sessions/*.json; do
     [ -f "$f" ] || continue
-    case $f in */windows.json) continue ;; esac
     line=$(jq -r '[.name, .role, .status, (.pid // "-" | tostring), .session_id, (.handle // "-")] | @tsv' "$f" 2>/dev/null || true)
     [ -n "$line" ] || line="$(basename "$f" .json)	-	unreadable"
     # A launcher that could not start its session leaves a .failed note.

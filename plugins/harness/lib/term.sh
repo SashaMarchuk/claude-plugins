@@ -16,7 +16,7 @@
 #
 # Return codes: 0 ok, 64 usage, 65 refused value, 66 handle not found, 70 terminal failed.
 # Settings: terminal.app = auto | iterm2 | tmux (default auto); terminal.enter_delay_seconds
-# (default 1) between typed text and its Enter. Needs HO_RUN_DIR and HO_RUN_ID.
+# (default 2, as in 0.6.0) between typed text and its Enter. Needs HO_RUN_DIR and HO_RUN_ID.
 
 # Values embedded into AppleScript or a tmux command are checked against a small character
 # set instead of being escaped.
@@ -119,8 +119,9 @@ ho_term_probe() {
 
 # ---------------------------------------------------------------------- iTerm2
 # The first session of a group opens a window; later sessions of the group open tabs in it.
-# The group's window ID is kept in <run>/sessions/windows.json.
-ho_term_windows_file() { printf '%s/sessions/windows.json\n' "$HO_RUN_DIR"; }
+# The group's window ID is kept in <run>/terminal/windows.json (outside sessions/, so no
+# session name can collide with it).
+ho_term_windows_file() { printf '%s/terminal/windows.json\n' "$HO_RUN_DIR"; }
 
 ho_term_iterm2_open() {
   local group=$1 title=$2 launcher=$3 f winid out w h
@@ -191,7 +192,7 @@ OSA
 
 ho_term_iterm2_send() {
   ho_term_iterm2_do "$1" "tell s to write text \"$2\" newline NO" >/dev/null || return $?
-  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 1)"
+  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
   ho_term_iterm2_key "$1" enter
 }
 
@@ -243,7 +244,7 @@ ho_term_tmux_mine() {
 ho_term_tmux_send() {
   ho_term_tmux_mine "$1" || return 66
   ho_tmux send-keys -t "$1" -l "$2" 2>/dev/null || { printf 'harness: no tmux pane %s\n' "$1" >&2; return 66; }
-  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 1)"
+  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
   ho_term_tmux_key "$1" enter
 }
 

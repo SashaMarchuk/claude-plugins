@@ -147,16 +147,24 @@ Source: interview 2026-11-24 R7.4; delegated decision D10
 - **WHEN** a profile sets another opening point
 - **THEN** the harness opens the draft PR at that point
 
-### Requirement: H-045 A confirmed merge closes the linked ticket
-When git confirms a merge, the harness SHALL set the linked ticket to done and, by default, close it (agent decision on the owner's delegation, design.md D11, setting `close_on_merge`). Closing follows the owner's lean.
-Source: interview 2026-11-24 R7.5; delegated decision D11
+### Requirement: H-045 A confirmed merge closes the linked ticket after its post-merge steps
+When git confirms a merge and every post-merge step the project configures (release, smoke test) has passed, the harness SHALL set the linked ticket to done and, by default, close it (agent decision on the owner's delegation, design.md D11, setting `close_on_merge`). A confirmed merge alone MUST NOT mark the ticket done while configured post-merge steps are pending or failed (H-042).
+Source: interview 2026-11-24 R7.5, R1.1, R2.6; delegated decision D11
 
-#### Scenario: Merge confirmed
-- **WHEN** git confirms that the ticket's change is in the target branch
+#### Scenario: Merge confirmed, no post-merge steps
+- **WHEN** git confirms that the ticket's change is in the target branch and the project has no post-merge steps
 - **THEN** the harness sets the linked ticket to done and closes it, as set in design.md D11
 
+#### Scenario: Post-merge steps configured
+- **WHEN** git confirms the merge and the project configures a release and a smoke test
+- **THEN** the ticket stays in progress until the release is done and the smoke test passes, and only then is set to done
+
+#### Scenario: Smoke test fails after merge
+- **WHEN** the smoke test fails after a confirmed merge
+- **THEN** the ticket is not set to done and is handled by the project's failure setting
+
 #### Scenario: Closing is switched off
-- **WHEN** git confirms the merge and `close_on_merge` is false
+- **WHEN** the ticket would be set to done and `close_on_merge` is false
 - **THEN** the harness sets the linked ticket to done and leaves it open
 
 ### Requirement: H-046 Every merge is confirmed through git

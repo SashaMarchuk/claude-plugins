@@ -10,7 +10,7 @@
 HO_CONFIG_SCHEMA=2
 HO_EXIT_CONFIG=78
 
-# ho_project_root — print the project folder (the one holding .harness/config.json).
+# ho_project_root: print the project folder (the one holding .harness/config.json).
 # Order: $HO_PROJECT_DIR, then walk up from $PWD to .harness/config.json or to a
 # .harness-project pointer file (a worktree outside the project carries one).
 ho_project_root() {
@@ -35,7 +35,7 @@ ho_project_root() {
 
 ho_user_config() { printf '%s/config.json\n' "${HO_USER_DIR:-$HOME/.claude/harness}"; }
 
-# ho_config_file_check <file> — 0 if absent or valid schema 2; else print why and exit 78.
+# ho_config_file_check <file>: 0 if absent or valid schema 2; else print why and exit 78.
 ho_config_file_check() {
   local f=$1 v
   [ -e "$f" ] || return 0
@@ -49,7 +49,7 @@ ho_config_file_check() {
   fi
 }
 
-# ho_config_files — print the config files in lookup order (project first), each checked.
+# ho_config_files: print the config files in lookup order (project first), each checked.
 ho_config_files() {
   local proj user
   user=$(ho_user_config)
@@ -65,7 +65,7 @@ ho_config_files() {
   return 0
 }
 
-# ho_cfg <jq-path> [default] — project value, else user value, else default.
+# ho_cfg <jq-path> [default]: project value, else user value, else default.
 ho_cfg() {
   local path=${1:?jq path required} def=${2-} files f v
   files=$(ho_config_files) || exit $?
@@ -84,7 +84,7 @@ EOF_FILES
   printf '%s\n' "$def"
 }
 
-# ho_cfg_int <jq-path> <default> — a plain non-negative integer, read base 10.
+# ho_cfg_int <jq-path> <default>: a plain non-negative integer, read base 10.
 # Anything else is reported on stderr and the default is used.
 ho_cfg_int() {
   local path=${1:?jq path required} def=${2:?integer default required} v

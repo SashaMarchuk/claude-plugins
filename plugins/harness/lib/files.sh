@@ -2,7 +2,7 @@
 # Safe-file and path helpers (design "Rebuild" reuse list), ported from 0.6.0.
 # Return codes: 0 ok, 65 refused path, 1 write failure.
 
-# ho_atomic_write <file> — content on stdin. The file gets all of it or none of it.
+# ho_atomic_write <file>: content on stdin. The file gets all of it or none of it.
 ho_atomic_write() {
   local f=${1:?file required} tmp
   tmp=$(mktemp "$(dirname "$f")/.tmp.XXXXXX" 2>/dev/null) || {
@@ -25,7 +25,7 @@ ho_assert_abs() {
   esac
 }
 
-# ho_is_project_worktree <dir> <project> — 0 if <dir> is a genuine linked git worktree whose
+# ho_is_project_worktree <dir> <project>: 0 if <dir> is a genuine linked git worktree whose
 # main repository lives inside <project>. A separate git dir that only points into the
 # project does not count: a real linked worktree has its git dir under <common>/worktrees/.
 ho_is_project_worktree() {
@@ -43,7 +43,7 @@ ho_is_project_worktree() {
   return 1
 }
 
-# ho_assert_safe_cwd <dir> <project> — absolute, exists, not / or HOME, and inside the
+# ho_assert_safe_cwd <dir> <project>: absolute, exists, not / or HOME, and inside the
 # project or a genuine worktree of a repository inside it. Symlinks and ".." are resolved first.
 ho_assert_safe_cwd() {
   local d=${1-} proj=${2-} home
@@ -63,7 +63,7 @@ ho_assert_safe_cwd() {
   return 65
 }
 
-# ho_sanitize_path <PATH> — keep only absolute components, in order. Empty, "." and relative
+# ho_sanitize_path <PATH>: keep only absolute components, in order. Empty, "." and relative
 # components are dropped: each one would run programs from the current folder. No globbing.
 ho_sanitize_path() {
   local out="" c IFS=: reglob=0

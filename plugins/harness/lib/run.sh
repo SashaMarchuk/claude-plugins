@@ -23,7 +23,7 @@ ho_run_id_new() {
   printf '%s-%s\n' "$(date -u '+%Y%m%d-%H%M%S')" "$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
 }
 
-# ho_run_open <run-dir> — check the stamp; on success set HO_RUN_DIR and HO_RUN_ID.
+# ho_run_open <run-dir>: check the stamp; on success set HO_RUN_DIR and HO_RUN_ID.
 # Writes nothing. On any problem: print why and exit 66.
 ho_run_open() {
   local dir=${1-} id why=""
@@ -47,7 +47,7 @@ ho_run_open() {
 
 ho_stop_file() { printf '%s/STOP\n' "$(dirname "$(dirname "$HO_RUN_DIR")")"; }
 
-# ho_ledger_append <kind> [<key> <value>]... — append one line. Never rewrites the file.
+# ho_ledger_append <kind> [<key> <value>]...: append one line. Never rewrites the file.
 ho_ledger_append() {
   local kind=$1 line f="$HO_RUN_DIR/ledger.jsonl"
   local -a args
@@ -76,7 +76,7 @@ ho_ledger_append() {
   rmdir "$f.lock" 2>/dev/null || true
 }
 
-# ho_ledger_lock <dir> — mkdir lock. A lock older than one minute is left by a killed
+# ho_ledger_lock <dir>: mkdir lock. A lock older than one minute is left by a killed
 # writer (an append takes milliseconds) and is removed. No lock after 30 s is an error.
 ho_ledger_lock() {
   local lock=$1 n=0
@@ -94,7 +94,7 @@ ho_ledger_lock() {
   done
 }
 
-# ho_ledger_events — print each non-empty ledger line as compact JSON; an unparsable line becomes
+# ho_ledger_events: print each non-empty ledger line as compact JSON; an unparsable line becomes
 # {"kind":"unreadable"} so callers can tell "unreadable" from "nothing there".
 ho_ledger_events() {
   local f="$HO_RUN_DIR/ledger.jsonl"
@@ -107,7 +107,7 @@ ho_last_stop_event() {
   ho_ledger_events | jq -r 'select(.kind == "stop" or .kind == "resume") | .kind' | tail -n 1
 }
 
-# ho_stopped — 0 stopped, 1 not stopped, 2 unknown (unreadable ledger; never read as "not stopped").
+# ho_stopped: 0 stopped, 1 not stopped, 2 unknown (unreadable ledger; never read as "not stopped").
 ho_stopped() {
   if [ -e "$(ho_stop_file)" ]; then
     [ "$(ho_last_stop_event)" = stop ] || ho_ledger_append stop source file type soft:step reason "STOP file"
@@ -126,7 +126,7 @@ ho_marker_name_ok() {
   esac
 }
 
-# ho_marker_owner <file> — the run ID inside a marker, or "unreadable".
+# ho_marker_owner <file>: the run ID inside a marker, or "unreadable".
 ho_marker_owner() {
   jq -er 'select(type == "object") | .run | strings' "$1" 2>/dev/null || echo unreadable
 }
@@ -169,7 +169,7 @@ ho_marker() {
   esac
 }
 
-# ho_run_new — create and stamp a run under the current project; print its folder.
+# ho_run_new: create and stamp a run under the current project; print its folder.
 ho_run_new() {
   local proj runs id dir tries=0
   ho_config_files >/dev/null || exit $?
@@ -209,7 +209,7 @@ usage: harness state <run-dir> <verb> [args]
 USAGE
 }
 
-# harness state <run-dir> <verb> [args] — the stamp is checked before anything else.
+# harness state <run-dir> <verb> [args]: the stamp is checked before anything else.
 ho_state_main() {
   [ $# -ge 2 ] || { ho_state_usage; exit 64; }
   ho_run_open "$1"

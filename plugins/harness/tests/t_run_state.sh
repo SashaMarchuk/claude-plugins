@@ -131,7 +131,7 @@ assert_eq "Rebuild ledger: a line appended after a torn line is still whole" "ok
 # ---- a 0.6.0 run, or any run without a valid stamp, is refused and left byte-identical
 old="$proj/.harness/runs/20261124-174036"
 mkdir -p "$old/launchers" "$old/prompts" "$old/state" "$old/logs" "$old/heartbeats" "$old/markers"
-printf '\n## 2026-11-24T17:50:00Z — pick\nwhy\n' > "$old/DECISIONS.md"
+printf '\n## 2026-11-24T17:50:00Z - pick\nwhy\n' > "$old/DECISIONS.md"
 printf '2026-11-24T18:00:00Z\n' > "$old/markers/lane.pr-ready.done"
 printf '2026-11-24T18:00:00Z step\n' > "$old/heartbeats/w-lane"
 printf '#!/bin/sh\n' > "$old/launchers/w-lane.sh"; chmod +x "$old/launchers/w-lane.sh"

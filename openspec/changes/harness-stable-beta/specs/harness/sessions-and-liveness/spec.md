@@ -187,7 +187,7 @@ Source: interview 2026-11-24 R18.10, R24.7; S8-24
 
 #### Scenario: Typing an instruction as the fallback (design S8-24)
 - **WHEN** the harness delivers a real instruction through the fallback in H-101
-- **THEN** the harness types the instruction onto an empty input line and confirms delivery by the growth of the target's transcript, as design.md S8-24 describes
+- **THEN** the harness types the instruction onto an empty input line and confirms delivery only by a transcript entry carrying that instruction or its id, as design.md S8-24 describes
 
 ### Requirement: H-100 Interactive terminal sessions are the preferred mode
 The harness SHALL prefer interactive terminal sessions to run workers. Other modes MAY be used only as H-102 allows.
@@ -210,6 +210,10 @@ Source: interview 2026-11-24 R24.2; S8-24
 #### Scenario: Message fails
 - **WHEN** the message between sessions fails
 - **THEN** the harness types the instruction directly into that session's terminal
+
+#### Scenario: Busy worker, unrelated output
+- **WHEN** an instruction is sent to a worker that keeps producing output, but no transcript entry carries that instruction or its id
+- **THEN** the harness does not count the instruction as delivered and uses the fallback or reports the failure
 
 ### Requirement: H-102 Non-interactive mode only where the rule allows; the result and the log suffice
 The harness SHALL launch a session in non-interactive mode (`claude -p`) only where a documented rule allows it. The rule, including the check of whether MCP access works in that mode, is an agent decision; see design.md D30. For a session launched this way, the result and the log SHALL be enough; the owner does not need to watch it live.

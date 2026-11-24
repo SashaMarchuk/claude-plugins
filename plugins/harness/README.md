@@ -5,7 +5,7 @@ This branch holds the stable-beta rebuild of the harness plugin. The 0.6.0 engin
 ## Engine entry point
 
 The engine has one entry script: `bin/harness <verb> [args]`.
-Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state`, `tickets` and `session`.
+Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state`, `tickets`, `session` and `flow`.
 Run `bin/harness help` for the list.
 
 ## Ticket queue
@@ -42,6 +42,15 @@ It never reads any `HARNESS_*` variable from the 0.6.0 engine.
 - **Runtime.** The launch command, its arguments and the exit command come from `runtimes/<runtime.main>.json`. `runtime.main` must be set; the project template sets it.
 - **Accounts.** Accounts are read from the user config only: `accounts.roles.<role>` (or `accounts.roles.default`) names an account, and `accounts.list.<name>.env_command` prints `KEY=VALUE` lines for it. A launch fails when `--account` differs from the role's account, or when the account is unknown or its command fails.
 - **Terminal.** `terminal.app` is `auto`, `iterm2` or `tmux`. With tmux the harness uses its own server (`tmux -L ho-harness`) and one tmux session per run, named `ho-<run-id>`; attach with `tmux -L ho-harness attach -t ho-<run-id>`. Other settings: `session.permissions` (default `bypass`), `session.boot_timeout_seconds` (120), `session.boot_grace_seconds` (45), `session.fatal_hold_seconds` (30), `terminal.enter_delay_seconds` (2), and `models.<role>` for the default chain.
+## Flow profiles
+
+A flow profile is a ready-made flow data file. Two ship: `gsd` and `basic`. Each lives in `flows/<name>/` as `flow.json` plus one prompt file per step. Both give the default cycle (H-064): classification, discussion (grilling) only when classification finds open questions, planning, execution, code review, verification, UI check and shipping, in that order. `basic` writes every step out as a plain prompt and needs no flow system. `gsd` runs the middle steps through GSD, which must be installed; classification and shipping stay harness steps.
+
+- `bin/harness flow list` prints the shipped flows. `flow check <flow>` checks the flow file, every step prompt and the role prompts. `flow steps <flow>` prints the ordered steps, one per line: number, id, `always` or `questions`, title.
+- `bin/harness flow render <flow> <role> [--step <id>] [--set NAME VALUE]... [--file NAME PATH]...` prints a role prompt. The roles are `worker` (one step; needs `--step`) and `validator`. The role prompts are in `prompts/` and are the same for every flow.
+- Placeholders have the form `@NAME@`. The engine fills `FLOW_NAME`, `FLOW_STEP_LIST`, `STEP_ID`, `STEP_TITLE` and `STEP_TEXT`. The caller sets `RUN_ID`, `TICKET_ID`, `TICKET_TEXT`, `BRANCH`, `BASE`, `WORKDIR`, `STEP_RESULT_FILE` and `VERDICT_FILE`. `TICKET_TEXT` must be the fenced text of ticket `TICKET_ID`, as `harness tickets show` or `harness tickets fence <id>` prints it; anything else is refused (exit 65). A placeholder with no value fails the render (exit 65), and nothing is printed. Values must be UTF-8 text (anything else is refused with exit 65, never changed; `render` uses `iconv` to check this). They are inserted as they are and never scanned again, so ticket text that quotes a placeholder is safe. Each value reaches jq through a temp file, so a large ticket is no problem.
+- There is no default flow. A missing or broken flow stops with exit 78 and names the flow. Engine code (`bin/`, `lib/`, `prompts/`) names no flow system; such names live only in flow data.
+- Selecting a flow, editing its steps and naming a step's runner come later (H-065 to H-068). `HO_FLOWS_DIR` points at another flows folder.
 
 ## Tests
 

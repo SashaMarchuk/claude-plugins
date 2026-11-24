@@ -28,6 +28,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/term.sh"
 # shellcheck source=../lib/sessions.sh
 . "$HO_ROOT/lib/sessions.sh"
+# shellcheck source=../lib/flow.sh
+. "$HO_ROOT/lib/flow.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -42,6 +44,7 @@ verbs:
   run        run new: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
   session    session <run-dir> launch|close|list: launch, list and close sessions
+  flow       flow profiles: list | check <flow> | steps <flow> | render <flow> <role> ...
 USAGE
 }
 
@@ -57,6 +60,7 @@ case $verb in
   run)      [ "${1-}" = new ] || { ho_usage >&2; exit 64; }; ho_run_new ;;
   state)    ho_state_main "$@" ;;
   session)  ho_session_main "$@" ;;
+  flow)     ho_flow_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

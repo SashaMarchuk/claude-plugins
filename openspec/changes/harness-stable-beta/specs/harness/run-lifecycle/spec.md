@@ -84,7 +84,7 @@ Source: interview 2026-11-24 R2.3, R2.4; D3
 
 ### Requirement: H-085 Soft, hard and custom stop categories reused across the harness
 The harness SHALL define two general stop categories, soft and hard, which may have sub-variants, plus a custom stop that passes the owner's own message (from his agreement to a restatement). Every part of the harness that stops or pauses work SHALL reuse these categories. The owner's variants are recommendations; final set: design.md D25.
-OPEN: see design.md OPEN-24
+Decided: design.md D37-LIFECYCLE-5
 Source: interview 2026-11-24 R2.5, R20.4 (confirmed restatement), R20.9; D25
 
 #### Scenario: Same categories in different places
@@ -93,7 +93,11 @@ Source: interview 2026-11-24 R2.5, R20.4 (confirmed restatement), R20.9; D25
 
 #### Scenario: Custom stop
 - **WHEN** the owner stops the run with their own message
-- **THEN** the harness passes that message to the sessions, by the delivery chosen in design.md OPEN-24
+- **THEN** the harness adds that message, word for word, to the stop message of the chosen variant and sends it to every session the stop covers by the same route (design.md D37-LIFECYCLE-5)
+
+#### Scenario: Own message with the immediate hard stop
+- **WHEN** the owner chooses the immediate hard stop and gives an own message
+- **THEN** the harness sends no message, writes the own message to the run ledger, says that it was not sent, and closes the sessions without delay
 
 ### Requirement: H-086 Soft stop variants, with the current step as the default
 A soft stop SHALL support the variants: finish only the current step; in execution, stop once the current task's last step is done; finish the ticket fully, per ticket or for all. The default stop SHALL finish only the current step. A soft stop takes nothing new; the existing STOP file SHALL stay and trigger the default stop (agent decisions, design.md D25a, D25b).
@@ -117,12 +121,12 @@ Source: interview 2026-11-24 R20.5, R20.6; D25, D25a, D25b; proposal.md (STOP fi
 
 ### Requirement: H-087 Hard stop variants that may force-close sessions
 A hard stop SHALL stop work at once. It MAY force-close sessions; the rule "never force-close a session" SHALL NOT apply to a hard stop. A force-close MUST target each process as in H-103 (agent decision, design.md S8-27). Final variants and forced send: design.md D25. Run state kept for recovery at an immediate hard stop: design.md S8-20b.
-OPEN: see design.md OPEN-12, OPEN-25
+Decided: design.md D37-LIFECYCLE-4, D37-LIFECYCLE-6
 Source: interview 2026-11-24 R20.7, R20.8; D25; S8-20b; S8-27; CTX-exact-pid
 
 #### Scenario: Owner's recommended hard-stop variants
 - **WHEN** the owner chooses a hard stop
-- **THEN** the recommended variants are: an immediate total shutdown with no message; a stop message force-sent ahead of the session's queue, if such a forced send proves feasible; and a stop or park prompt put in the session's queue
+- **THEN** the recommended variants are: an immediate total shutdown with no message; a stop message force-sent ahead of the session's queue, (feasible, see design.md D37-LIFECYCLE-4); and a stop or park prompt put in the session's queue
 
 #### Scenario: Immediate total shutdown
 - **WHEN** the owner chooses the immediate hard stop
@@ -130,7 +134,15 @@ Source: interview 2026-11-24 R20.7, R20.8; D25; S8-20b; S8-27; CTX-exact-pid
 
 #### Scenario: Hard stop by message
 - **WHEN** the owner chooses a hard stop by message
-- **THEN** the harness sends a stop message ahead of the session's queue if the forced send works (OPEN-12), or puts a stop or park prompt in the queue; what happens if the session does not stop is open (OPEN-25)
+- **THEN** the harness sends the stop message and, when the session has queued it, force-sends it ahead of the session's queue with the send-now key chord (design.md D37-LIFECYCLE-4); with the forced send switched off or not possible, the message waits in the queue; a session that does not park within the configured wait is handled as design.md D37-LIFECYCLE-6 states
+
+#### Scenario: A session does not park after a hard stop message
+- **WHEN** a session has not parked within the configured wait (default 120 seconds) after a hard stop by message was issued
+- **THEN** the engine writes one record for that session and force-closes it by its exact process ID, and sessions that parked are closed the normal way (design.md D37-LIFECYCLE-6)
+
+#### Scenario: Hard stop by message while the service is down
+- **WHEN** the owner chooses a hard stop by message and the harness knows that the service is down
+- **THEN** the harness sends no message and closes the run's sessions as in the immediate hard stop (design.md D37-LIFECYCLE-6)
 
 ### Requirement: H-088 Automatic recovery after sleep, failure or reboot; asking first is a setting
 After the laptop sleeps, a failure occurs, or the machine reboots, the harness SHALL resume the last run's sessions and continue where it stopped. By default it SHALL do this without asking. A setting SHALL let the owner require permission first. After a reboot, recovery begins at the next harness start (agent decision, design.md D32).

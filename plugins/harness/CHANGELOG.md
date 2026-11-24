@@ -4,6 +4,7 @@
 
 - The 0.6.0 engine (scripts, commands, agents, skills, templates, design doc and static tests) is removed on this branch. Parts return only from the reuse list in the stable-beta design, each with a behaviour test shown failing first. The 0.6.0 code stays readable on `main`.
 - New empty skeleton: manifest with display name "Harness Orchestrator" and pre-release version `1.0.0-next.0`, one entry script `bin/harness`, an isolation self-test, and a test runner that uses a scrubbed environment and a fake `claude`.
+- Ticket queue (`harness tickets <verb>`, `lib/tickets.sh`): GitHub-label and local-file backends with the verbs bootstrap, ids, list, show/render, fence, add, claim, comment, block, review, release and done. Ticket text, titles and comment text reach a session only inside the untrusted fence (H-018). Every report is a new comment (H-024). Local ids are allocated under a lock (H-017). Every state change leaves one state label (H-030). Settings use `HO_TICKETS_*`, `HO_STATE_PREFIX` and `HO_TICKET_LOCK_*`. Tests use a stateful fake `gh`.
 
 ## 0.6.0 — 2026-07-10
 

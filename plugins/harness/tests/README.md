@@ -5,3 +5,5 @@
 The engine's own variables use the prefix `HO_`. Tests never call the real `claude`: `tests/fake-bin/claude` comes first on `PATH`. It appends its arguments as one tab-separated line to `$HO_FAKE_CLAUDE_LOG` (default `$HOME/fake-claude.log`), prints `$HO_FAKE_CLAUDE_STDOUT`, and exits with `$HO_FAKE_CLAUDE_EXIT` (default 0). `claude --version` prints `0.0.0 (fake claude)`.
 
 Every test name starts with the requirement ID (for example `H-125`) or the design rule (for example `Rebuild isolation`) that it proves. Helpers are in `tests/lib.sh`: `ok <name>`, `bad <name> <why>`, `assert_eq <name> <expected> <actual>`, `assert_contains <name> <text> <part>` and `assert_exit <name> <code> <cmd...>`.
+
+`tests/fake-bin/gh` is a small stateful GitHub for the ticket queue tests. It keeps each issue as JSON in `$HO_FAKE_GH_DIR/issues/` (default `$HOME/fake-gh`) and logs every call to `$HO_FAKE_GH_DIR/calls.log`. It implements `issue comment --edit-last`, so a regression to editing comments changes the stored comments. Any call it does not know exits 2.

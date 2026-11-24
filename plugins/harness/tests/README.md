@@ -1,39 +1,7 @@
-# harness tests — coverage map
+# Harness Orchestrator tests
 
-Static regression assertions (`run.sh`): no mutation, no network, no terminals spawned.
-Each test pins an invariant from `docs/DESIGN.md`; the L-numbers reference its lessons ledger.
+`tests/run.sh` first re-runs itself once under `env -i`. The scrubbed run keeps only `HOME` (a fresh temp folder), `TMPDIR`, `LANG=C` and a short `PATH`: `tests/fake-bin`, the folders that hold `jq`, `git` and `bash`, and the system folders. So the tests stay green even when a 0.6.0 launcher has set its own variables or put its `bin/` on `PATH`. Each `t_*.sh` file then runs in its own process and its own temp folder, which is removed afterwards. A file that crashes or checks nothing counts as a failure. The last line is `harness tests: PASS=<n>  FAIL=<m>`.
 
-| Invariant | Origin | Test ID |
-|---|---|---|
-| Engine scripts parse / lint clean | quality bar | H-1, H-2 |
-| Version discipline (plugin.json ↔ CHANGELOG) | house convention | H-3 |
-| No banned legacy run-name user-visible | naming requirement | H-4 |
-| haiku never used; sonnet/opus-only agents | model policy | H-5, H-17 |
-| Config templates valid JSON | onboarding | H-6 |
-| PATH-collision-proof `harness-` script names | multi-plugin machines | H-7 |
-| Prompt text never flows through AppleScript | L1 | H-8 |
-| Close sessions, never windows | L11 | H-9 |
-| cwd guards: absolute, exists, not $HOME//, cd-or-die | L2, L3 | H-10 |
-| Pause-not-stop: spawn→75, wait-on-API, stop_at:null | L8, L13 | H-11 |
-| Keychain-first token read | L6 | H-12 |
-| STOP honored in spawn + watch | lifecycle | H-13 |
-| Sonnet spawn-validation gate (reject ≠ infra-error) | user requirement | H-14 |
-| Thin commands route to `harness:harness` | house convention | H-15, H-16 |
-| `\|` OR-chains parsed and defaulted | model requirement | H-18 |
-| Pre-generated session ids; exact resume | L17 | H-19 |
-| AskUserQuestion / interactive-GSD bans in prompts | L23 | H-20 |
-| Placeholder guard narrowed+role-gated; orchestrator renders clean | C1, M1 | H-24 |
-| Completed run self-teardown (caffeinate stops) | H1 | H-25 |
-| Structural floor under the grill gate | H2 | H-26 |
-| sonnet rejected for build roles | M4 | H-27 |
-| Per-role account override | M3 | H-28 |
-| Project-guidance discovery (standard+config, CLAUDE.md flagged, empty=none) | feature | H-29 |
-| Tiered autonomous decisions (council + /ultra escalation) | feature | H-30 |
-| Ticket-status setter space-tolerant | F2 | H-31 |
-| Empty-CURRENT self-heal | F3 | H-32 |
-| Preflight validates project config JSON | F4 | H-33 |
-| Caffeinate bound to watch pid | F5 | H-34 |
-| cwd metachar guard narrowed | F7 | H-35 |
-| Worktree spoof-hardened (shared helper) | F8 | H-36 |
-| Limits fail-closed on bad percent | F10 | H-37 |
-| Guidance containment + project-scoped ids + grill synonyms | F11/F12/F13 | H-38 |
+The engine's own variables use the prefix `HO_`. Tests never call the real `claude`: `tests/fake-bin/claude` comes first on `PATH`. It appends its arguments as one tab-separated line to `$HO_FAKE_CLAUDE_LOG` (default `$HOME/fake-claude.log`), prints `$HO_FAKE_CLAUDE_STDOUT`, and exits with `$HO_FAKE_CLAUDE_EXIT` (default 0). `claude --version` prints `0.0.0 (fake claude)`.
+
+Every test name starts with the requirement ID (for example `H-125`) or the design rule (for example `Rebuild isolation`) that it proves. Helpers are in `tests/lib.sh`: `ok <name>`, `bad <name> <why>`, `assert_eq <name> <expected> <actual>`, `assert_contains <name> <text> <part>` and `assert_exit <name> <code> <cmd...>`.

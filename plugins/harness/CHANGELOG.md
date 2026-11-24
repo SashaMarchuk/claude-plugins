@@ -1,5 +1,10 @@
 # Changelog — harness
 
+## Unreleased — rebuild on harness/next
+
+- The 0.6.0 engine (scripts, commands, agents, skills, templates, design doc and static tests) is removed on this branch. Parts return only from the reuse list in the stable-beta design, each with a behaviour test shown failing first. The 0.6.0 code stays readable on `main`.
+- New empty skeleton: manifest with display name "Harness Orchestrator" and pre-release version `1.0.0-next.0`, one entry script `bin/harness`, an isolation self-test, and a test runner that uses a scrubbed environment and a fake `claude`.
+
 ## 0.6.0 — 2026-07-10
 
 Deterministic-core hardening from a deeper multi-agent review (6 design streams + an /ultra --xl

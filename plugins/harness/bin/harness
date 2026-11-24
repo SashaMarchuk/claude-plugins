@@ -34,7 +34,7 @@ verbs:
   help       print this help
   selftest   check that no 0.6.0 variable or script can leak into this engine
   tickets    the ticket queue (run "harness tickets help")
-  config     config get [--int] <jq-path> [default] | config check
+  config     config get <jq-path> [default] | config get --int <jq-path> <default> | config check
   run        run new: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
 USAGE

@@ -98,20 +98,28 @@ ho_cfg_int() {
   esac
 }
 
-# harness config get [--int] <jq-path> [default] | harness config check
+ho_config_usage() {
+  printf 'usage: harness config get <jq-path> [default] | harness config get --int <jq-path> <default> | harness config check\n' >&2
+}
+
+# harness config get <jq-path> [default] | config get --int <jq-path> <default> | config check
 ho_config_main() {
   case ${1-} in
     get)
       shift
-      if [ "${1-}" = --int ]; then shift; ho_cfg_int "$@"; else ho_cfg "$@"; fi
+      if [ "${1-}" = --int ]; then
+        shift
+        [ -n "${1-}" ] && [ -n "${2-}" ] || { ho_config_usage; exit 64; }
+        ho_cfg_int "$@"
+      else
+        [ -n "${1-}" ] || { ho_config_usage; exit 64; }
+        ho_cfg "$@"
+      fi
       ;;
     check)
       ho_config_files >/dev/null
       echo "config OK"
       ;;
-    *)
-      printf 'usage: harness config get [--int] <jq-path> [default] | harness config check\n' >&2
-      exit 64
-      ;;
+    *) ho_config_usage; exit 64 ;;
   esac
 }

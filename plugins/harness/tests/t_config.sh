@@ -82,3 +82,12 @@ rc=0; HO_PROJECT_DIR="$PWD/empty-proj" "$h" config get .a d >/dev/null 2>&1 || r
 assert_eq "Rebuild reuse config: get refuses an HO_PROJECT_DIR without config (exit 78)" "78" "$rc"
 rc=0; HO_PROJECT_DIR="$PWD/empty-proj" "$h" config check >/dev/null 2>&1 || rc=$?
 assert_eq "Rebuild reuse config: check refuses an HO_PROJECT_DIR without config (exit 78)" "78" "$rc"
+
+# config get without a key is a usage error (PR #87 review).
+for form in "get" "get --int"; do
+  rc=0
+  # shellcheck disable=SC2086
+  err=$("$h" config $form 2>&1 >/dev/null) || rc=$?
+  assert_eq "Rebuild reuse config: 'config $form' with no key exits 64" "64" "$rc"
+  assert_contains "Rebuild reuse config: 'config $form' with no key prints usage" "$err" "usage: harness config get"
+done

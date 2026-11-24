@@ -29,8 +29,9 @@ ho_run_open() {
   local dir=${1-} id why=""
   # The STOP file is found from the run folder, so a bare run ID or ./<id> must become
   # an absolute path first, or a run started inside .harness/runs would miss STOP.
+  # The path is resolved physically (pwd -P): a symlinked path must not hide STOP.
   if [ -n "$dir" ] && [ -d "$dir" ]; then
-    dir=$(cd "$dir" && pwd) || dir=${1-}
+    dir=$(cd -P "$dir" && pwd -P) || dir=${1-}
   fi
   id=$(basename "$dir")
   if [ -z "$dir" ] || [ ! -d "$dir" ]; then
@@ -69,7 +70,11 @@ ho_ledger_append() {
   fi
   # bash may split one printf into several writes, so parallel writers take a lock.
   ho_ledger_lock "$f.lock"
-  trap 'rm -rf "$HO_LEDGER_LOCK"' INT TERM HUP
+  # A signal frees the lock and ends the process: after the lock is gone this writer
+  # must not append.
+  trap 'rm -rf "$HO_LEDGER_LOCK"; exit 130' INT
+  trap 'rm -rf "$HO_LEDGER_LOCK"; exit 143' TERM
+  trap 'rm -rf "$HO_LEDGER_LOCK"; exit 129' HUP
   # A torn last line (a writer killed mid-append) must not swallow this one.
   if [ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ]; then
     line=$'\n'"$line"

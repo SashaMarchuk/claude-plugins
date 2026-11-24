@@ -211,3 +211,38 @@ rc=0; "$h" state "$run4" marker set lane-z.done >/dev/null 2>&1 || rc=$?
 chmod 644 "$run4/ledger.jsonl"
 assert_eq "Rebuild ledger: marker set fails when the ledger cannot be written" "yes" "$([ "$rc" -ne 0 ] && echo yes || echo no)"
 assert_eq "Rebuild ledger: no marker exists without its ledger line" "no" "$([ -e "$run4/markers/lane-z.done" ] && echo yes || echo no)"
+
+# A symlinked path to the run folder still finds the STOP file (PR #87 review, Codex P2).
+run6=$("$h" run new)
+ln -s "$proj/.harness/runs" "$PWD/runs-link"
+: > "$proj/.harness/STOP"
+rc=0; "$h" state "$PWD/runs-link/$(basename "$run6")" stopped >/dev/null 2>&1 || rc=$?
+assert_eq "H-086: a run path through a symlink sees the STOP file (stopped exits 0)" "0" "$rc"
+rc=0; "$h" state "$PWD/runs-link/$(basename "$run6")" resume >/dev/null 2>&1 || rc=$?
+assert_eq "H-086: a run path through a symlink refuses resume while STOP exists (exit 75)" "75" "$rc"
+rm "$proj/.harness/STOP"
+
+# TERM while an append holds the ledger lock: the lock is freed, the process exits 143 and
+# appends nothing (PR #87 review, Codex P2). A fake tail holds the append inside the lock.
+run7=$("$h" run new)
+real_tail=$(command -v tail)
+mkdir -p slow-bin
+cat > slow-bin/tail <<SLOW
+#!/bin/sh
+: > "$PWD/tail.ready"
+n=0
+while [ ! -e "$PWD/tail.go" ] && [ "\$n" -lt 100 ]; do sleep 0.1; n=\$((n + 1)); done
+exec "$real_tail" "\$@"
+SLOW
+chmod +x slow-bin/tail
+lines=$(wc -l < "$run7/ledger.jsonl" | tr -d ' ')
+PATH="$PWD/slow-bin:$PATH" "$h" state "$run7" decision "late" "must not land" >/dev/null 2>&1 &
+pid=$!
+n=0
+while [ ! -e tail.ready ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+kill -TERM "$pid" 2>/dev/null || true
+: > tail.go
+rc=0; wait "$pid" || rc=$?
+assert_eq "Rebuild ledger: TERM under the ledger lock exits 143" "143" "$rc"
+assert_eq "Rebuild ledger: TERM under the ledger lock appends nothing" "$lines" "$(wc -l < "$run7/ledger.jsonl" | tr -d ' ')"
+assert_eq "Rebuild ledger: TERM under the ledger lock frees the lock" "no" "$([ -e "$run7/ledger.jsonl.lock" ] && echo yes || echo no)"

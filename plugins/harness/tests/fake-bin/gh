@@ -6,6 +6,8 @@
 # Supported: label create; issue create|view|list|edit|comment|close.
 # "issue comment --edit-last" rewrites the account's last comment, as real gh does,
 # so a regression to it is visible in the stored comments. Any other call exits 2.
+# HO_FAKE_GH_FAIL="<group> <command>" (for example "issue comment") makes that one call
+# fail with exit 1 and change nothing, as a GitHub outage would.
 set -euo pipefail
 
 dir=${HO_FAKE_GH_DIR:-$HOME/fake-gh}
@@ -18,6 +20,10 @@ done
 printf '%s\n' "$line" >> "$dir/calls.log"
 
 fail() { printf 'fake gh: %s\n' "$*" >&2; exit 2; }
+if [ -n "${HO_FAKE_GH_FAIL:-}" ] && [ "${1:-} ${2:-}" = "$HO_FAKE_GH_FAIL" ]; then
+  printf 'fake gh: HTTP 503: service unavailable (simulated for %s)\n' "$HO_FAKE_GH_FAIL" >&2
+  exit 1
+fi
 issue_file() {
   case ${1:-} in ''|*[!0-9]*) fail "bad issue number: ${1:-}" ;; esac
   [ -f "$dir/issues/$1.json" ] || fail "no issue $1"

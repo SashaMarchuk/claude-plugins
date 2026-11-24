@@ -17,8 +17,12 @@
 #   HO_TICKET_LOCK_STALE  seconds after which an abandoned lock is taken over (default 120)
 #
 # Exit codes: 64 usage, 65 wrong state or not ready, 66 no such ticket,
-# 70 id already on disk, 73 cannot create the ticket folder, 75 lock not free in time,
-# 78 bad settings.
+# 70 id already on disk, 73 cannot create the ticket folder, 74 cannot read a ticket or
+# input file, 75 lock not free in time, 78 bad settings. Any failed gh or file step gives a
+# non-zero exit and no OK line.
+#
+# Ids are whole numbers read in base 10 with at most 9 digits: 08-x.md is ticket 8, and
+# a longer number is not a ticket id.
 
 HO_STATES="ready in-progress blocked needs-review done"
 
@@ -68,10 +72,19 @@ ho_tk_settings() {
 
 ho_tk_gh() { [ "$HO_TK_SOURCE" = github ]; }
 
+HO_TK_ID_MAX_DIGITS=9
 ho_tk_check_id() {
   case ${1:-} in
     ''|*[!0-9]*) ho_tk_err "ticket id must be a number: ${1:-<empty>}"; return 64 ;;
   esac
+  [ "${#1}" -le "$HO_TK_ID_MAX_DIGITS" ] || { ho_tk_err "ticket id has more than $HO_TK_ID_MAX_DIGITS digits: $1"; return 64; }
+}
+# ho_tk_id <text>: the id in base 10, or fail (not digits, or too many). Checked before
+# any arithmetic, so file-name text never reaches $(( )).
+ho_tk_id() {
+  case ${1:-} in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#1}" -le "$HO_TK_ID_MAX_DIGITS" ] || return 1
+  printf '%s\n' "$((10#$1))"
 }
 
 ho_tk_check_state() {
@@ -151,7 +164,7 @@ ho_tk_gh_require() { # <id> <state>
 ho_tk_gh_bootstrap() {
   local l c d
   while read -r l c d; do
-    gh label create "$HO_TK_PREFIX:$l" --repo "$HO_TK_REPO" --color "$c" --description "$d" --force >/dev/null
+    gh label create "$HO_TK_PREFIX:$l" --repo "$HO_TK_REPO" --color "$c" --description "$d" --force >/dev/null || return 1
   done <<'EOF'
 ready 0E8A16 Claimable by the harness
 in-progress FBCA04 Claimed by a harness run
@@ -186,7 +199,7 @@ ho_tk_gh_add() { # <title> <body-file> <state>
 ho_tk_gh_comment() { # <id> <body-file>
   # A new comment every time (H-024, D13; approved hand patch). Never --edit-last:
   # every role signs in as one account, so editing the last comment erased other roles' reports.
-  gh issue comment "$1" --repo "$HO_TK_REPO" --body-file "$2" >/dev/null
+  gh issue comment "$1" --repo "$HO_TK_REPO" --body-file "$2" >/dev/null || return 1
   echo "OK commented $1"
 }
 
@@ -249,10 +262,26 @@ ho_tk_locked() { # <function> [args...]
   )
 }
 
-ho_tk_l_file() { # <id> -> path
+# ho_tk_l_each: every ticket file as <id><TAB><path>. Only <digits>-<slug>.md with at most
+# 9 digits is a ticket; "7 IGNORE ... -x.md" is not ticket 7.
+ho_tk_l_each() {
+  local f n
+  for f in "$HO_TK_DIR"/[0-9]*-*.md; do
+    [ -f "$f" ] || continue
+    n=$(basename "$f")
+    n=$(ho_tk_id "${n%%-*}") || continue
+    printf '%s\t%s\n' "$n" "$f"
+  done
+}
+ho_tk_l_max_id() { ho_tk_l_each | cut -f1 | sort -n | tail -1; }
+ho_tk_l_find() { # <id> -> path of the file with that id, or nothing
+  ho_tk_l_each | awk -F '\t' -v id="$1" '$1 == id && !found { found = 1; sub(/^[^\t]*\t/, ""); print }'
+}
+ho_tk_l_file() { # <id> -> path of a readable ticket file
   local f
-  f=$(find "$HO_TK_DIR" -maxdepth 1 -name "$1-*.md" 2>/dev/null | head -1)
+  f=$(ho_tk_l_find "$1")
   [ -n "$f" ] || { ho_tk_err "no local ticket $1"; return 66; }
+  [ -r "$f" ] || { ho_tk_err "cannot read local ticket $1; nothing was changed"; return 74; }
   printf '%s\n' "$f"
 }
 ho_tk_l_header() { awk '/^$/ { exit } { print }' "$1"; }
@@ -265,72 +294,89 @@ ho_tk_l_state() { # one of the five states, or "unknown": file text never reache
   esac
 }
 ho_tk_l_title() { ho_tk_l_header "$1" | sed -n 's/^title: *//p' | head -1; }
-ho_tk_l_write() { # <file>; content on stdin; atomic
-  local tmp
+# ho_tk_l_write <file> <function> [args...]: the function's output replaces the file,
+# only when the function succeeds. On any failure the file is left as it was.
+# The function runs with set -e off (callers sit in || lists), so it checks every step.
+ho_tk_l_write() {
+  local dest=$1 tmp
+  shift
   tmp=$(mktemp "$HO_TK_DIR/.tmp.XXXXXX") || return 1
-  cat > "$tmp" && mv "$tmp" "$1"
+  if "$@" > "$tmp" && mv "$tmp" "$dest"; then return 0; fi
+  rm -f "$tmp"
+  ho_tk_err "cannot write the ticket file; nothing was changed"
+  return 1
 }
 # The one local state change (H-030): the header keeps exactly one status line.
 ho_tk_l_set_state_locked() { # <id> <state> [required-state] [floor]
   local f have body
-  f=$(ho_tk_l_file "$1") || return 66
+  f=$(ho_tk_l_file "$1") || return
   if [ -n "${3:-}" ]; then
     have=$(ho_tk_l_state "$f")
     [ "$have" = "$3" ] || { ho_tk_err "ticket $1 is not $3 (state: ${have:-none})"; return 65; }
   fi
   if [ "${4:-}" = floor ]; then
     body=$(mktemp "$HO_TK_DIR/.floor.XXXXXX") || return 1
-    sed '1,/^$/d' "$f" > "$body"
+    sed '1,/^$/d' "$f" > "$body" || { rm -f "$body"; return 74; }
     ho_tk_ready_floor "$body" || { rm -f "$body"; ho_tk_err "ticket $1 no longer passes the ready floor: block it instead"; return 65; }
     rm -f "$body"
   fi
+  ho_tk_l_write "$f" ho_tk_l_state_text "$f" "$2"
+}
+ho_tk_l_state_text() { # <file> <state>
   awk -v s="$2" '
     hdr && /^$/ { if (!done) print "status: " s; done = 1; hdr = 0 }
     hdr && /^status:/ { if (!done) print "status: " s; done = 1; next }
     { print }
-    BEGIN { hdr = 1 }' "$f" | ho_tk_l_write "$f"
+    BEGIN { hdr = 1 }' "$1"
 }
 ho_tk_l_comment_locked() { # <id> <body-file>
   local f
-  f=$(ho_tk_l_file "$1") || return 66
-  { cat "$f"; printf '\n---\n%s harness log:\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; cat "$2"; } | ho_tk_l_write "$f"
+  f=$(ho_tk_l_file "$1") || return
+  ho_tk_l_write "$f" ho_tk_l_comment_text "$f" "$2"
+}
+ho_tk_l_comment_text() { # <file> <body-file>
+  cat "$1" || return 1
+  printf '\n---\n%s harness log:\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  cat "$2"
+}
+ho_tk_l_new_text() { # <title> <state> <body-file>
+  printf 'title: %s\nstatus: %s\ncreated: %s\n\n' "$1" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  cat "$3"
 }
 ho_tk_l_add_locked() { # <title> <body-file> <state>
-  local title=$1 n slug taken
-  n=$(find "$HO_TK_DIR" -maxdepth 1 -name '[0-9]*-*.md' | sed 's|.*/||; s|-.*||' | sed -n '/^[0-9][0-9]*$/p' | sort -n | tail -1)
+  local title=$1 n slug
+  n=$(ho_tk_l_max_id) || return 1
   n=$(( ${n:-0} + 1 ))
+  [ "${#n}" -le "$HO_TK_ID_MAX_DIGITS" ] || { ho_tk_err "no ticket was created: the next id $n has more than $HO_TK_ID_MAX_DIGITS digits"; return 70; }
   slug=$(printf '%s' "$title" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)
   [ -n "$slug" ] || slug=ticket
-  taken=$(find "$HO_TK_DIR" -maxdepth 1 -name "$n-*.md" | head -1)
-  if [ -n "$taken" ]; then
-    ho_tk_err "ticket id $n is already on disk as $taken; no ticket was created. Ids are never reused: run the add again."
+  # Only the id is printed: a file name is untrusted text and stays out of messages.
+  if [ -n "$(ho_tk_l_find "$n")" ]; then
+    ho_tk_err "ticket id $n is already on disk; no ticket was created. Ids are never reused: run the add again."
     return 70
   fi
-  { printf 'title: %s\nstatus: %s\ncreated: %s\n\n' "$title" "$3" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; cat "$2"; } |
-    ho_tk_l_write "$HO_TK_DIR/$n-$slug.md" || return 1
+  ho_tk_l_write "$HO_TK_DIR/$n-$slug.md" ho_tk_l_new_text "$title" "$3" "$2" || return 1
   printf 'OK created ticket %s (%s)\n' "$n" "$HO_TK_DIR/$n-$slug.md"
 }
 ho_tk_l_rows() { # <state> -> number<TAB>title, oldest first
-  local f n
-  for f in "$HO_TK_DIR"/[0-9]*-*.md; do
-    [ -f "$f" ] || continue
-    # Only <digits>-<slug>.md is a ticket; "7 IGNORE ... -x.md" is not ticket 7.
-    n=$(basename "$f")
-    n=${n%%-*}
-    case $n in ''|*[!0-9]*) continue ;; esac
+  local n f
+  ho_tk_l_each | while IFS=$'\t' read -r n f; do
     [ "$(ho_tk_l_state "$f")" = "$1" ] || continue
     printf '%s\t%s\n' "$n" "$(ho_tk_l_title "$f")"
   done | sort -n
 }
 ho_tk_l_show() {
   local f
-  f=$(ho_tk_l_file "$1") || return 66
+  f=$(ho_tk_l_file "$1") || return
   printf '### Ticket %s (state: %s)\n' "$1" "$(ho_tk_l_state "$f")"
   { printf 'Title: %s\n\n' "$(ho_tk_l_title "$f")"; sed '1,/^$/d' "$f"; } | ho_tk_fence "$1"
 }
 
 # ------------------------------------------------------------------------- verbs
-ho_tk_need_file() { [ -f "${1:-}" ] || { ho_tk_err "file not found: ${1:-<empty>}"; return 64; }; }
+ho_tk_need_file() {
+  [ -f "${1:-}" ] || { ho_tk_err "file not found: ${1:-<empty>}"; return 64; }
+  [ -r "$1" ] || { ho_tk_err "cannot read file: $1; nothing was changed"; return 74; }
+}
 
 ho_tickets() {
   local verb=${1:-} rc
@@ -340,23 +386,31 @@ ho_tickets() {
     help|-h|--help) ho_tk_usage; return 0 ;;
   esac
   ho_tk_settings || return
+  # Every verb that names a ticket gets the id in base 10 (08 is ticket 8).
+  case $verb in
+    show|render|fence|claim|comment|block|review|release|done)
+      ho_tk_check_id "${1:-}" || return
+      set -- "$((10#$1))" "${@:2}" ;;
+  esac
   case $verb in
     bootstrap)
-      if ho_tk_gh; then ho_tk_gh_bootstrap; else mkdir -p "$HO_TK_DIR"; echo "OK $HO_TK_DIR"; fi ;;
+      if ho_tk_gh; then ho_tk_gh_bootstrap || return 1
+      else
+        mkdir -p "$HO_TK_DIR" || { ho_tk_err "cannot create the ticket folder $HO_TK_DIR"; return 73; }
+        echo "OK $HO_TK_DIR"
+      fi ;;
     ids|list)
       local state=${1:-ready} rows
       ho_tk_check_state "$state" || return
-      if ho_tk_gh; then rows=$(ho_tk_gh_rows "$state") || return 1; else rows=$(ho_tk_l_rows "$state"); fi
+      if ho_tk_gh; then rows=$(ho_tk_gh_rows "$state") || return 1; else rows=$(ho_tk_l_rows "$state") || return 1; fi
       if [ "$verb" = ids ]; then
         [ -z "$rows" ] || printf '%s\n' "$rows" | cut -f1
       else
         { [ -z "$rows" ] || printf '%s\n' "$rows"; } | ho_tk_fence "list $state"
       fi ;;
     show|render)
-      ho_tk_check_id "${1:-}" || return
       if ho_tk_gh; then ho_tk_gh_show "$1"; else ho_tk_l_show "$1"; fi ;;
     fence)
-      ho_tk_check_id "${1:-}" || return
       ho_tk_fence "$1" ;;
     add)
       local title=${1:-} bodyf=${2:-} state=${3:-ready}
@@ -368,7 +422,6 @@ ho_tickets() {
       if ho_tk_gh; then ho_tk_gh_add "$title" "$bodyf" "$state"
       else ho_tk_locked ho_tk_l_add_locked "$title" "$bodyf" "$state"; fi ;;
     claim)
-      ho_tk_check_id "${1:-}" || return
       if ho_tk_gh; then
         ho_tk_gh_require "$1" ready || return
         ho_tk_gh_set_state "$1" in-progress --add-assignee "@me" || return
@@ -377,12 +430,10 @@ ho_tickets() {
       fi
       echo "OK claimed $1" ;;
     comment)
-      ho_tk_check_id "${1:-}" || return
       ho_tk_need_file "${2:-}" || return
       if ho_tk_gh; then ho_tk_gh_comment "$1" "$2"
       else ho_tk_locked ho_tk_l_comment_locked "$1" "$2" && echo "OK commented $1"; fi ;;
     block)
-      ho_tk_check_id "${1:-}" || return
       ho_tk_need_file "${2:-}" || return
       if ho_tk_gh; then
         ho_tk_gh_set_state "$1" blocked || return
@@ -393,12 +444,10 @@ ho_tickets() {
       fi
       echo "OK blocked $1" ;;
     review)
-      ho_tk_check_id "${1:-}" || return
       if ho_tk_gh; then ho_tk_gh_set_state "$1" needs-review || return
       else ho_tk_locked ho_tk_l_set_state_locked "$1" needs-review || return; fi
       echo "OK needs-review $1" ;;
     release)
-      ho_tk_check_id "${1:-}" || return
       if ho_tk_gh; then
         local bodyf
         ho_tk_gh_require "$1" in-progress || return
@@ -414,7 +463,6 @@ ho_tickets() {
       fi
       echo "OK released $1" ;;
     done)
-      ho_tk_check_id "${1:-}" || return
       if ho_tk_gh; then
         ho_tk_gh_set_state "$1" "done" || return
         gh issue close "$1" --repo "$HO_TK_REPO" >/dev/null || return

@@ -112,7 +112,7 @@ Source: interview 2026-11-24 R28.2, R28.7, R29.2; delegated decision S8-28a
 - **THEN** the message still exists in the tracker, which stays the source of truth
 
 ### Requirement: H-122 Channel identity data maps authors to tracker access
-A channel bot SHALL be configured with identity data, such as an email address, where the channel needs it (the owner's example: a Telegram bot). The harness SHALL use it to map a channel author to a tracker account and its access level. The mapping SHALL key on the sender ID that the channel itself authenticates, and the owner sets it in user-level config. A sender with no mapping entry, or one whose entry is shared by more than one person or is ambiguous, SHALL count as unmapped (agent decision D37-NOTIFICATIONS-1). Slack, Gmail, and telling several people on one bot apart are otherwise open. Trust rules for mapped and unmapped authors: H-033, H-035.
+A channel bot SHALL be configured with identity data, such as an email address, where the channel needs it (the owner's example: a Telegram bot). The harness SHALL use it to map a channel author, by the sender ID the channel authenticates, to a tracker account and its access level (D37-NOTIFICATIONS-1). Slack, Gmail, and telling several people on one bot apart are open. Trust rules: H-033, H-035.
 OPEN: see design.md OPEN-NOTIFICATIONS-2
 
 Source: interview 2026-11-24 R29.9

@@ -1,9 +1,9 @@
 ## ADDED Requirements
 
 ### Requirement: H-002 Label-only pickup trigger
-On a tracker with labels, only a label on the ticket SHALL put the ticket into work. The harness MUST NOT offer a comment command that triggers pickup. The label names are chosen by the agent.
+On a tracker with labels, only a label on the ticket SHALL put the ticket into work. The harness MUST NOT offer a comment command that triggers pickup. The label names are left to the agent (CTX-label-names); design.md D2 sets them.
 
-Source: interview 2026-11-24 R1.2; context: label names chosen by the agent
+Source: interview 2026-11-24 R1.2; CTX-label-names; D2
 
 #### Scenario: A person sets the ready label
 - **WHEN** a person with write access sets the ready label on a GitHub issue
@@ -60,7 +60,7 @@ Source: interview 2026-11-24 R1.6; decided context CTX-grilling-gate
 - **THEN** the ticket carries the matching status in the configured tracker
 
 ### Requirement: H-007 Fallback trigger for trackers without labels
-Labels SHALL be the base trigger. A tracker without labels SHALL get a fallback trigger: a reserved word with a specific instruction in the ticket text, or a better one found by research, instead of it or alongside it. Fallback order: delegated agent decision, design.md D1 (a reserved line stays the last resort). The harness MUST find out who set any trigger.
+Labels SHALL be the base trigger. A tracker without labels SHALL get a fallback trigger: a reserved word with a specific instruction in the ticket text, or a better one found by research instead of it. Fallback order: delegated agent decision, design.md D1 (a reserved line stays the last resort). The harness MUST find out who set any trigger.
 
 Source: interview 2026-11-24 R1.7, R1.8 (fallback); R4.3, R4.4 and D1 (the trigger's author must be known)
 
@@ -169,14 +169,22 @@ Source: interview 2026-11-24 R5.2; D6
 - **THEN** the readiness check uses the default from design.md D6
 
 ### Requirement: H-014 Working brief written by the AI at pickup
-At pickup, the AI SHALL add the structure to the ticket itself: it SHALL write a corrected, structured version of the ticket and infer missing points from the text where it can, for example which checks to run. This is the owner's suggestion, adopted after validation (design.md D8); where D8 departs from it, see the scenarios.
+At pickup, by default, the AI SHALL write a structured working version of the ticket and infer missing points from the text where it can (agent decision on the owner's delegation, design.md D8). Where it goes is the `tickets.normalize` setting; rewriting the description, as the owner suggested, is one option.
 
 Source: interview 2026-11-24 R5.3, R5.5 (owner's suggestion, validated as agent decision D8)
 OPEN: see design.md OPEN-INTAKE-4
 
 #### Scenario: Structured version posted as a comment
-- **WHEN** the AI writes the structured version
-- **THEN** per design.md D8 it keeps the description and posts the structured version as a comment; the owner suggested correcting the description itself, so this needs his ratification
+- **WHEN** the AI writes the structured version and `tickets.normalize` is not set
+- **THEN** per design.md D8 it keeps the description and posts the structured version as a "Working brief" comment; this departs from the owner's suggestion, so it needs his ratification
+
+#### Scenario: The description is rewritten
+- **WHEN** `tickets.normalize` is set to `body`
+- **THEN** the AI replaces the description with the structured version, as the owner suggested
+
+#### Scenario: Normalising is off
+- **WHEN** `tickets.normalize` is set to `off`
+- **THEN** the AI writes no structured version of the ticket
 
 #### Scenario: A ticket names no checks
 - **WHEN** a ready ticket describes the change but names no checks
@@ -192,7 +200,7 @@ Source: interview 2026-11-24 R5.6
 - **THEN** the ticket body already has the structure the plugin writes
 
 ### Requirement: H-016 Configurable reaction to a ticket marked ready but not ready
-If a ticket is marked ready but is not ready, the harness SHALL NOT start work on it, and SHALL change its status so that it no longer counts as ready. The reaction SHALL be configurable and MAY depend on the autonomy level. The handling MUST stay simple. The default reaction is an agent decision on the owner's delegation; see design.md D7, which also posts a comment with numbered questions.
+If a ticket is marked ready but is not ready, the harness SHALL NOT start work on it, and SHALL change its status so that it no longer counts as ready. The reaction SHALL be configurable and SHALL depend on the autonomy level. The handling MUST stay simple. The default reaction and how it varies are an agent decision on the owner's delegation (design.md D7).
 
 Source: interview 2026-11-24 R5.7; D7
 OPEN: see design.md OPEN-INTAKE-5

@@ -79,9 +79,9 @@ OPEN: see design.md OPEN-VERIFICATION-2
 - **THEN** verification fails
 
 ### Requirement: H-058 Pass-with-remarks follows the autonomy level
-What the harness does with a "passed with remarks" verdict SHALL depend on the configured autonomy level. The owner's likely default for maximum autonomy: the agent SHALL decide how to fix the remarks, and the change SHALL merge only after everything is OK. The behaviour below maximum autonomy is an agent decision: see design.md D15.
+The reaction to a "passed with remarks" verdict SHALL depend on the autonomy level. Likely default at maximum autonomy: the agent SHALL decide how to fix the remarks, and the change SHALL merge only once all is OK. Otherwise the change SHALL go to a human (scope of "otherwise" ambiguous). Settings: design.md D15 (agent decision).
 
-Source: interview 2026-11-24 R13.5 (given as the likely behaviour, not a firm decision); D15
+Source: interview 2026-11-24 R13.5 (likely, not firm); R13.6 (confirmed restatement); D15
 OPEN: see design.md OPEN-VERIFICATION-5
 
 #### Scenario: Maximum autonomy
@@ -90,7 +90,7 @@ OPEN: see design.md OPEN-VERIFICATION-5
 
 #### Scenario: Below maximum autonomy
 - **WHEN** the verdict is "passed with remarks" and the autonomy level is below maximum
-- **THEN** the change does not merge by itself and is handed to a human (default per design.md D15)
+- **THEN** the change does not merge by itself and is handed to a human (R13.6, read as below maximum autonomy; setting `remarks: human` per design.md D15)
 
 ### Requirement: H-059 UI changes are verified in a browser
 When a change touches the user interface, the standard verification cycle SHALL verify it independently, beyond end-to-end tests, by clicking through it in a browser to confirm it works as required.
@@ -130,14 +130,14 @@ OPEN: see design.md OPEN-VERIFICATION-1 (whether the harness calls the skill whe
 - **THEN** the verify-and-prove skill is not part of the harness install and is installed separately
 
 ### Requirement: H-061 External code-review comments are handled by default
-By default, when an external code-review system comments on a pull request, the harness SHALL take the comments into account, reply to them and fix what it accepts. It MAY decline a comment, and a separate skill MAY handle the comments.
+By default, when an external code-review system comments on a pull request, the harness SHALL react to the comments: take them into account and fix what it accepts. It MAY decline a comment, and a separate skill MAY handle the comments.
 
 Source: interview 2026-11-24 R15.10
 OPEN: see design.md OPEN-VERIFICATION-4
 
 #### Scenario: External reviewer comments
 - **WHEN** an external code-review system posts comments on a harness pull request and the default applies
-- **THEN** the harness takes the comments into account, replies to them and fixes what it accepts
+- **THEN** the harness reacts to the comments, takes them into account and fixes what it accepts
 
 #### Scenario: A comment is not accepted
 - **WHEN** the harness judges that an external review comment should not be applied

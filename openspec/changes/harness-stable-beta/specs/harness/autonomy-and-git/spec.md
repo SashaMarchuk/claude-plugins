@@ -148,12 +148,16 @@ Source: interview 2026-11-24 R7.4; delegated decision D10
 - **THEN** the harness opens the draft PR at that point
 
 ### Requirement: H-045 A confirmed merge closes the linked ticket
-When git confirms a merge, the harness SHALL close the linked ticket, following the owner's lean. How it closes is an agent decision on the owner's delegation, set in design.md D11: this covers setting the ticket to done, the `close_on_merge` setting and its default.
+When git confirms a merge, the harness SHALL set the linked ticket to done and, by default, close it (agent decision on the owner's delegation, design.md D11, setting `close_on_merge`). Closing follows the owner's lean.
 Source: interview 2026-11-24 R7.5; delegated decision D11
 
 #### Scenario: Merge confirmed
 - **WHEN** git confirms that the ticket's change is in the target branch
-- **THEN** the harness closes the linked ticket as set in design.md D11
+- **THEN** the harness sets the linked ticket to done and closes it, as set in design.md D11
+
+#### Scenario: Closing is switched off
+- **WHEN** git confirms the merge and `close_on_merge` is false
+- **THEN** the harness sets the linked ticket to done and leaves it open
 
 ### Requirement: H-046 Every merge is confirmed through git
 After each merge, the harness MUST confirm through git that the change really entered the target branch. A merge that git does not confirm MUST NOT count as done.

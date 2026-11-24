@@ -73,7 +73,7 @@ Source: interview 2026-11-24 R18.4; D20
 - **THEN** the harness leaves the ticket stopped
 
 ### Requirement: H-094 Configurable recovery attempts
-The harness SHALL make three recovery attempts for a worker session by default. The number of attempts and the waits between them SHALL be configurable. The default waits are an agent decision; see design.md D21.
+The harness SHALL make three recovery attempts for a worker session by default. The number of attempts and the waits between them SHALL be configurable. The owner gave starting guesses for the waits; the defaults that replace them are an agent decision, see design.md D21.
 OPEN: see design.md OPEN-SESSIONS-2
 
 Source: interview 2026-11-24 R18.5; D21
@@ -104,10 +104,10 @@ Source: interview 2026-11-24 R18.6
 - **THEN** the harness continues the run
 
 ### Requirement: H-096 A deterministic outage monitor without a model session, separate from the context watcher
-The harness SHALL include a deterministic outage monitor that runs without a Claude Code session and MUST NOT be the context watcher. It SHALL check the Claude Code service status and the internet connection, log the last checked value, check more often after a change to down, and tell the orchestrator to continue when the service returns. Frequency and build: design.md D22.
+Unless Claude Code resumes by itself after an outage, the harness SHALL include a deterministic outage monitor with no model session, not the context watcher. It SHALL check the service status, and the internet only if an internet drop really stops the orchestrator. It SHALL log the last value, check more often while down, and tell the orchestrator when service returns.
 OPEN: see design.md OPEN-SESSIONS-3
 
-Source: interview 2026-11-24 R18.7, R18.8; D22
+Source: interview 2026-11-24 R18.7, R18.8; D22 (build)
 
 #### Scenario: Owner's sketch (design D22)
 - **WHEN** the monitor is designed
@@ -128,6 +128,10 @@ Source: interview 2026-11-24 R18.7, R18.8; D22
 #### Scenario: Service comes back
 - **WHEN** the monitor sees that the service and the connection are back
 - **THEN** it tells the orchestrator to continue
+
+#### Scenario: The context watcher is not the monitor
+- **WHEN** the outage monitor runs
+- **THEN** it runs separately from the context watcher, which MUST NOT take its role
 
 #### Scenario: No model is involved
 - **WHEN** the monitor checks the service

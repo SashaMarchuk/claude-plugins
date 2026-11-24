@@ -129,9 +129,9 @@ Source: interview 2026-11-24 R20.7, R20.8; D25; S8-20b; S8-27; CTX-exact-pid
 - **THEN** the harness sends a stop message ahead of the session's queue if the forced send works (OPEN-12), or puts a stop or park prompt in the queue; what happens if the session does not stop is open (OPEN-25)
 
 ### Requirement: H-088 Automatic recovery after sleep, failure or reboot; asking first is a setting
-After the laptop sleeps, a failure occurs, or the machine reboots, the harness SHALL resume the last run's sessions and continue where it stopped. By default it SHALL do this without asking. A setting SHALL let the owner require permission before recovery. The resume rule rests on the owner's agreement to a restatement.
-OPEN: see design.md OPEN-23
-Source: interview 2026-11-24 R20.10 (confirmed restatement), R20.11
+After the laptop sleeps, a failure occurs, or the machine reboots, the harness SHALL resume the last run's sessions and continue where it stopped. By default it SHALL do this without asking. A setting SHALL let the owner require permission first. After a reboot, recovery begins at the next harness start (agent decision, design.md D32).
+OPEN: see design.md OPEN-23, OPEN-27
+Source: interview 2026-11-24 R20.10 (confirmed restatement), R20.11; D32
 
 #### Scenario: Wake after sleep, default setting
 - **WHEN** the laptop wakes from sleep during a run and the default setting applies
@@ -140,3 +140,7 @@ Source: interview 2026-11-24 R20.10 (confirmed restatement), R20.11
 #### Scenario: Recovery requires permission
 - **WHEN** the setting to ask first is on and the harness restarts after a failure or a reboot
 - **THEN** the harness asks the owner and resumes only after the owner allows it
+
+#### Scenario: After a reboot (design.md D32)
+- **WHEN** the machine reboots during a run and the default setting applies
+- **THEN** nothing starts by itself, and the next `/harness:run` or `/harness:resume` resumes the last run without asking

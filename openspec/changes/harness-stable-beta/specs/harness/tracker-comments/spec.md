@@ -44,9 +44,9 @@ Source: interview 2026-11-24 R4.7, R4.8; D5
 - **THEN** the harness MAY skip the status-change comment, as set in design.md D5
 
 ### Requirement: H-027 The configured tracker is the source of truth; nothing is duplicated into another tracker
-The configured tracker SHALL record all ticket statuses and history and SHALL be the source of truth. The tracker MUST be configurable; GitHub is only the default. When another tracker is configured, the harness MUST NOT duplicate tickets, statuses or comments into GitHub. Notification channels are optional and only mirror the tracker (derived from R28.2 and the owner calling channels a duplicate of the tracker).
+The configured tracker SHALL record all statuses and history and SHALL be the source of truth. The tracker MUST be configurable; GitHub is the default. With another tracker, the harness MUST NOT duplicate tickets, statuses or comments into GitHub. Notification channels are optional additions that mirror tracker questions and events; for answers they carry back, the tracker stays the source of truth.
 
-Source: interview 2026-11-24 R10.6, R28.2, R29.2
+Source: interview 2026-11-24 R10.6, R28.2, R29.2, R29.3, R29.4
 
 #### Scenario: Another tracker is configured
 - **WHEN** a project uses ClickUp as its tracker
@@ -164,9 +164,9 @@ Source: interview 2026-11-24 R29.6; D13
 - **THEN** the harness ignores the field and treats the platform author as the author, as set in design.md D13
 
 ### Requirement: H-035 Answers from unmapped authors need revalidation by a writer
-An answer whose author maps to a tracker account with write access or higher SHALL be trusted. An answer whose author cannot be mapped MUST NOT be applied until a person with write access revalidates it. Until then, the ticket SHALL move to needs-review, as for any reply with unconfirmed access (H-033). Revalidation by a writer is read from R29.7 with R11.2.
+An answer whose author maps to a tracker account with write access or higher SHALL be trusted. An answer whose author cannot be mapped MUST NOT be applied until a person with write access revalidates it. Until then, the ticket SHALL move to needs-review, as in H-033 (agent decision under D37, design.md D37-COMMENTS-1).
 
-Source: interview 2026-11-24 R29.7; R11.2, R11.3 (by analogy)
+Source: interview 2026-11-24 R29.7; agent decision D37-COMMENTS-1 (from R11.2, R11.3)
 OPEN: see design.md OPEN-11, OPEN-21
 
 #### Scenario: Mapped writer answers in a channel

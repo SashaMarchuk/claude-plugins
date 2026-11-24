@@ -33,9 +33,10 @@ OPEN: see design.md OPEN-18
 - **THEN** the profile stays unchanged
 
 ### Requirement: H-066 Steps can be reordered, added, switched off and given a runner
-For each project, the flow configuration SHALL let the user reorder, add and switch off steps, and name each step's runner. A step MAY be switched off when something else does it, for example code review on GitHub or by a review bot. Custom steps MAY be added anywhere in the flow; the scenarios give examples. Code review before the PR is opened SHALL be an allowed order.
+Per project, the flow configuration SHALL let the user reorder, add and switch off steps, and name each step's runner. A step MAY be switched off when something else does it. Custom steps MAY be added between steps, for example before or after code review. Code review before the PR is opened SHALL be an allowed order.
 
 Source: interview 2026-11-24 R15.3, R15.4, R15.5, R15.9
+OPEN: see design.md OPEN-16 (custom steps inside a chosen system's flow)
 
 #### Scenario: A version bump step
 - **WHEN** the flow configuration adds a version-bump step
@@ -236,7 +237,7 @@ OPEN: see design.md OPEN-19 (Codex execution depth and Codex profile details) an
 - **THEN** the harness offers it as experimental (design.md D30)
 
 ### Requirement: H-076 Optional requirements format, with an offer to set up OpenSpec
-The harness SHALL be able to offer OpenSpec setup as a project's requirements format; for now it SHALL be the only such format, and others may come later. Using one MUST be optional and configurable, including whether grilling uses the requirements. A project without OpenSpec SHALL be a valid, normal case. Defaults: design.md D41 (agent decision under D37, not yet ratified).
+The harness SHALL be able to offer OpenSpec setup as a project's requirements format; for now it is the only one. Using one MUST be optional and configurable, including whether grilling uses the requirements. A project without OpenSpec SHALL be a valid, normal case. Defaults: design.md D41 (agent decision on the owner's delegation; he did not know the answer); they clash with H-001.
 
 Source: interview 2026-11-24 R30.2, R30.3; D41
 OPEN: see design.md OPEN-1
@@ -268,7 +269,7 @@ Source: interview 2026-11-24 R28.9
 - **THEN** the agent communicates in that language
 
 ### Requirement: H-078 The same workflow runs on Codex and Claude Code where local setup allows
-The same workflow, for example GSD, SHOULD run on both Codex and Claude Code (the owner called this the ideal). The harness SHALL support it where local setup allows. Installing a workflow for Codex is local setup, not a harness change (design.md D31).
+The same workflow, for example GSD, SHOULD run on both Codex and Claude Code (the owner called this the ideal). If that needs harness changes, the harness SHALL include them. The agent's current assessment: installing a workflow for Codex is local setup (design.md D31).
 
 Source: interview 2026-11-24 R24.5, R24.6; D31 (split from H-075)
 
@@ -278,4 +279,8 @@ Source: interview 2026-11-24 R24.5, R24.6; D31 (split from H-075)
 
 #### Scenario: Workflow not set up for Codex
 - **WHEN** a step runs on Codex and the workflow is not installed for Codex on this machine
-- **THEN** installing it is a local setup task, and the harness itself does not change
+- **THEN** the harness stops and prints the install step (design.md D31); in the agent's current assessment this is local setup
+
+#### Scenario: A harness change is needed
+- **WHEN** running the same workflow on both runtimes needs a change in the harness
+- **THEN** that change is made in the harness

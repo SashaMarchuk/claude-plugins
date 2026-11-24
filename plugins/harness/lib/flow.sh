@@ -17,7 +17,7 @@
 # value fails the render and nothing is printed. Values reach jq through files, never as
 # one big argument.
 #
-# Settings: HO_FLOWS_DIR (default <plugin>/flows). Requires lib/common.sh.
+# Settings: HO_FLOWS_DIR (default <plugin>/flows). Requires lib/common.sh, jq and iconv.
 
 HO_EXIT_USAGE=64
 HO_EXIT_DATA=65
@@ -136,6 +136,7 @@ ho_flow_render() {
   shift 2
   ho_flow_load "$flow"
   role_file=$(ho_flow_role_file "$role")
+  command -v iconv >/dev/null 2>&1 || ho_die "flow render needs iconv (to check that values are UTF-8); install it"
   tmpd=$(mktemp -d "${TMPDIR:-/tmp}/ho-flow.XXXXXX") || ho_die "mktemp failed"
   # shellcheck disable=SC2064
   trap "rm -rf '$tmpd'" EXIT
@@ -164,6 +165,19 @@ ho_flow_render() {
       *) ho_flow_usage; exit "$HO_EXIT_USAGE" ;;
     esac
   done
+  # H-018: ticket text reaches a session only inside the untrusted fence of this ticket,
+  # as `harness tickets show` or `harness tickets fence <id>` prints it.
+  if [ -f "$tmpd/TICKET_TEXT" ]; then
+    local tid="" first last
+    [ -f "$tmpd/TICKET_ID" ] && tid=$(cat "$tmpd/TICKET_ID")
+    first=$(head -n 1 "$tmpd/TICKET_TEXT")
+    last=$(sed -e '/^$/d' "$tmpd/TICKET_TEXT" | tail -n 1)
+    case $first in "----- BEGIN TICKET DATA [id $tid] "*) ;; *) first="" ;; esac
+    if [ -z "$tid" ] || [ -z "$first" ] || [ "$last" != "----- END TICKET DATA [id $tid] -----" ]; then
+      printf 'harness: TICKET_TEXT must be the fenced text of ticket TICKET_ID (from harness tickets show or fence)\n' >&2
+      exit "$HO_EXIT_DATA"
+    fi
+  fi
   if [ "$role" = worker ] && [ -z "$step" ]; then
     printf 'harness: the worker role needs --step <id>\n' >&2
     exit "$HO_EXIT_USAGE"

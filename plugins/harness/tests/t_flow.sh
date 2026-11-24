@@ -8,7 +8,7 @@ cycle="classify grill plan execute code-review verify ui-check ship"
 assert_eq "H-064: both flow profiles ship" "basic gsd" "$("$h" flow list | tr '\n' ' ' | sed 's/ $//')"
 
 # Caller values for a render. The engine fills FLOW_*, STEP_* itself.
-printf 'ticket body line 1\nline 2\n' > ticket.txt
+printf 'ticket body line 1\nline 2\n' | "$h" tickets fence 41 > ticket.txt
 set_args() {
   printf '%s\0' --set RUN_ID 20261125-000000-abcdef --set TICKET_ID 41 \
     --set BRANCH lane/t8 --set BASE trunk --set WORKDIR /work/lane \
@@ -67,7 +67,7 @@ assert_eq "H-064: shipped templates are plain ASCII" "" \
 # Field note D3: values go in literally and are never scanned again.
 weird='quote @LANE@ and {{RUN_ID}} & \1 \\ $(id) `id` %s
 second line @STEP_ID@'
-printf '%s' "$weird" > weird.txt
+printf '%s\n' "$weird" | "$h" tickets fence 41 > weird.txt
 out=$(TICKET_FILE=weird.txt set_args | xargs -0 "$h" flow render basic validator 2>&1 || true)
 assert_contains "Field note D3: a value that quotes placeholders goes in byte for byte" "$out" "$weird"
 rc=0; TICKET_FILE=weird.txt set_args | xargs -0 "$h" flow render basic validator >/dev/null 2>&1 || rc=$?
@@ -138,19 +138,28 @@ rm -rf flows/t; mk t "$good"; mv flows/t outside/t2; ln -s "$PWD/outside/t2" flo
 assert_eq "H-064: a linked flow folder is read from its real place" "flow t OK" "$("$h" flow check t 2>&1)"
 rm -f flows/t; mk t "$good"
 printf 'Step @STEP_ID@ is @STEP_TITLE@; quoted: @RUN_ID@.\n' > flows/t/steps/a.md
+OLDPWD_T=$PWD; printf 't\n' | "$h" tickets fence 1 > ticket1.txt
 rc=0; out=$("$h" flow render t worker --step a --set RUN_ID '@STEP_TEXT@ @TICKET_ID@ {{x}}' --set TICKET_ID 1 \
-  --set WORKDIR /w --set BRANCH b --set STEP_RESULT_FILE /r --set TICKET_TEXT t 2>&1) || rc=$?
+  --set WORKDIR /w --set BRANCH b --set STEP_RESULT_FILE /r --file TICKET_TEXT "$OLDPWD_T/ticket1.txt" 2>&1) || rc=$?
 assert_eq "H-064: a step prompt may use its own step id and title" "0" "$rc"
 assert_contains "Field note D3: a worker step value goes in literally, in both render passes" "$out" \
   "Step a is A; quoted: @STEP_TEXT@ @TICKET_ID@ {{x}}."
-awk 'BEGIN { for (i = 0; i < 40000; i++) printf "0123456789abcdefghijklmnopqrstuvwxyz\n" }' > big.txt
+awk 'BEGIN { for (i = 0; i < 40000; i++) printf "0123456789abcdefghijklmnopqrstuvwxyz\n" }' | "$h" tickets fence 41 > big.txt
 rc=0; out=$(TICKET_FILE=big.txt set_args | HO_FLOWS_DIR= xargs -0 "$h" flow render basic validator --set RUN_ID late 2>&1) || rc=$?
 assert_eq "H-064: a 1.4 MB ticket value followed by --set renders" "0" "$rc"
-assert_contains "H-064: the large value arrives whole" "$out" "$(tail -n 1 big.txt)"
+assert_contains "H-064: the large value arrives whole" "$out" "$(tail -n 2 big.txt | head -n 1)"
 printf 'ab\377\376cd' > bad.txt
 rc=0; out=$(HO_FLOWS_DIR= "$h" flow render basic validator --set RUN_ID r --file TICKET_TEXT bad.txt 2>&1) || rc=$?
 assert_eq "H-064: a value that is not UTF-8 is refused, not changed (exit 65)" "65" "$rc"
 assert_contains "H-064: the refusal names the value" "$out" "TICKET_TEXT"
+# H-018: ticket text reaches a session only inside the fence of this same ticket.
+printf 'raw ticket text\n' > raw.txt
+for f in raw.txt ticket1.txt; do
+  rc=0; err=$(HO_FLOWS_DIR= "$h" flow render basic validator --set RUN_ID r --set TICKET_ID 41 --set BRANCH b \
+    --set BASE m --set WORKDIR /w --set VERDICT_FILE /v --file TICKET_TEXT "$f" 2>&1 >/dev/null) || rc=$?
+  assert_eq "H-018: ticket text $f that is not fenced for ticket 41 is refused (exit 65)" "65" "$rc"
+  assert_contains "H-018: the refusal of $f names TICKET_TEXT" "$err" "TICKET_TEXT"
+done
 unset HO_FLOWS_DIR
 
 # D37-FLOW-1: engine code holds no flow-system name, in text or in file names. The one

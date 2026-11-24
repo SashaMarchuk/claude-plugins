@@ -1,6 +1,6 @@
 Build ticket @TICKET_ID@ with GSD.
 
-1. Run `/gsd-execute-phase <phase>` on the phase that the classification step named.
+1. Run `/gsd-execute-phase` with the phase number that the classification step named.
 2. Work stays on @BRANCH@. If GSD names another branch, keep @BRANCH@ and record the difference.
 3. Run the repository's own gates (tests, type checks, lint) when GSD is done. Use the exact
    commands the repository documents.

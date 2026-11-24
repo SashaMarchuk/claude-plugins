@@ -67,3 +67,18 @@ mkdir -p tproj/.harness tuser
 cp "$HO_PLUGIN_ROOT/templates/project-config.example.json" tproj/.harness/config.json
 cp "$HO_PLUGIN_ROOT/templates/user-config.example.json" tuser/config.json
 assert_exit "Rebuild reuse templates: both templates pass config check" 0 env HO_PROJECT_DIR="$PWD/tproj" HO_USER_DIR="$PWD/tuser" "$h" config check
+
+# A worktree outside the project finds it through a .harness-project pointer file.
+printf '%s\n' '{"schemaVersion":2,"a":{"x":"project"}}' > "$proj/.harness/config.json"
+mkdir -p lane-wt/deep
+printf '%s\n' "$proj" > lane-wt/.harness-project
+assert_eq "Rebuild reuse config: a .harness-project pointer leads a worktree to the project" "project" "$(cd lane-wt/deep && "$h" config get .a.x default)"
+printf '%s\n' "$PWD/nowhere" > lane-wt/.harness-project
+assert_eq "Rebuild reuse config: a pointer to a folder without config is not a project" "default" "$(cd lane-wt/deep && "$h" config get .a.x default 2>/dev/null)"
+
+# HO_PROJECT_DIR naming a folder without config is refused the same way by get and check.
+mkdir empty-proj
+rc=0; HO_PROJECT_DIR="$PWD/empty-proj" "$h" config get .a d >/dev/null 2>&1 || rc=$?
+assert_eq "Rebuild reuse config: get refuses an HO_PROJECT_DIR without config (exit 78)" "78" "$rc"
+rc=0; HO_PROJECT_DIR="$PWD/empty-proj" "$h" config check >/dev/null 2>&1 || rc=$?
+assert_eq "Rebuild reuse config: check refuses an HO_PROJECT_DIR without config (exit 78)" "78" "$rc"

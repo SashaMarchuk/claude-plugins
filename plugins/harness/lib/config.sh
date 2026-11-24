@@ -57,7 +57,7 @@ ho_config_files() {
     ho_config_file_check "$proj/.harness/config.json"
     printf '%s\n' "$proj/.harness/config.json"
   elif [ -n "${HO_PROJECT_DIR:-}" ]; then
-    ho_project_root >/dev/null
+    ho_project_root >/dev/null || true
     exit "$HO_EXIT_CONFIG"
   fi
   ho_config_file_check "$user"

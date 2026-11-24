@@ -161,3 +161,11 @@ for target in "$copy" "$bad_stamp" "$proj/.harness/runs/wrong-id" "$proj/.harnes
 done
 rm "$proj/.harness/STOP"
 assert_eq "Rebuild separate state: the copied 0.6.0 run still matches the original" "$(tree_sum "$old")" "$(tree_sum "$copy")"
+
+# I1: an unreadable line early in a long ledger still makes the stop check unknown.
+run3=$("$h" run new)
+printf 'garbage\n' >> "$run3/ledger.jsonl"
+i=0
+while [ $i -lt 40 ]; do "$h" state "$run3" decision "q$i" "$big"; i=$((i + 1)); done
+rc=0; "$h" state "$run3" stopped >/dev/null 2>&1 || rc=$?
+assert_eq "I1: an unreadable early line in a long ledger makes the stop check unknown (exit 2)" "2" "$rc"

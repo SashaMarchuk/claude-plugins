@@ -113,11 +113,15 @@ ho_stopped() {
     [ "$(ho_last_stop_event)" = stop ] || ho_ledger_append stop source file type soft:step reason "STOP file"
     return 0
   fi
-  if ho_ledger_events | grep -q '^{"kind":"unreadable"}$'; then
+  # Read the whole ledger first: "grep -q" would close the pipe early, and under pipefail
+  # the dying reader would turn "unreadable" into "not stopped".
+  local events
+  events=$(ho_ledger_events) || { echo "harness: cannot read the run ledger; stop state unknown" >&2; return 2; }
+  if printf '%s\n' "$events" | grep -c '^{"kind":"unreadable"}$' >/dev/null; then
     printf 'harness: run ledger %s/ledger.jsonl has an unreadable line; stop state unknown\n' "$HO_RUN_DIR" >&2
     return 2
   fi
-  [ "$(ho_last_stop_event)" = stop ]
+  [ "$(printf '%s\n' "$events" | jq -r 'select(.kind == "stop" or .kind == "resume") | .kind' | tail -n 1)" = stop ]
 }
 
 ho_marker_name_ok() {

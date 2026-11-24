@@ -64,34 +64,49 @@ ho_ledger_append() {
   fi
   # bash may split one printf into several writes, so parallel writers take a lock.
   ho_ledger_lock "$f.lock"
+  trap 'rm -rf "$HO_LEDGER_LOCK"' INT TERM HUP
   # A torn last line (a writer killed mid-append) must not swallow this one.
   if [ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ]; then
     line=$'\n'"$line"
   fi
   if ! printf '%s\n' "$line" >> "$f"; then
-    rmdir "$f.lock" 2>/dev/null
+    ho_ledger_unlock
     echo "harness: cannot append to the run ledger" >&2
     exit 1
   fi
-  rmdir "$f.lock" 2>/dev/null || true
+  ho_ledger_unlock
 }
 
-# ho_ledger_lock <dir>: mkdir lock. A lock older than one minute is left by a killed
-# writer (an append takes milliseconds) and is removed. No lock after 30 s is an error.
+ho_ledger_unlock() {
+  rm -rf "$HO_LEDGER_LOCK"
+  trap - INT TERM HUP
+}
+
+# ho_ledger_lock <dir>: mkdir lock with the holder's PID inside. A lock whose holder is dead
+# is taken over at once. A lock with no PID file (holder killed between mkdir and writing
+# the PID) counts as stale after one minute. No lock after 90 s is an error.
+# Known gap: two waiters that see the same dead holder at the same instant can race.
 ho_ledger_lock() {
-  local lock=$1 n=0
+  local lock=$1 n=0 pid
+  HO_LEDGER_LOCK=$lock
   until mkdir "$lock" 2>/dev/null; do
-    if [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-      rmdir "$lock" 2>/dev/null || true
+    pid=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$pid" ] && rm -rf "$lock"
+      continue
+    fi
+    if [ -z "$pid" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      rm -rf "$lock"
       continue
     fi
     n=$((n + 1))
-    if [ "$n" -ge 600 ]; then
+    if [ "$n" -ge 1800 ]; then
       printf 'harness: run ledger is locked (%s); not written\n' "$lock" >&2
       exit 1
     fi
     sleep 0.05
   done
+  printf '%s\n' "$$" > "$lock/pid"
 }
 
 # ho_ledger_events: print each non-empty ledger line as compact JSON; an unparsable line becomes
@@ -107,21 +122,26 @@ ho_last_stop_event() {
   ho_ledger_events | jq -r 'select(.kind == "stop" or .kind == "resume") | .kind' | tail -n 1
 }
 
-# ho_stopped: 0 stopped, 1 not stopped, 2 unknown (unreadable ledger; never read as "not stopped").
+# ho_stopped: 0 stopped, 1 not stopped, 2 unknown. An unreadable ledger line makes the state
+# unknown (never "not stopped") until a later stop or resume line makes it known again.
 ho_stopped() {
+  local state
   if [ -e "$(ho_stop_file)" ]; then
     [ "$(ho_last_stop_event)" = stop ] || ho_ledger_append stop source file type soft:step reason "STOP file"
     return 0
   fi
-  # Read the whole ledger first: "grep -q" would close the pipe early, and under pipefail
-  # the dying reader would turn "unreadable" into "not stopped".
-  local events
-  events=$(ho_ledger_events) || { echo "harness: cannot read the run ledger; stop state unknown" >&2; return 2; }
-  if printf '%s\n' "$events" | grep -c '^{"kind":"unreadable"}$' >/dev/null; then
-    printf 'harness: run ledger %s/ledger.jsonl has an unreadable line; stop state unknown\n' "$HO_RUN_DIR" >&2
-    return 2
-  fi
-  [ "$(printf '%s\n' "$events" | jq -r 'select(.kind == "stop" or .kind == "resume") | .kind' | tail -n 1)" = stop ]
+  # One jq pass reads the whole ledger, so no early-closing reader can hide a bad line.
+  state=$(ho_ledger_events | jq -rn 'reduce inputs as $e ("none";
+      if $e.kind == "unreadable" then "unknown"
+      elif $e.kind == "stop" then "stop"
+      elif $e.kind == "resume" then "none"
+      else . end)') || state=unknown
+  case $state in
+    stop) return 0 ;;
+    none) return 1 ;;
+  esac
+  printf 'harness: run ledger %s/ledger.jsonl has an unreadable line after the last stop or resume; stop state unknown. Record a stop or resume to continue.\n' "$HO_RUN_DIR" >&2
+  return 2
 }
 
 ho_marker_name_ok() {

@@ -169,3 +169,26 @@ i=0
 while [ $i -lt 40 ]; do "$h" state "$run3" decision "q$i" "$big"; i=$((i + 1)); done
 rc=0; "$h" state "$run3" stopped >/dev/null 2>&1 || rc=$?
 assert_eq "I1: an unreadable early line in a long ledger makes the stop check unknown (exit 2)" "2" "$rc"
+
+# A lock held by a dead writer is taken over at once, not after a minute.
+sh -c 'exit 0' &
+dead=$!
+wait "$dead" || true
+mkdir "$run3/ledger.jsonl.lock"
+printf '%s\n' "$dead" > "$run3/ledger.jsonl.lock/pid"
+t0=$(date +%s)
+rc=0; "$h" state "$run3" decision dead-lock ok >/dev/null 2>&1 || rc=$?
+t1=$(date +%s)
+assert_eq "Rebuild ledger: a lock held by a dead writer is taken over" "0" "$rc"
+assert_eq "Rebuild ledger: taking over a dead writer's lock takes under 5 s" "yes" "$([ $((t1 - t0)) -lt 5 ] && echo yes || echo no)"
+assert_eq "Rebuild ledger: the line after a dead writer's lock is written" "ok" "$(jq -cR 'fromjson? | select(.title == "dead-lock") | .reason' "$run3/ledger.jsonl" | tr -d '"')"
+
+# After a torn line, the owner's resume or stop makes the stop state known again.
+"$h" state "$run3" resume
+rc=0; "$h" state "$run3" stopped >/dev/null 2>&1 || rc=$?
+assert_eq "I1: a resume after an unreadable line makes the stop state known again (not stopped)" "1" "$rc"
+printf 'torn{' >> "$run3/ledger.jsonl"
+rc=0; "$h" state "$run3" stopped >/dev/null 2>&1 || rc=$?
+assert_eq "I1: an unreadable line after the last resume makes the stop state unknown again" "2" "$rc"
+"$h" state "$run3" stop "owner"
+assert_exit "I1: a stop after an unreadable line reads as stopped" 0 "$h" state "$run3" stopped

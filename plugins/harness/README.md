@@ -114,3 +114,21 @@ With the default `session.permissions: bypass`, **accept "Bypass Permissions" on
 before the first run — run `claude --dangerously-skip-permissions` interactively and accept, or
 set `session.permissions` to `auto`/`acceptEdits`. Otherwise the first spawned session hangs on
 the acceptance dialog (preflight warns when it can't confirm prior acceptance).
+
+## Field notes for contributors
+
+`plugins/harness/docs/FIELD-NOTES.md` records what the 0.6.0 engine did in two long unattended runs.
+You do not need to read it before every change.
+Read the matching section before you change one of these areas, and when you write tests for it:
+
+- session liveness, recovery, closing sessions — section A
+- sending instructions to a session — section B
+- merge, validation, git operations — section C
+- tickets, labels, run state files — section D
+- more than one worker, heavy work, Docker — section E
+- subscription limits, the limit banner, pause and resume — section F
+- worker cap defaults, usage history, timeouts — section G
+- any detector, probe or gate that reads a screen, a log or an exit code — section I
+
+Each record names the requirement or design decision it relates to, or says that none fits.
+A record is covered when a test fails without the fix.

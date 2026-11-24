@@ -5,8 +5,18 @@ This branch holds the stable-beta rebuild of the harness plugin. The 0.6.0 engin
 ## Engine entry point
 
 The engine has one entry script: `bin/harness <verb> [args]`.
-Current verbs are `version`, `help` and `selftest`.
+Current verbs are `version`, `help`, `selftest` and `tickets`.
 Run `bin/harness help` for the list.
+
+## Ticket queue
+
+`bin/harness tickets <verb>` runs the ticket queue. Run `bin/harness tickets help` for the verbs.
+It has two backends: GitHub issues with one `<prefix>:<state>` label, and local files in a folder.
+The five states are `ready`, `in-progress`, `blocked`, `needs-review` and `done`.
+Every state change leaves exactly one state label.
+Ticket titles, bodies and comments are printed only inside the untrusted fence.
+A report is always a new comment; no comment is edited or deleted.
+Settings: `HO_TICKETS_SOURCE` (`local` or `github`), `HO_TICKETS_REPO`, `HO_TICKETS_DIR`, `HO_STATE_PREFIX` (default `harness`), `HO_TICKET_LOCK_WAIT` and `HO_TICKET_LOCK_STALE`.
 
 ## Variable names
 

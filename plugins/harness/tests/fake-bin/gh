@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Fake gh for tests: a small stateful GitHub. Never calls the network.
+# State: one JSON file per issue in $HO_FAKE_GH_DIR/issues/ (default $HOME/fake-gh).
+# Every call is logged as one tab-separated line to $HO_FAKE_GH_DIR/calls.log.
+# The signed-in account is $HO_FAKE_GH_USER (default harness-bot).
+# Supported: label create; issue create|view|list|edit|comment|close.
+# "issue comment --edit-last" rewrites the account's last comment, as real gh does,
+# so a regression to it is visible in the stored comments. Any other call exits 2.
+set -euo pipefail
+
+dir=${HO_FAKE_GH_DIR:-$HOME/fake-gh}
+user=${HO_FAKE_GH_USER:-harness-bot}
+mkdir -p "$dir/issues"
+line=""
+for a in "$@"; do
+  if [ -z "$line" ]; then line=$a; else line="$line	$a"; fi
+done
+printf '%s\n' "$line" >> "$dir/calls.log"
+
+fail() { printf 'fake gh: %s\n' "$*" >&2; exit 2; }
+issue_file() {
+  case ${1:-} in ''|*[!0-9]*) fail "bad issue number: ${1:-}" ;; esac
+  [ -f "$dir/issues/$1.json" ] || fail "no issue $1"
+  printf '%s\n' "$dir/issues/$1.json"
+}
+save() { # save <file> <jq filter> [jq args...]; edits the issue JSON in place
+  local f=$1 filter=$2 tmp
+  shift 2
+  tmp=$(mktemp "$dir/.tmp.XXXXXX")
+  jq "$@" "$filter" "$f" > "$tmp"
+  mv "$tmp" "$f"
+}
+# Shape of an issue as gh --json prints it, cut to the asked fields.
+shape='{number, title, body, state, updatedAt,
+        labels: [.labels[] | {name: .}],
+        assignees: [.assignees[] | {login: .}],
+        comments: [.comments[] | {author: {login: .author}, body}]}'
+pick() { # pick <comma-separated fields>
+  jq -c --arg f "$1" "$shape"' | with_entries(select(.key as $k | ($f | split(",") | index($k))))'
+}
+
+[ $# -ge 2 ] || fail "unsupported call: $line"
+group=$1 cmd=$2
+shift 2
+case "$group $cmd" in
+  "label create")
+    [ $# -ge 1 ] || fail "label name missing"
+    printf '%s\n' "$1" >> "$dir/labels.txt"
+    ;;
+  "issue create")
+    title="" bodyf="" labels="[]"
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --title) title=$2; shift 2 ;;
+        --body-file) bodyf=$2; shift 2 ;;
+        --label) labels=$(jq -c --arg l "$2" '. + ($l | split(","))' <<<"$labels"); shift 2 ;;
+        *) fail "issue create: unsupported flag $1" ;;
+      esac
+    done
+    [ -f "$bodyf" ] || fail "issue create: body file missing"
+    n=$(( $(find "$dir/issues" -name '*.json' | wc -l) + 1 ))
+    jq -n --argjson n "$n" --arg t "$title" --rawfile b "$bodyf" --argjson l "$labels" \
+      '{number: $n, title: $t, body: $b, state: "OPEN", updatedAt: "2026-01-01T00:00:00Z",
+        labels: $l, assignees: [], comments: []}' > "$dir/issues/$n.json"
+    printf 'https://github.com/fake/repo/issues/%s\n' "$n"
+    ;;
+  "issue view")
+    f=$(issue_file "${1:-}"); shift
+    fields=""
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --json) fields=$2; shift 2 ;;
+        *) fail "issue view: unsupported flag $1" ;;
+      esac
+    done
+    [ -n "$fields" ] || fail "issue view: only --json output is faked"
+    pick "$fields" < "$f"
+    ;;
+  "issue list")
+    label="" state=open fields=""
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo|--limit) shift 2 ;;
+        --label) label=$2; shift 2 ;;
+        --state) state=$2; shift 2 ;;
+        --json) fields=$2; shift 2 ;;
+        *) fail "issue list: unsupported flag $1" ;;
+      esac
+    done
+    [ -n "$fields" ] || fail "issue list: only --json output is faked"
+    find "$dir/issues" -name '*.json' -exec cat {} + | jq -s -c --arg l "$label" --arg s "$state" \
+      '[.[] | select(($l == "") or (.labels | index($l))) | select(($s == "all") or (.state | ascii_downcase) == $s)]
+       | sort_by(.number)' |
+      jq -c '.[]' | while IFS= read -r one; do printf '%s\n' "$one" | pick "$fields"; done | jq -s -c '.'
+    ;;
+  "issue edit")
+    f=$(issue_file "${1:-}"); shift
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --add-label) save "$f" '.labels = (.labels + ($l | split(",")) | unique)' --arg l "$2"; shift 2 ;;
+        --remove-label) save "$f" '.labels = (.labels - ($l | split(",")))' --arg l "$2"; shift 2 ;;
+        --add-assignee) save "$f" '.assignees = (.assignees + [$u] | unique)' --arg u "${2/#@me/$user}"; shift 2 ;;
+        --remove-assignee) save "$f" '.assignees = (.assignees - [$u])' --arg u "${2/#@me/$user}"; shift 2 ;;
+        *) fail "issue edit: unsupported flag $1" ;;
+      esac
+    done
+    ;;
+  "issue comment")
+    f=$(issue_file "${1:-}"); shift
+    bodyf="" edit_last=0
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --body-file) bodyf=$2; shift 2 ;;
+        --edit-last) edit_last=1; shift ;;
+        --create-if-none) shift ;;
+        *) fail "issue comment: unsupported flag $1" ;;
+      esac
+    done
+    [ -f "$bodyf" ] || fail "issue comment: body file missing"
+    if [ "$edit_last" -eq 1 ] && jq -e --arg u "$user" '[.comments[] | select(.author == $u)] | length > 0' "$f" >/dev/null; then
+      save "$f" '(.comments | map(.author == $u) | rindex(true)) as $i | .comments[$i].body = $b' \
+        --arg u "$user" --rawfile b "$bodyf"
+    else
+      save "$f" '.comments += [{author: $u, body: $b}]' --arg u "$user" --rawfile b "$bodyf"
+    fi
+    ;;
+  "issue close")
+    f=$(issue_file "${1:-}"); shift
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --comment) save "$f" '.comments += [{author: $u, body: $b}]' --arg u "$user" --arg b "$2"; shift 2 ;;
+        *) fail "issue close: unsupported flag $1" ;;
+      esac
+    done
+    save "$f" '.state = "CLOSED"'
+    ;;
+  *) fail "unsupported call: $line" ;;
+esac

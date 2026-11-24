@@ -94,7 +94,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 ## 17. Run lifecycle and recovery
 
 - [ ] 17.1 Soft and hard stops, and the STOP file
-- [ ] 17.2 Test force-send of a queued stop message from a script before relying on `hard:message` (OPEN-12)
+- [ ] 17.2 Test force-send of a queued stop message from a script before relying on `hard:message` (D37-LIFECYCLE-4): tmux proven (issue #62); two iTerm2 trials before release
 - [ ] 17.3 Standby, end of run, automatic recovery after sleep or a crash
 - [ ] 17.4 Outage monitor and dead-orchestrator restart in the watch script
 
@@ -109,7 +109,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 ## 20. Distribution and setup
 
-- [ ] 20.1 `/harness:config` and `/harness:ai-ready`, with `onboard` and `init` as one-release aliases (D33a)
+- [ ] 20.1 `/harness:config` and `/harness:ai-ready`; `onboard` and `init` are one-release aliases for `/harness:config`, and `/harness:ai-ready` has no alias (D33a)
 - [ ] 20.2 Blind naming test for the two skill names (D33; result in D33a)
 - [ ] 20.3 Short install guide, "tested with" list, newcomer section and config-folder README
 

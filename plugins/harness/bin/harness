@@ -18,6 +18,12 @@ export HO_ROOT
 . "$HO_ROOT/lib/isolation.sh"
 # shellcheck source=../lib/tickets.sh
 . "$HO_ROOT/lib/tickets.sh"
+# shellcheck source=../lib/files.sh
+. "$HO_ROOT/lib/files.sh"
+# shellcheck source=../lib/config.sh
+. "$HO_ROOT/lib/config.sh"
+# shellcheck source=../lib/run.sh
+. "$HO_ROOT/lib/run.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -28,6 +34,9 @@ verbs:
   help       print this help
   selftest   check that no 0.6.0 variable or script can leak into this engine
   tickets    the ticket queue (run "harness tickets help")
+  config     config get [--int] <jq-path> [default] | config check
+  run        run new: create a stamped run in this project
+  state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
 USAGE
 }
 
@@ -39,6 +48,9 @@ case $verb in
   help|-h|--help) ho_usage ;;
   selftest) ho_isolation_check ;;
   tickets)  ho_tickets "$@" ;;
+  config)   ho_config_main "$@" ;;
+  run)      [ "${1-}" = new ] || { ho_usage >&2; exit 64; }; ho_run_new ;;
+  state)    ho_state_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

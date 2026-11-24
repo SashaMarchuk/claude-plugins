@@ -77,7 +77,7 @@ ho_runtime_profile() {
     and (.command | type == "string" and length > 0)
     and ([.argv.new, .argv.resume, .argv.model, .argv.title, .argv.prompt] | all(type == "array" and all(type == "string" and (test("\n") | not))))
     and (.permissions | type == "object")
-    and (.exit_command | type == "string" and length > 0)' "$f" >/dev/null 2>&1 || {
+    and (.exit_command | type == "string" and length > 0 and (test("\n") | not))' "$f" >/dev/null 2>&1 || {
     printf 'harness: runtime file %s is not a valid schemaVersion 2 runtime\n' "$f" >&2
     return 78
   }
@@ -134,6 +134,7 @@ ho_session_account() {
     printf 'harness: --account %s given, but no account is configured for role %s\n' "$want" "$role" >&2
     return 65
   fi
+  case $mapped in *[!a-z0-9-]* | -*) printf 'harness: account name %s must use a-z 0-9 -\n' "$mapped" >&2; return 65 ;; esac
   if [ -n "$want" ] && [ "$want" != "$mapped" ]; then
     printf 'harness: role %s runs on account %s, not %s\n' "$role" "$mapped" "$want" >&2
     return 65
@@ -249,7 +250,7 @@ ho_session_launcher_text() {
     printf 'ho_acct=$(/bin/bash -c %s 2>>"$HO_LOG") || ho_fatal 9 "the account command failed; the session was not started"\n' "$(ho_q "$acct_cmd")"
     printf 'ho_acct=$(printf '"'"'%%s\\n'"'"' "$ho_acct" | ho_account_env_parse) || ho_fatal 9 "the account command printed no usable KEY=VALUE line"\n'
     printf 'while IFS="$(printf '"'"'\\t'"'"')" read -r ho_k ho_v; do export "$ho_k=$ho_v"; done <<HO_ACCT\n$ho_acct\nHO_ACCT\n'
-    printf 'ho_note "account %s applied"\n' "$account"
+    printf 'ho_note %s\n' "$(ho_q "account $account applied")"
   fi
   if [ -n "$prompt" ]; then
     printf 'HO_PROMPT=$(cat %s) || ho_fatal 65 "cannot read the prompt file"\n' "$(ho_q "$prompt")"
@@ -262,6 +263,7 @@ ho_session_launcher_text() {
   printf '}\n'
   printf '%s\n' "$attempts" | while IFS= read -r line; do
     [ -n "$line" ] || continue
+    printf '[ -e %s ] && { ho_note "a close is under way; not starting"; exit 0; }\n' "$(ho_q "$closing")"
     printf 'ho_t0=$(date +%%s)\n'
     printf 'ho_note %s\n' "$(ho_q "starting session $sid")"
     printf 'ho_attempt %s %s\n' "$(ho_q "$cmdpath")" "$line"
@@ -384,7 +386,7 @@ ho_session_launch() {
     "$HO_RUN_DIR/logs/launcher.log" "$path" "$(ho_cfg_int '.session.boot_grace_seconds' 45)" \
     "$(ho_cfg_int '.session.fatal_hold_seconds' 30)" "$cmdpath" "$attempts" > "$launcher.tmp" || { rm -f "$rec" "$launcher.tmp"; return 1; }
   # The launcher must say exactly what was asked for, or it is not used.
-  if ! bash -n "$launcher.tmp" 2>/dev/null \
+  if ! /bin/bash -n "$launcher.tmp" 2>/dev/null \
     || [ "$(sed -n 2p "$launcher.tmp")" != "# ho-launcher run=$HO_RUN_ID name=$name role=$role account=${acct_name:--} session=$sid" ] \
     || ! grep -qxF "cd -- $(ho_q "$cwd") || ho_fatal 66 \"cannot enter the working folder; the session was not started\"" "$launcher.tmp"; then
     rm -f "$rec" "$launcher.tmp"
@@ -455,7 +457,9 @@ ho_session_close() {
   fi
   status=$(jq -r '.status // ""' "$rec")
   [ "$status" = closed ] && { printf 'session %s already closed\n' "$name"; return 0; }
-  if [ "$status" = launching ]; then
+  # A launch rewrites its record within the boot timeout; a record left "launching" for
+  # longer belongs to a launch that died, and may be closed.
+  if [ "$status" = launching ] && [ -z "$(find "$rec" -mmin +10 2>/dev/null)" ]; then
     printf 'harness: session %s is still launching; close it once the launch has finished\n' "$name" >&2
     return 65
   fi
@@ -464,6 +468,11 @@ ho_session_close() {
     printf 'harness: the record of session %s has no usable session ID or PID file; nothing was closed\n' "$name" >&2
     return 66
   fi
+  # The flag comes first: from now on the launcher starts no further model attempt, so a
+  # session cannot come back between the liveness check and the close.
+  local closing="$HO_RUN_DIR/sessions/$name.closing"
+  : > "$closing" || return 1
+  sleep 0.3
   pid=$(ho_session_live_pid "$rec") || return 1
   if [ -z "$pid" ]; then
     ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "process-gone"' --arg ts "$(ho_now)" || return 1
@@ -472,17 +481,17 @@ ho_session_close() {
     return 0
   fi
   handle=$(jq -r '.handle // ""' "$rec")
-  [ -n "$handle" ] || { printf 'harness: session %s has no terminal handle; left open\n' "$name" >&2; return 70; }
+  [ -n "$handle" ] || { rm -f "$closing"; printf 'harness: session %s has no terminal handle; left open\n' "$name" >&2; return 70; }
   profile="$HO_ROOT/runtimes/$(jq -r '.runtime // ""' "$rec").json"
   exitcmd=$(jq -r '.exit_command // ""' "$profile" 2>/dev/null || true)
-  [ -n "$exitcmd" ] || { printf 'harness: no exit command for session %s; left open\n' "$name" >&2; return 78; }
-
-  : > "$HO_RUN_DIR/sessions/$name.closing"
+  [ -n "$exitcmd" ] || { rm -f "$closing"; printf 'harness: no exit command for session %s; left open\n' "$name" >&2; return 78; }
+  # Reach the session through the backend it was launched with.
+  HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec")
   ho_ledger_append session-close-request name "$name" session_id "$sid" pid "$pid"
   local rc=0
   ho_term_send "$handle" "$exitcmd" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    rm -f "$HO_RUN_DIR/sessions/$name.closing"
+    rm -f "$closing"
     ho_ledger_append session-close-failed name "$name" reason "exit command not delivered"
     printf 'harness: could not reach the terminal of session %s; left open\n' "$name" >&2
     return 70
@@ -491,14 +500,20 @@ ho_session_close() {
   deadline=$(( $(date +%s) + $(ho_cfg_int '.session.close_timeout_seconds' 90) ))
   while ho_session_identity "$pid" "$sid"; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      rm -f "$HO_RUN_DIR/sessions/$name.closing"
+      rm -f "$closing"
       ho_ledger_append session-close-timeout name "$name" session_id "$sid" pid "$pid"
       printf 'harness: session %s (pid %s) is still busy; left open, never forced. Close it again later.\n' "$name" "$pid" >&2
       return 1
     fi
     sleep 0.2
   done
-  # The session process has ended; its tab or pane may already have closed by itself.
+  # The session process has ended. If a new process of the same session appeared anyway, the
+  # terminal is left alone. Otherwise its tab or pane is closed (it may have closed by itself).
+  if [ -n "$(ho_session_live_pid "$rec")" ]; then
+    ho_ledger_append session-close-timeout name "$name" session_id "$sid" reason "a new process of the session is running"
+    printf 'harness: session %s started a new process during the close; left open\n' "$name" >&2
+    return 1
+  fi
   ho_term_close "$handle" 2>/dev/null || true
   ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "exited"' --arg ts "$(ho_now)" || return 1
   ho_ledger_append session-close name "$name" session_id "$sid" result exited

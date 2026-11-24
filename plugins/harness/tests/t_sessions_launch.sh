@@ -65,7 +65,8 @@ jq '.models.worker = "m-bad | m-good"' "$proj/.harness/config.json" > "$base/c.j
 HO_FAKE_CLAUDE_FAIL_MODEL=m-bad launch w6 >/dev/null
 assert_contains "Rebuild model chain: the first model is tried first" "$(grep -F "$(rec w6 .session_id)" "$HO_FAKE_CLAUDE_LOG" | head -n 1)" "--model	m-bad"
 assert_contains "Rebuild model chain: a start failure falls through to the next model" "$(grep -F "$(rec w6 .session_id)" "$HO_FAKE_CLAUDE_LOG" | tail -n 1)" "--model	m-good"
-assert_contains "S8-27: after a fallback the registry holds the running process" "$(ps -o command= -p "$(rec w6 .pid)")" "m-good"
+w6pid=$(awk '{print $1}' "$run/sessions/w6.pid")
+assert_contains "S8-27: after a fallback the launcher reports the running process" "$(ps -o command= -p "$w6pid")" "m-good"
 jq '.session.boot_timeout_seconds = 3' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 assert_exit "Rebuild model chain: a launch where every model fails to start reports it" 69 env HO_FAKE_CLAUDE_FAIL_MODEL=m-only "$h" session "$run" launch --role worker --name w10 --cwd "$proj/src" --prompt "$base/prompt.md" --model m-only
 assert_eq "Rebuild model chain: the failed launch is recorded as boot-failed" "boot-failed" "$(rec w10 .status)"

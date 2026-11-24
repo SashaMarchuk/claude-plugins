@@ -42,6 +42,8 @@ for backend in tmux iterm2; do
   assert_exit "$t: an unknown handle is not found" 66 ho_term_key "nohandle" enter
   before=$(wc -l < "$HO_FAKE_TERM_DIR/calls.log")
   assert_exit "$t: text with shell or quote characters is refused" 65 ho_term_send "$h2" 'x"; do shell script "id'
+  assert_exit "$t: text with a line break is refused" 65 ho_term_send "$h2" "/exit
+id"
   assert_exit "$t: a title with a quote is refused" 65 ho_term_open work 'a"b' "$launcher"
   assert_exit "$t: a launcher path with a space is refused" 65 ho_term_open work t "$base/a b.sh"
   assert_exit "$t: an unknown key is refused" 64 ho_term_key "$h2" tab
@@ -49,7 +51,20 @@ for backend in tmux iterm2; do
 done
 printf 'not json' > "$HO_RUN_DIR/sessions/windows.json"
 assert_exit "Rebuild terminal adapter (iterm2): an unreadable window file still opens the session" 0 ho_term_open work ho-worker-c "$launcher"
-assert_eq "Rebuild terminal adapter (iterm2): sessions of one group share one window" "1" "$(jq 'length' "$HO_RUN_DIR/sessions/windows.json")"
+assert_eq "Rebuild terminal adapter (iterm2): the first two sessions of one group share one window" "W1" "$(head -n 1 "$base/term-iterm2/windows")"
+assert_eq "Rebuild terminal adapter (iterm2): only the unreadable window file caused a second window" "2" "$(wc -l < "$base/term-iterm2/windows" | tr -d ' ')"
+
+# tmux pane IDs are unique per server only: a pane outside this run's tmux session is refused.
+set_app tmux
+export HO_FAKE_TERM_DIR="$base/term-tmux"
+foreign=$(tmux -L ho-harness new-session -d -s someone-else -n x -P -F '#{pane_id}' "sleep 5")
+before=$(wc -l < "$HO_FAKE_TERM_DIR/calls.log")
+assert_exit "Rebuild terminal adapter (tmux): a pane of another tmux session is not typed into" 66 ho_term_send "$foreign" "/exit"
+assert_exit "Rebuild terminal adapter (tmux): a pane of another tmux session is not closed" 66 ho_term_close "$foreign"
+assert_eq "Rebuild terminal adapter (tmux): nothing reached the foreign pane" "$before" "$(wc -l < "$HO_FAKE_TERM_DIR/calls.log")"
+HO_TERM_BACKEND=iterm2
+assert_eq "Rebuild terminal adapter: a backend recorded for a session wins over the config" "iterm2" "$(ho_term_backend)"
+unset HO_TERM_BACKEND
 
 set_app terminal
 assert_exit "Drop list: the Terminal.app backend is refused" 65 ho_term_backend

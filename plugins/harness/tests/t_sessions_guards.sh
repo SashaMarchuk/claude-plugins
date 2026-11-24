@@ -32,7 +32,7 @@ refused f4 "Rebuild launcher symlink out of the project" 65 --role worker --cwd 
 refused f5 "Rebuild launcher home folder" 65 --role worker --cwd "$HOME" --prompt "$p"
 refused f6 "Rebuild launcher dot-dot escape" 65 --role worker --cwd "$proj/src/../../outside" --prompt "$p"
 refused f7 "Rebuild launcher missing prompt file" 65 --role worker --cwd "$proj/src" --prompt "$base/none.md"
-refused f8 "Rebuild launcher bad session name" 65 --role worker --cwd "$proj/src" --prompt "$p" --name 'Bad Name'
+refused 'Bad Name' "Rebuild launcher bad session name" 65 --role worker --cwd "$proj/src" --prompt "$p"
 
 # A folder name with shell text is inside the project, so it is allowed, but it can only
 # ever be a literal folder name in the launcher.
@@ -49,6 +49,10 @@ cat > "$user/config.json" <<'JSON'
                        "broken": {"env_command": "exit 3"},
                        "junk": {"env_command": "echo not an assignment"}}}}
 JSON
+cp "$user/config.json" "$base/u.json"
+jq '.accounts.roles.default = "a$(touch x)"' "$base/u.json" > "$user/config.json"
+refused a0 "Rebuild per-role account: an account name with shell text" 65 --role worker --cwd "$proj/src" --prompt "$p"
+cp "$base/u.json" "$user/config.json"
 refused a1 "Rebuild per-role account: a worker asked to run on the validator's account" 65 --role worker --account second --cwd "$proj/src" --prompt "$p"
 refused a2 "Rebuild per-role account: a role mapped to an unknown account" 65 --role question --cwd "$proj/src" --prompt "$p"
 refused a3 "Rebuild per-role account: an account command that fails" 65 --role watcher --cwd "$proj/src" --prompt "$p"

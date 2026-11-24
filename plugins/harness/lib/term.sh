@@ -31,15 +31,20 @@ ho_term_safe() {
 
 # Typed text: short control strings only (for example the exit command).
 ho_term_text_ok() {
-  if [ -z "${1-}" ] || printf '%s' "$1" | LC_ALL=C grep -q '[^A-Za-z0-9 ./:_-]'; then
-    printf 'harness: refusing to type %s (short control text only)\n' "${1-}" >&2
-    return 65
-  fi
+  case ${1-} in
+    '' | *[!A-Za-z0-9\ ./:_-]*)
+      printf 'harness: refusing to type %s (short control text only)\n' "${1-}" >&2
+      return 65
+      ;;
+  esac
 }
 
+# HO_TERM_BACKEND, when set, wins over the config: a close uses the backend its session was
+# launched with, even if terminal.app changed since.
 ho_term_backend() {
   local app
-  app=$(ho_cfg '.terminal.app' auto) || return 70
+  app=${HO_TERM_BACKEND:-}
+  [ -n "$app" ] || app=$(ho_cfg '.terminal.app' auto) || return 70
   case $app in
     iterm2 | tmux) printf '%s\n' "$app" ;;
     auto)
@@ -107,7 +112,7 @@ ho_term_probe() {
   backend=$(ho_term_backend) || return $?
   case $backend in
     iterm2) osascript -e 'tell application "iTerm2" to count windows' >/dev/null 2>&1 || { echo "harness: iTerm2 cannot be driven (check the Automation permission)" >&2; return 70; } ;;
-    tmux) tmux -V >/dev/null 2>&1 || { echo "harness: tmux cannot be run" >&2; return 70; } ;;
+    tmux) ho_tmux -V >/dev/null 2>&1 || { echo "harness: tmux cannot be run" >&2; return 70; } ;;
   esac
   printf 'terminal OK backend=%s\n' "$backend"
 }
@@ -207,24 +212,37 @@ ho_term_iterm2_capture() {
 ho_term_iterm2_close() { ho_term_iterm2_do "$1" 'tell s to close' >/dev/null; }
 
 # ------------------------------------------------------------------------ tmux
-# One tmux session per run; each harness session opens a window in it.
+# The harness uses its own tmux server (socket ho-harness), one tmux session per run, and one
+# window per harness session. Pane IDs are unique only within one server, so every call
+# that reaches a pane first checks that the pane belongs to this run's tmux session.
+ho_tmux() { tmux -L ho-harness "$@"; }
 ho_term_tmux_session() { printf 'ho-%s\n' "$HO_RUN_ID"; }
 
 ho_term_tmux_open() {
   local title=$2 launcher=$3 ses h
   ses=$(ho_term_tmux_session)
   ho_term_safe "$ses" || return 65
-  if tmux has-session -t "$ses" 2>/dev/null; then
-    h=$(tmux new-window -d -t "$ses" -n "$title" -P -F '#{pane_id}' "/bin/bash '$launcher'") || { echo "harness: tmux did not open a window" >&2; return 70; }
+  if ho_tmux has-session -t "$ses" 2>/dev/null; then
+    h=$(ho_tmux new-window -d -t "$ses" -n "$title" -P -F '#{pane_id}' "/bin/bash '$launcher'") || { echo "harness: tmux did not open a window" >&2; return 70; }
   else
-    h=$(tmux new-session -d -s "$ses" -n "$title" -P -F '#{pane_id}' "/bin/bash '$launcher'") || { echo "harness: tmux did not open a session" >&2; return 70; }
+    h=$(ho_tmux new-session -d -s "$ses" -n "$title" -P -F '#{pane_id}' "/bin/bash '$launcher'") || { echo "harness: tmux did not open a session" >&2; return 70; }
   fi
   ho_term_safe "$h" 2>/dev/null || { echo "harness: tmux returned no usable pane ID" >&2; return 70; }
   printf '%s\n' "$h"
 }
 
+# ho_term_tmux_mine <pane>: 0 when the pane exists and belongs to this run's tmux session.
+ho_term_tmux_mine() {
+  local ses
+  ses=$(ho_tmux display-message -p -t "$1" '#{session_name}' 2>/dev/null) || ses=""
+  [ "$ses" = "$(ho_term_tmux_session)" ] && return 0
+  printf 'harness: no tmux pane %s in run %s\n' "$1" "$HO_RUN_ID" >&2
+  return 66
+}
+
 ho_term_tmux_send() {
-  tmux send-keys -t "$1" -l "$2" 2>/dev/null || { printf 'harness: no tmux pane %s\n' "$1" >&2; return 66; }
+  ho_term_tmux_mine "$1" || return 66
+  ho_tmux send-keys -t "$1" -l "$2" 2>/dev/null || { printf 'harness: no tmux pane %s\n' "$1" >&2; return 66; }
   sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 1)"
   ho_term_tmux_key "$1" enter
 }
@@ -232,15 +250,18 @@ ho_term_tmux_send() {
 ho_term_tmux_key() {
   local k
   case $2 in enter) k=Enter ;; escape) k=Escape ;; esac
-  tmux send-keys -t "$1" "$k" 2>/dev/null || { printf 'harness: no tmux pane %s\n' "$1" >&2; return 66; }
+  ho_term_tmux_mine "$1" || return 66
+  ho_tmux send-keys -t "$1" "$k" 2>/dev/null || { printf 'harness: no tmux pane %s\n' "$1" >&2; return 66; }
 }
 
 ho_term_tmux_capture() {
   local out
-  out=$(tmux capture-pane -p -t "$1" 2>/dev/null) || { printf 'harness: no tmux pane %s\n' "$1" >&2; return 66; }
+  ho_term_tmux_mine "$1" || return 66
+  out=$(ho_tmux capture-pane -p -t "$1" 2>/dev/null) || { printf 'harness: no tmux pane %s\n' "$1" >&2; return 66; }
   printf '%s\n' "$out" | tail -n "$2"
 }
 
 ho_term_tmux_close() {
-  tmux kill-pane -t "$1" 2>/dev/null || { printf 'harness: no tmux pane %s\n' "$1" >&2; return 66; }
+  ho_term_tmux_mine "$1" || return 66
+  ho_tmux kill-pane -t "$1" 2>/dev/null || { printf 'harness: no tmux pane %s\n' "$1" >&2; return 66; }
 }

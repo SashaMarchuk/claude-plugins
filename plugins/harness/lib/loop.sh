@@ -12,7 +12,8 @@
 #
 # Exit codes: 65 refused before any merge, 69 the merge would change nothing, 70 the merge was
 # not confirmed (conflict or a failed git check), 72 the gate failed on the merged tree,
-# 75 the run is stopped. On 69, 70 and 72 the integration branch is back at its old tip.
+# 75 the run is stopped. On 69, 72 and a failed merge or check (70) the integration branch is put
+# back at its old tip; when the branch moved while the gate ran (70) it is left for a person.
 # Requires lib/run.sh, lib/config.sh, lib/files.sh and ho_cfg_user from lib/sessions.sh.
 
 HO_EXIT_NOOP=69
@@ -33,7 +34,7 @@ ho_loop_clean() {
   local out
   out=$(git -C "$1" status --porcelain --untracked-files=all 2>/dev/null) || return 2
   [ -z "$out" ] || return 1
-  [ ! -e "$(git -C "$1" rev-parse --git-path MERGE_HEAD 2>/dev/null || echo /nonexistent)" ] || return 1
+  ! git -C "$1" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 || return 1
 }
 
 ho_loop_ref() { git -C "$1" rev-parse -q --verify "$2^{commit}" 2>/dev/null; }
@@ -182,9 +183,11 @@ ho_loop_merge_locked() {
     ho_loop_refuse "$HO_EXIT_NOOP" "$lane" "no-op: $lsha is already in $branch; nothing would change"; return
   fi
 
-  if ! git -C "$iwt" merge -q --no-ff --no-edit -m "merge($lane): $lsha into $branch" "$lsha" >/dev/null 2>&1; then
+  mkdir -p "$HO_RUN_DIR/gates"
+  if ! git -C "$iwt" merge -q --no-ff --no-edit -m "merge($lane): $lsha into $branch" "$lsha" \
+      > "$HO_RUN_DIR/gates/$lane-$lsha.merge.log" 2>&1; then
     ho_loop_rollback "$iwt" "$branch" "$old" || true
-    ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "git merge failed (conflict); aborted, $branch stays at $old"; return
+    ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "git merge failed (conflict or error, log gates/$lane-$lsha.merge.log); aborted, $branch stays at $old"; return
   fi
 
   # H-046: confirm through git, from the branch ref, not from what the merge printed.
@@ -224,8 +227,9 @@ ho_loop_merge_locked() {
     ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "$branch moved or got dirty while the gate ran; the merge is not confirmed"; return
   fi
 
-  jq --arg tip "$new" '.tip = $tip' "$ij" | ho_atomic_write "$ij" || return 1
+  # Ledger line first: if the tip write then fails, the next merge refuses on the tip check.
   ho_ledger_append merge-confirmed lane "$lane" sha "$lsha" branch "$branch" base "$old" tip "$new"
+  jq --arg tip "$new" '.tip = $tip' "$ij" | ho_atomic_write "$ij" || return 1
   printf 'merged lane %s (%s) into %s at %s\n' "$lane" "$lsha" "$branch" "$new"
 }
 
@@ -242,15 +246,18 @@ ho_loop_merge() {
     until mkdir "$HO_LOOP_LOCK" 2>/dev/null; do
       pid=$(cat "$HO_LOOP_LOCK/pid" 2>/dev/null || true)
       if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then rm -rf "$HO_LOOP_LOCK"; continue; fi
+      # A holder killed between mkdir and writing its PID: stale after one minute.
+      if [ -z "$pid" ] && [ -n "$(find "$HO_LOOP_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then rm -rf "$HO_LOOP_LOCK"; continue; fi
       n=$((n + 1))
       [ "$n" -lt 1800 ] || { ho_loop_err "another merge of run $HO_RUN_ID holds $HO_LOOP_LOCK"; exit 75; }
       sleep 0.1
     done
+    # The code stays 70 until the merge step returns: a step that ends with exit (a failed
+    # ledger write) must never leave through this trap as 0.
     trap 'rm -rf "$HO_LOOP_LOCK"; exit "$ho_loop_rc"' EXIT
     # bash 3.2 has no BASHPID: the parent of a child shell is this subshell.
     sh -c 'echo "$PPID"' > "$HO_LOOP_LOCK/pid" 2>/dev/null || true
-    ho_loop_rc=0
-    ho_loop_merge_locked "$lane" || ho_loop_rc=$?
+    if ho_loop_merge_locked "$lane"; then ho_loop_rc=0; else ho_loop_rc=$?; fi
     exit "$ho_loop_rc"
   )
 }

@@ -186,3 +186,21 @@ Decided: design.md D37-COMMENTS-2, D37-COMMENTS-3
 - **WHEN** an answer arrives from a channel author whose identity maps to a tracker account without write access
 - **THEN** the harness records the answer with its author but does not apply it
 - **AND** the ticket moves to needs-review until a person with write access revalidates the answer
+
+### Requirement: H-144 Every session reads the ticket's current comments and labels before it starts work
+Before a session starts work on a ticket, it SHALL read the ticket's current comments and labels from the tracker, so it works from the current state and not from an older copy. Reading SHALL NOT change who may change a ticket: what a comment may change stays as H-019 to H-023 and H-033 set it, and comment text reaches the session only as untrusted data (H-018).
+
+Source: owner answer to interview question X4
+Decided: design.md D9a
+
+#### Scenario: A session starts work on a ticket
+- **WHEN** a session is about to start work on a ticket
+- **THEN** it first reads the ticket's current comments and labels from the tracker
+
+#### Scenario: A comment arrived before the session started
+- **WHEN** a writer adds a comment to a ticket after pickup and before a session starts work on it
+- **THEN** that session has read the comment before it starts work
+
+#### Scenario: A comment from a person without write access
+- **WHEN** the current comments include one from a person without write access
+- **THEN** the session reads it as untrusted data and applies no change from it (H-021)

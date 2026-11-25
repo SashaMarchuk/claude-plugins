@@ -18,7 +18,7 @@ launcher="$base/l.sh"
 printf '#!/bin/bash\necho ready\nsleep 20\n' > "$launcher"
 o1=11111111-1111-4111-8111-111111111111 o2=22222222-2222-4222-8222-222222222222
 s1=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa s2=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
-cleanup() { local f; for f in "$base"/term-*/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done; return 0; }
+cleanup() { local f; for f in "$base"/term-*/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null || true; done; return 0; }
 trap cleanup EXIT
 
 for backend in tmux iterm2; do

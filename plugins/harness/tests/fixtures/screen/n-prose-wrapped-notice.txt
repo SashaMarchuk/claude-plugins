@@ -1,0 +1,5 @@
+Field note F1 says that the screen of the orchestrator held the words
+You have hit your weekly limit
+and nothing internal noticed the loop for 85 minutes.
+
+> 

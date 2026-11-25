@@ -1,0 +1,31 @@
+{
+  "_comment": "Recognition data for lib/screen.sh (H-113, H-099). Anchor and companion patterns are matched against the lower-cased line, with the frame and the padding removed, and they must match the whole line. The alternatives come from the 0.6.0 watch patterns, which is the only part of that watch the rebuild keeps. There is no typed reaction to any of these shapes.",
+  "frame_start": "^(╭|╮|╰|╯|│|─)",
+  "frame_end": "(│)$",
+  "frame_only": "^[╭╮╰╯│─ ]*$",
+  "input_box": "^[│ ]*(>|❯)[ │]*$",
+  "shapes": [
+    {
+      "id": "password",
+      "anchor": ".{0,30}(password:|\\[sudo\\]|passphrase|sudo password|password for [a-z0-9._-]{1,32}:)[: ]{0,2}",
+      "companion": "",
+      "block_above": false,
+      "last_nonblank": true
+    },
+    {
+      "id": "trust",
+      "anchor": ".{0,30}(trust the files in this folder|do you trust).{0,30}",
+      "companion": "[❯>]? ?[0-9]+\\. .{1,60}",
+      "block_above": true,
+      "last_nonblank": false
+    },
+    {
+      "id": "limit",
+      "anchor": "(you have |you.{0,3}ve |your |the |session |weekly |claude |api |5-hour )?(limit reached|hit your (session|weekly) limit|rate limit)[.!]?( until .{1,30}| at .{1,30})?",
+      "companion": "(your |the )?(limit|limits|usage|quota)( will| would)? reset(s|ting)?( at| in| on| after)? .{1,40}|reset(s)?( at| in| on)? .{1,40}|try again( at| in| after)? .{1,40}",
+      "block_above": true,
+      "last_nonblank": false
+    }
+  ],
+  "_warning": "This file holds the text a session shows on its screen. Do not print it, grep it with matching lines, or paste it anywhere: a watch loop that reads session screens can match its own output. Read it with counts only."
+}

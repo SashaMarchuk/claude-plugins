@@ -225,10 +225,18 @@ assert_eq "H-068: flow list on a missing flows folder stops (exit 78)" "78" "$rc
 assert_contains "H-068: the stop names the missing folder" "$err" "no-such-flows"
 unset HO_FLOWS_DIR
 
-# D37-FLOW-1: engine code holds no flow-system name, in text or in file names. The one
-# exception is the 0.6.0 script list in lib/isolation.sh, which names old scripts to refuse them.
-names='gsd|get-shit-done|superpowers'
-hits=$(cd "$HO_PLUGIN_ROOT" && grep -rniE "$names" bin lib prompts | grep -v '^lib/isolation.sh:[0-9]*:HO_OLD_SCRIPTS=' || true)
-assert_eq "D37-FLOW-1: engine code names no flow system" "" "$hits"
-assert_eq "D37-FLOW-1: no engine file is named after a flow system" "" \
+# D37-FLOW-1, D37-RUNTIME-1: engine code holds no flow-system, vendor, runtime or model name,
+# in text or in file names. Two exceptions: the 0.6.0 script list in lib/isolation.sh, which
+# names old scripts to refuse them, and the plugin's own folder names `.claude-plugin` (the
+# plugin manifest folder) and `.claude/harness` (the plugin's state folder), which the plugin
+# format fixes. Those two path tokens are removed before the search; nothing else is filtered.
+names='gsd|get-shit-done|superpowers|claude|codex|anthropic|openai|chatgpt|gpt-[0-9]|opus|sonnet|haiku|gemini'
+hits=$(cd "$HO_PLUGIN_ROOT" && grep -rniE "$names" bin lib prompts | grep -v '^lib/isolation.sh:[0-9]*:HO_OLD_SCRIPTS=' |
+  sed -e 's#\.claude-plugin/##g' -e 's#\.claude/harness##g' | grep -iE "$names" || true)
+assert_eq "D37-FLOW-1: engine code names no flow system, vendor, runtime or model" "" "$hits"
+assert_eq "D37-FLOW-1: no engine file is named after a flow system, vendor or runtime" "" \
   "$(cd "$HO_PLUGIN_ROOT" && find bin lib prompts | grep -iE "$names" || true)"
+# The search itself works: it finds a name planted in a copy of the engine code.
+mkdir -p planted/lib && printf '# run it on Codex\n' > planted/lib/x.sh
+assert_eq "D37-FLOW-1: the names search finds a planted name" "1" \
+  "$(cd planted && grep -rniE "$names" lib | sed -e 's#\.claude-plugin/##g' -e 's#\.claude/harness##g' | grep -ciE "$names" || true)"

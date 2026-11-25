@@ -79,11 +79,16 @@ Source: interview 2026-11-24 R21.4, R21.5; D26
 
 ### Requirement: H-108 Resource usage is logged as history to recommend concurrency
 The harness SHALL log CPU, memory and process usage during runs, and keep these records as history. From that history the harness MAY recommend values during configuration: the total number of parallel tickets and the number per stage. How a recommendation is shown is an agent decision (design.md D26b).
-Source: interview 2026-11-24 R21.6; D26b; context rejected entry 4
+Source: interview 2026-11-24 R21.6; D26b; context rejected entry 4; owner message 2026-11-25 (iTerm2 incident)
 
 #### Scenario: Usage is recorded during a run
 - **WHEN** a run is in progress
 - **THEN** the harness writes CPU, memory and process usage readings to its history
+
+#### Scenario: The terminal app's load is recorded (design.md D42m)
+- **WHEN** a run is active
+- **THEN** every 5 minutes the harness records the terminal app's CPU use and the count of listing lines for the app's own API socket in the usage history
+- **AND** when that count reaches 1,000, the harness raises one attention notice and does not quit or restart the app (H-135)
 
 #### Scenario: Configuration with history available (agent decision D26b)
 - **WHEN** the owner configures concurrency for a project that has usage history

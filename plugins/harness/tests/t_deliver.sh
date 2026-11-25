@@ -527,3 +527,62 @@ jq -cn '{type: "user", message: {role: "user", content: "ho-other0001: stop"} }'
 jq --arg t "$(trof r7)" '.transcript = $t' "$run/sessions/r6.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/r6.json"
 assert_eq "item 2D: a cached transcript of another session is not used" "none id=ho-other0001" \
   "$("$h" session "$run" proof r6 ho-other0001 2>&1 | cut -d' ' -f1-2)"
+
+# ==== Fix round 6 of PR #95 (validator B4 = Codex P2 line 327; Codex P2 line 275; minors) ===
+# The screen fixtures of T14 are used as shapes only; no test prints them.
+set_runtime claude-code
+R6='────────────────────────────────────────'
+sf="$HO_TESTS_DIR/fixtures/screen"
+# frame <fixture>: the fixture without its last line (a bare prompt or a frame end), then a
+# framed empty prompt, as the idle screen shows it.
+frame() { sed '$d' "$sf/$1.txt"; printf '%s\n> \n%s\n' "$R6" "$R6"; }
+hold_case() { # <name> <label> <screen-builder...>
+  local nm=$1 label=$2
+  shift 2
+  start "$nm"
+  "$@" > "$(fout "$nm")"
+  out=$(deliver "$nm" --text "run tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "B4, D42g: $label: 0 bytes typed, no Enter (exit 1)" "1 0" "$rc $(inbytes "$nm")"
+  assert_eq "B4, D42g: $label: no Enter key reached the session" "" "$(calls | grep -F "key $(rec "$nm" .handle) Enter" || true)"
+}
+for fx in limit-notice-plain limit-notice-short limit-notice-contraction; do
+  hold_case "h-$fx" "a limit notice above a framed empty prompt ($fx)" frame "$fx"
+done
+hold_case h-trust "a trust dialog above a framed empty prompt" frame trust-dialog
+pw() { cat "$screens/idle-empty.txt"; tail -n 1 "$sf/password-prompt.txt"; }
+hold_case h-pass "the idle screen with a password prompt line below it" pw
+assert_contains "B4: the report names the hold" "$out" "hold"
+# No chord on a hold, with --force-send on a busy session.
+start h-chord
+frame limit-notice-plain > "$(fout h-chord)"
+: > "$(fbusy h-chord)"
+out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 deliver h-chord --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+assert_eq "B4: a hold gets no chord and no typed text, also with --force-send" "1 0" "$rc $(inbytes h-chord)"
+# A stale notice with later text below it reads as no hold: the continue message goes through.
+stale() { sed '$d' "$sf/limit-notice-plain.txt"; printf 'Later the session went on with other work.\nIt wrote a summary of the tests.\n%s\n> \n%s\n' "$R6" "$R6"; }
+start h-stale
+stale > "$(fout h-stale)"
+out=$(deliver h-stale --text "continue" 2>&1) && rc=0 || rc=$?
+assert_eq "B4: a stale notice followed by later text is no hold; the continue message is delivered (exit 0)" "0" "$rc"
+# ---- Codex P2 (line 275): a separator inside a multi-line draft ------------------------------
+start h-sep
+printf ' Fake runtime 0.0.0\n\n%s\n> \n  ────────────\n  unfinished owner text\n%s\n  ? for shortcuts\n' "$R6" "$R6" > "$(fout h-sep)"
+out=$(deliver h-sep --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "Codex P2: a separator inside a multi-line draft does not hide the draft (0 bytes, exit 1)" "1 0" "$rc $(inbytes h-sep)"
+assert_contains "Codex P2: it is reported as a draft" "$out" "input line holds text typed by the user"
+# ---- minor 2: the cached path must name the session ID as a whole part ----------------------
+start h-sub
+ssub=$(rec h-sub .session_id)
+tsub=$(trof h-sub)
+cp "$tsub" "$(dirname "$tsub")/x${ssub}y.jsonl"
+jq -cn '{type: "user", message: {role: "user", content: "ho-subs0001: stop"} }' >> "$(dirname "$tsub")/x${ssub}y.jsonl"
+jq --arg t "$(dirname "$tsub")/x${ssub}y.jsonl" '.transcript = $t' "$run/sessions/h-sub.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/h-sub.json"
+assert_eq "minor 2: a cached path that holds the ID only inside a longer name is not used" "none id=ho-subs0001" \
+  "$("$h" session "$run" proof h-sub ho-subs0001 2>&1 | cut -d' ' -f1-2)"
+# ---- minor 3: delivery.wait_seconds must be a JSON number ------------------------------------
+start h-wait
+screen h-wait idle-empty
+printf '{"schemaVersion": 2, "runtime": {"main": "claude-code"}, "delivery": {"wait_seconds": "5"} }\n' > "$user/config.json"
+rc=0; deliver h-wait --text "run tests" >/dev/null 2>&1 || rc=$?
+assert_eq "minor 3: delivery.wait_seconds given as a string is refused (78), 0 bytes typed" "78 0" "$rc $(inbytes h-wait)"
+set_runtime claude-code

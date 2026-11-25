@@ -43,7 +43,7 @@
 # 64 usage, 65 refused, 66 no such session of this run, 78 runtime data missing or a setting
 # out of range.
 #
-# Requires lib/run.sh, lib/config.sh, lib/files.sh, lib/term.sh and lib/sessions.sh.
+# Requires lib/run.sh, lib/config.sh, lib/files.sh, lib/term.sh, lib/sessions.sh and lib/screen.sh.
 
 HO_DELIVER_MAX_TEXT=65536
 
@@ -96,8 +96,8 @@ ho_deliver_exec_path() {
   printf '%s\n' "$p"
 }
 
-# ho_deliver_wait_setting: delivery.wait_seconds from the user config only, a whole number of
-# at least 2 (default 30). It decides when a failed message command counts as a proven failure,
+# ho_deliver_wait_setting: delivery.wait_seconds from the user config only, a JSON number that
+# is a whole number of at least 2 (default 30); a string is refused. It decides when a failed message command counts as a proven failure,
 # so a project config may not set it (65), as with session.permissions; a value below 2 or not
 # a number exits 78 (validator, PR #95).
 ho_deliver_wait_setting() {
@@ -108,7 +108,7 @@ ho_deliver_wait_setting() {
     printf 'harness: the project config sets delivery.wait_seconds; it decides when a message counts as failed, so it belongs in the user config %s\n' "$(ho_user_config)" >&2
     return 65
   fi
-  v=$(ho_cfg_user '.delivery.wait_seconds' | jq -r 'if . == null then "30" else tostring end') || return 78
+  v=$(ho_cfg_user '.delivery.wait_seconds' | jq -r 'if . == null then "30" elif type == "number" then tostring else "x" end') || return 78
   case $v in '' | *[!0-9]*) v=x ;; esac
   if [ "$v" = x ] || [ "${#v}" -gt 4 ] || [ "$((10#$v))" -lt 2 ]; then
     echo "harness: delivery.wait_seconds must be a whole number of at least 2" >&2
@@ -157,14 +157,15 @@ ho_deliver_transcript() {
   ho_deliver_outside_project "$root" || return 1
   sid=$(jq -r '.session_id // ""' "$rec")
   ho_session_uuid_ok "$sid" 2>/dev/null || return 1
-  # The cached path counts only inside the root and only when its file name or its folder
-  # names this session's ID, so it cannot point at another session's transcript.
+  # The cached path counts only inside the root and only when its file name is <id>.jsonl or a
+  # folder on its path is <id>, so it cannot point at another session's transcript.
   cached=$(jq -r '.transcript // ""' "$rec")
   case $cached in
     "$root"/*)
-      case "$(basename "$cached")/$(basename "$(dirname "$cached")")" in
-        *"$sid"*) [ -f "$cached" ] && [ ! -L "$cached" ] && [ -r "$cached" ] && { printf '%s\n' "$cached"; return 0; } ;;
-      esac
+      # Whole name parts only: the file is <id>.jsonl, or a folder on the way is <id>.
+      if [ "$(basename "$cached")" = "$sid.jsonl" ] || case "/$(dirname "$cached")/" in */"$sid"/*) true ;; *) false ;; esac; then
+        [ -f "$cached" ] && [ ! -L "$cached" ] && [ -r "$cached" ] && { printf '%s\n' "$cached"; return 0; }
+      fi
       ;;
   esac
   glob=$(jq -r '.transcript.glob' "$profile")
@@ -247,6 +248,23 @@ ho_deliver_screen() {
   cap=$(HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec") ho_term_capture "$(jq -r '.handle // ""' "$rec")" \
     "$(jq -r '.term_tag // ""' "$rec")" "$(jq -r '.session_id // ""' "$rec")" 60 styled 2>/dev/null) || { echo "unknown the screen could not be read"; return 0; }
   plain=$(printf '%s\n' "$cap" | sed "s/$esc\[[0-9;]*m//g")
+  # The same capture goes through the engine's screen reader (lib/screen.sh). A limit notice, a
+  # trust dialog or a password prompt is a hold: nothing is typed, no Enter, no chord (D42g;
+  # validator B4, Codex review). A notice with later text below it reads "none", so a continue
+  # message after a reset still goes through. If the reader cannot run, nothing is typed. The
+  # capture file stays in the run's screen folder only while it is read.
+  local sdir cfile class
+  sdir="$HO_RUN_DIR/screen"
+  mkdir -p "$sdir" && chmod 700 "$sdir" 2>/dev/null || true
+  cfile=$(umask 077 && mktemp "$sdir/.deliver.XXXXXX" 2>/dev/null) || { echo "unknown the screen reader could not run"; return 0; }
+  printf '%s\n' "$plain" > "$cfile"
+  class=$(ho_screen_classify "$cfile" 2>/dev/null) || class=unknown
+  rm -f "$cfile"
+  case $class in
+    none) ;;
+    limit | trust | password) echo "hold $class"; return 0 ;;
+    *) echo "unknown the screen reader gave no answer"; return 0 ;;
+  esac
   rc=$(jq -r '.screen.rule_char // ""' "$profile")
   sgr=$(jq -r '.screen.suggestion_sgr // ""' "$profile")
   case $sgr in *[!0-9]*) sgr="" ;; esac
@@ -270,9 +288,11 @@ EOF_R
       case $line in
         "$p"* | "${p% }")
           ho_deliver_rule "${P[i - 1]}" "$rc" || continue
+          # The box ends at the LAST rule line within 20 lines, so a separator pasted into a
+          # draft cannot end the box early and hide the text below it (Codex review).
           j=$((i + 1))
           while [ "$j" -lt "$n" ] && [ "$j" -le $((i + 20)) ]; do
-            if ho_deliver_rule "${P[j]}" "$rc"; then k=$i; kend=$j; pfx=$p; break; fi
+            if ho_deliver_rule "${P[j]}" "$rc"; then k=$i; kend=$j; pfx=$p; fi
             j=$((j + 1))
           done
           ;;
@@ -306,6 +326,9 @@ EOF_PFX2
     part=$(printf '%s\n' "$raw" | sed "s/$esc\[[0-9;]*m//g")
     if [ "$i" -eq "$k" ]; then
       case $part in "$pfx"*) part=${part#"$pfx"} ;; *) part=${part#"${pfx% }"} ;; esac
+    elif ho_deliver_rule "$part" "$rc"; then
+      # A frame line inside the box is no text, but the lines around it are read.
+      part=""
     else
       part=$(printf '%s' "$part" | sed 's/^[[:space:]]*//')
     fi
@@ -350,6 +373,10 @@ ho_deliver_version_ge() {
 # ho_deliver_chord <record> <profile> <id>: send the runtime's send-now chord once (D37-LIFECYCLE-4).
 ho_deliver_chord() {
   local rec=$1 profile=$2 id=$3 bytes want cmd have rc=0
+  # No chord while the screen shows a hold (a limit notice, a trust dialog or a password prompt).
+  case $(ho_deliver_screen "$rec" "$profile") in
+    hold*) ho_ledger_append deliver-force-send id "$id" result skipped reason "the screen shows a hold"; return 1 ;;
+  esac
   # Once per instruction, across both routes: the marker is taken before anything is sent.
   (set -C; : > "$HO_RUN_DIR/messages/$id.chord") 2>/dev/null || return 1
   # Numbers 1-31 only, never 10 (line feed) or 13 (carriage return): a chord must not act as
@@ -602,6 +629,7 @@ ho_session_deliver() {
   case $screen in
     empty) ;;
     draft*) ho_deliver_not "$id" "$name" "the input line holds text typed by the user; nothing was typed" "" screen draft || return 1 ;;
+    hold*) ho_deliver_not "$id" "$name" "the screen shows a ${screen#hold } hold (D42g); nothing was typed and no Enter was sent" "" screen "$screen" || return 1 ;;
     busy*)
       [ "$force" -eq 1 ] || ho_deliver_not "$id" "$name" "the session is busy; nothing was typed, the instruction waits" "" screen busy || return 1
       ;;

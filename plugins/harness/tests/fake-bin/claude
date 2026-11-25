@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # Fake claude for tests: records argv, prints canned output, exits with a set code.
+# Opt-in hold (for session tests): with HO_FAKE_CLAUDE_HOLD=exit it stays alive until a whole
+# line "/exit" (with its newline) reaches its fake terminal input; with
+# HO_FAKE_CLAUDE_HOLD=ignore it ignores input.
+# Either way it ends after HO_FAKE_CLAUDE_HOLD_MAX seconds (default 20).
+# HO_FAKE_CLAUDE_FAIL_MODEL=<m>: exit 1 when started with "--model <m>", at once or after
+# HO_FAKE_CLAUDE_FAIL_AFTER seconds.
+# HO_FAKE_CLAUDE_SHOW_ENV=<NAME>: also log "env NAME=<value>".
+# HO_FAKE_CLAUDE_ON_EXIT=<shell command>: run just before it leaves on "/exit".
 set -euo pipefail
 if [ "${1:-}" = "--version" ]; then
   echo "0.0.0 (fake claude)"
@@ -11,7 +19,42 @@ for a in "$@"; do
   if [ -z "$line" ]; then line=$a; else line="$line	$a"; fi
 done
 printf '%s\n' "$line" >> "$log"
+if [ -n "${HO_FAKE_CLAUDE_SHOW_ENV:-}" ]; then
+  printf 'env %s=%s\n' "$HO_FAKE_CLAUDE_SHOW_ENV" "$(printenv "$HO_FAKE_CLAUDE_SHOW_ENV" || true)" >> "$log"
+fi
+if [ -n "${HO_FAKE_CLAUDE_FAIL_MODEL:-}" ]; then
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = --model ] && [ "$a" = "$HO_FAKE_CLAUDE_FAIL_MODEL" ]; then
+      sleep "${HO_FAKE_CLAUDE_FAIL_AFTER:-0}"
+      exit 1
+    fi
+    prev=$a
+  done
+fi
 if [ -n "${HO_FAKE_CLAUDE_STDOUT:-}" ]; then
   printf '%s\n' "$HO_FAKE_CLAUDE_STDOUT"
 fi
+# exit_line <file>: 0 when the file holds a whole "/exit" line. read fails on a last line with
+# no newline, so text typed before its Enter does not count (the engine sends them apart).
+exit_line() {
+  local l
+  while IFS= read -r l; do
+    [ "$l" = /exit ] && return 0
+  done < "$1"
+  return 1
+}
+case ${HO_FAKE_CLAUDE_HOLD:-} in
+  exit | ignore)
+    in="${HO_FAKE_TERM_DIR:-$HOME/fake-term}/$(printf '%s' "${HO_FAKE_TERM_HANDLE:-none}" | tr -c 'A-Za-z0-9-' '_').in"
+    end=$(( $(date +%s) + ${HO_FAKE_CLAUDE_HOLD_MAX:-20} ))
+    while [ "$(date +%s)" -lt "$end" ]; do
+      if [ "$HO_FAKE_CLAUDE_HOLD" = exit ] && [ -f "$in" ] && exit_line "$in"; then
+        [ -z "${HO_FAKE_CLAUDE_ON_EXIT:-}" ] || sh -c "$HO_FAKE_CLAUDE_ON_EXIT"
+        exit 0
+      fi
+      sleep 0.1
+    done
+    ;;
+esac
 exit "${HO_FAKE_CLAUDE_EXIT:-0}"

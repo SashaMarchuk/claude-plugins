@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 2,
+  "name": "gsd",
+  "description": "The default cycle run by the GSD (get-shit-done) flow system. Classification and shipping are harness steps before and after it. GSD itself is linked, not shipped: it must be installed for each runtime that runs these steps.",
+  "source": "system",
+  "system": {
+    "name": "GSD (get-shit-done)",
+    "skills": ["gsd-phase", "gsd-discuss-phase", "gsd-plan-phase", "gsd-execute-phase", "gsd-code-review", "gsd-ui-review"],
+    "agents": ["gsd-verifier"]
+  },
+  "steps": [
+    { "id": "classify",    "title": "Classification", "when": "always",    "prompt": "steps/classify.md" },
+    { "id": "grill",       "title": "Discussion (grilling)", "when": "questions", "prompt": "steps/grill.md" },
+    { "id": "plan",        "title": "Planning",       "when": "always",    "prompt": "steps/plan.md" },
+    { "id": "execute",     "title": "Execution",      "when": "always",    "prompt": "steps/execute.md" },
+    { "id": "code-review", "title": "Code review",    "when": "always",    "prompt": "steps/code-review.md" },
+    { "id": "verify",      "title": "Verification",   "when": "always",    "prompt": "steps/verify.md" },
+    { "id": "ui-check",    "title": "UI check",       "when": "always",    "prompt": "steps/ui-check.md" },
+    { "id": "ship",        "title": "Shipping",       "when": "always",    "prompt": "steps/ship.md" }
+  ]
+}

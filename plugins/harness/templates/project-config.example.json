@@ -1,4 +1,7 @@
 {
   "schemaVersion": 2,
-  "_comment": "<project>/.harness/config.json: settings for this project. A key set here beats the same key in the user config, which beats the engine default. A missing key or null falls through to the next layer; false and 0 are real values. Later releases add their keys here."
+  "_comment": "<project>/.harness/config.json: settings for this project. A key set here beats the same key in the user config, which beats the engine default. A missing key or null falls through to the next layer; false and 0 are real values. Later releases add their keys here.",
+  "runtime": {
+    "main": "claude-code"
+  }
 }

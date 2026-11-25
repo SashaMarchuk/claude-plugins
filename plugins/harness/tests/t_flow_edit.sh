@@ -208,3 +208,23 @@ assert_exit "H-068: a flow in a linked-out flows folder is refused (exit 78)" 78
 rc=0; "$h" flow copy basic newone >/dev/null 2>&1 || rc=$?
 assert_eq "D37-FLOW-2: flow copy refuses a linked-out flows folder (exit 78)" "78" "$rc"
 assert_eq "D37-FLOW-2: flow copy wrote nothing outside the project" "no" "$([ -e "$base/outside/a-flows/newone" ] && echo yes || echo no)"
+
+# ---- step keys: only the documented keys (validator concern 3 on #42) ------------------------
+rm -f "$fl"; mv "$base/outside/a-flows" "$fl"
+mkflow mine "$(edit '(.steps[] | select(.id == "code-review")) += {enable: false}')"
+rc=0; err=$("$h" flow check mine 2>&1) || rc=$?
+assert_eq "H-066: a step with an unknown key is refused (exit 78)" "78" "$rc"
+assert_contains "H-066: the refusal names the unknown key" "$err" "unknown key enable"
+assert_contains "H-066: the refusal names the step" "$err" "code-review"
+mkflow mine "$(edit '(.steps[] | select(.id == "plan")) += {enabled: true, runtime: "claude-code", kind: "review", skills: ["a-b"]}')"
+assert_exit "H-066: a step with every documented key passes" 0 "$h" flow check mine
+for f in gsd basic; do
+  assert_exit "H-066: the shipped flow $f passes the step key check" 0 "$h" flow check "$f"
+done
+
+# ---- flow plan keeps its error file private (validator concern 4 on #42) ----------------------
+mkflow mine "$own"
+mkdir -p "$base/ptmp"
+printf 'keep\n' > "$base/victim"
+TMPDIR="$base/ptmp" /bin/bash -c 'ln -s "$1" "$TMPDIR/ho-plan-err.$$"; exec "$2" flow plan mine' _ "$base/victim" "$h" >/dev/null 2>&1 || true
+assert_eq "H-066: flow plan never writes through a predictable temp name" "keep" "$(cat "$base/victim")"

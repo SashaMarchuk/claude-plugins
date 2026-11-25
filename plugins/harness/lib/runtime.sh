@@ -79,8 +79,11 @@ ho_rt_check() {
 # ho_flow_plan_rows <flow>: after ho_flow_load, one JSON line per step that is on:
 # {n, id, when, title, runtime, file, mode, owner, note, launch, kind, skills}.
 ho_flow_plan_rows() {
-  local main row rt f n=0
+  local main row rt f n=0 errf
   main=$(ho_cfg '.runtime.main' '') || exit $?
+  errf=$(mktemp "${TMPDIR:-/tmp}/ho-plan-err.XXXXXX") || ho_die "mktemp failed"
+  # shellcheck disable=SC2064
+  trap "rm -f '$errf'" EXIT
   while IFS= read -r row; do
     [ -n "$row" ] || continue
     n=$((n + 1))
@@ -104,13 +107,11 @@ ho_flow_plan_rows() {
         else {n: ($n | tonumber), id, when, title, runtime: $rt, file: $f, mode: $mode, owner, kind: (.kind // ""),
               skills: (.skills // []),
               note: (if $mode == "noninteractive" and .kind != "review" then "experimental" else "-" end),
-              launch: ($launch | join(" "))} end' 2>"${TMPDIR:-/tmp}/ho-plan-err.$$" || {
+              launch: ($launch | join(" "))} end' 2>"$errf" || {
       printf 'harness: flow %s: cannot plan step %s: %s\n' "$HO_FLOW_NAME" "$(printf '%s' "$row" | jq -r .id)" \
-        "$(sed -e 's/^jq: error (at <stdin>:[0-9]*): //' "${TMPDIR:-/tmp}/ho-plan-err.$$")" >&2
-      rm -f "${TMPDIR:-/tmp}/ho-plan-err.$$"
+        "$(sed -e 's/^jq: error (at <stdin>:[0-9]*): //' "$errf")" >&2
       exit "$HO_EXIT_FLOW"
     }
-    rm -f "${TMPDIR:-/tmp}/ho-plan-err.$$"
   done <<EOF_ROWS
 $(jq -c '(.system.steps // []) as $own | .steps[] | select(.enabled != false)
   | . + {owner: (if (.id | IN($own[])) then "system" else "harness" end)}' "$HO_FLOW_JSON")

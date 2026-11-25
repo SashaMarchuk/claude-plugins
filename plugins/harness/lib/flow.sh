@@ -114,6 +114,10 @@ ho_flow_locate() {
 # Top-level keys of the autonomy profile (D12, D37-FLOW-8 (b)). A flow config never holds them.
 HO_FLOW_AUTONOMY_KEYS='["gates","push","pr","pr_open","merge","post_merge","deploy_production","remarks","allow_zero_tests","permissions","autonomy"]'
 
+# The keys a step may hold. Any other key is refused by name, so a typo such as "enable" never
+# passes as a step that stays on.
+HO_FLOW_STEP_KEYS='["id","title","when","prompt","enabled","runtime","kind","skills"]'
+
 # ho_flow_load <name>: check the whole flow; set HO_FLOW_DIR, HO_FLOW_JSON and HO_FLOW_ORIGIN
 # (project or shipped). Any problem stops with exit 78 and names the flow. It never falls back
 # to another flow.
@@ -128,7 +132,7 @@ ho_flow_load() {
   f="$dir/flow.json"
   [ ! -L "$f" ] || ho_flow_fail "$name" "flow file is a link: $f"
   # Slurped, so an empty file or two JSON values cannot pass as "nothing wrong" (field note I3).
-  why=$(jq -rs --arg name "$name" --argjson schema "$HO_FLOW_SCHEMA" --argjson akeys "$HO_FLOW_AUTONOMY_KEYS" '
+  why=$(jq -rs --arg name "$name" --argjson schema "$HO_FLOW_SCHEMA" --argjson akeys "$HO_FLOW_AUTONOMY_KEYS" --argjson skeys "$HO_FLOW_STEP_KEYS" '
     def bad($m): $m;
     if length != 1 then "the file must hold exactly one JSON object" else .[0] |
     # Text a terminal shows: no control, line separator or bidi character (as for render values).
@@ -147,6 +151,9 @@ ho_flow_load() {
     elif (.steps | type) != "array" or (.steps | length) == 0 then bad("steps must be a non-empty list")
     elif has("install") and ((.install | type) != "object" or (.install | to_entries | any((.key | skill | not) or (.value | line | not)))) then
       bad("install must map skill names to one-line install steps")
+    elif ([.steps[] | select(type == "object" and (keys - $skeys | length) > 0)] | length) > 0 then
+      ([.steps[] | select(type == "object" and (keys - $skeys | length) > 0)] | first) as $u
+      | bad("step \($u.id // "?"): unknown key \(($u | keys) - $skeys | first) (a step may hold only \($skeys | join(", ")))")
     else
       [ .steps[] | select(type != "object"
           or ((.id | type) != "string") or (.id | test("\\A[a-z0-9][a-z0-9-]*\\z") | not)

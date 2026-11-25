@@ -71,6 +71,16 @@ Source: interview 2026-11-24 R27.8
 - **WHEN** a person runs the harness configuration skill
 - **THEN** every setting the plugin offers, including the autonomy settings, can be set through this skill
 
+#### Scenario: Nothing is configured yet
+- **WHEN** a person runs the harness configuration skill and nothing is configured
+- **THEN** the skill offers the default of H-001 for one confirmation
+- **AND** it asks whether to save the confirmation in the user settings
+
+#### Scenario: Limit thresholds are offered
+- **WHEN** the skill reaches the limits settings
+- **THEN** it offers a threshold of 90% for every window
+- **AND** it switches thresholds on only after a yes (H-110)
+
 ### Requirement: H-129 The project setup skill applies AI-development practices
 The project setup skill SHALL apply AI-development best practices to the repository, so that AI development there is more reliable. The scenarios give examples; the list is open, not the full set. The skill MUST NOT set up a flow system such as GSD (design.md D37-DISTRIBUTION-1).
 
@@ -118,3 +128,78 @@ Source: interview 2026-11-24 R17.10; D19
 #### Scenario: A newcomer wants the harness
 - **WHEN** a newcomer finds harness config files in a project and wants to use the harness
 - **THEN** the documentation tells them how to set the harness up
+
+### Requirement: H-140 A feedback command files a problem report as an issue, after the person's yes
+The plugin SHALL provide `/harness:feedback`. The person describes a problem with the harness, and the command SHALL file it as an issue without labels in the plugin's own repository. It SHALL add technical context: plugin version, runtime version, operating system and a state summary of the last run. It MUST NOT add private data: paths outside the plugin, tokens, ticket text or account names. It SHALL show the full text first and send only after a yes.
+
+Source: owner decision 2026-11-26
+
+#### Scenario: A report is filed
+- **WHEN** the person runs `/harness:feedback`, describes a problem and says yes to the shown text
+- **THEN** one issue without labels is created in the plugin's own repository
+- **AND** it holds the description, the plugin version, the runtime version, the operating system and the state summary of the last run
+
+#### Scenario: The person says no
+- **WHEN** the person reads the shown text and does not say yes
+- **THEN** nothing is sent
+
+#### Scenario: Private data stays out
+- **WHEN** the last run worked on tickets of a private project
+- **THEN** the shown text holds no ticket text, no path outside the plugin, no token and no account name
+
+#### Scenario: No run exists yet
+- **WHEN** the person runs `/harness:feedback` before any run
+- **THEN** the shown text says that there is no last run, and the rest of the context is still added
+
+### Requirement: H-141 A release checklist is run in full before every release
+The plugin SHALL keep a release checklist in its repository. Before every release, the checklist MUST be run in full, and the release MUST NOT be published while an item fails or is skipped. The results SHALL be recorded with the release. The checklist SHALL cover the automated tests, the real terminals (H-142) and the main success flow (H-143).
+
+Source: owner decision 2026-11-26
+
+#### Scenario: Every item passes
+- **WHEN** a release is prepared and every checklist item passes
+- **THEN** the release may be published
+- **AND** the results are recorded with the release
+
+#### Scenario: An item fails
+- **WHEN** a checklist item fails
+- **THEN** the release is not published until the cause is fixed and that item passes again
+
+#### Scenario: An item is skipped
+- **WHEN** a checklist item was not run
+- **THEN** it counts as not passed, and the release is not published
+
+### Requirement: H-142 Every release is checked on the real terminals with the real runtime
+Before every release, each supported terminal backend, tmux and iTerm2, MUST be checked on the real terminal app with the real agent runtime, not a fake. For each backend, the check SHALL launch a session, deliver an instruction to it, read that it is alive, and close it gracefully. A backend that ran only against fakes MUST NOT count as checked.
+
+Source: owner decision 2026-11-26; owner message 2026-11-25 (iTerm2 incident)
+
+#### Scenario: tmux is checked
+- **WHEN** the release checklist reaches the terminal checks
+- **THEN** a session of the real runtime is launched in real tmux, receives an instruction, reads as alive and is closed gracefully
+
+#### Scenario: iTerm2 is checked
+- **WHEN** the release checklist reaches the terminal checks
+- **THEN** a session of the real runtime is launched in the real iTerm2 app, receives an instruction, reads as alive and is closed gracefully
+
+#### Scenario: A backend ran only against fakes
+- **WHEN** a backend passed its automated tests against a fake terminal and was not run on the real app
+- **THEN** its checklist item is not passed
+
+### Requirement: H-143 The main success flow is checked end to end before every release
+Before every release, the main success flow MUST be run end to end with the real agent runtime in a throwaway repository: a ready ticket is picked up, a worker does the work, an independent validator gives the verdict, and the engine merges only after its own checks, with git confirming the merge. From pickup to merge, the run MUST need no human action, under a profile that allows the merge.
+
+Source: owner decision 2026-11-26; interview 2026-11-24 R30.5, R27.17
+
+#### Scenario: The flow passes
+- **WHEN** the checklist runs one ready ticket in a throwaway repository under a profile that allows the merge
+- **THEN** the ticket is picked up, worked, validated by an independent validator and merged
+- **AND** git confirms that the change is in the target branch
+
+#### Scenario: A human hand was needed
+- **WHEN** the run reaches the merge only after a person typed into a session or fixed a step by hand
+- **THEN** the checklist item is not passed
+
+#### Scenario: The merge is not confirmed
+- **WHEN** the run reports a merge and git does not show the change in the target branch
+- **THEN** the checklist item is not passed

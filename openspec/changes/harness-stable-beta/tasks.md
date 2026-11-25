@@ -26,6 +26,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 - [ ] 3.1 Port config lookup and safe-file helpers with behaviour tests; `schemaVersion: 2`
 - [ ] 3.2 Add the append-only run ledger and run IDs in every marker; verify a 0.6.0 run is refused and left byte-identical
+- [ ] 3.3 Shipped default config (GSD flow, OpenSpec), the confirmed default in the user config, the one confirmation at setup and the stop of an unattended start with no confirmation (H-001, H-068, H-072, H-076; D37-FLOW-4, D37-FLOW-7)
 
 ## 4. Ticket queue (wave 1)
 
@@ -93,7 +94,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 ## 16. Limits and resources
 
-- [ ] 16.1 Limits per account from status line data, with configurable thresholds and actions
+- [ ] 16.1 Limits per account from status line data, in every window present, with optional per-window thresholds and actions; setup offers 90% for every window (H-109, H-110, H-112; D28, D28a, D29)
 - [ ] 16.2 Enforced worker cap, out-of-memory lowering and the heavy-work slot
 - [ ] 16.3 Record the terminal app's CPU use and the count of listing lines for its own API socket in the usage history, with one notice at the threshold (H-108; D42m; issue #66)
 
@@ -121,6 +122,8 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 20.1 `/harness:config` and `/harness:ai-ready`; `onboard` and `init` are one-release aliases for `/harness:config`, and `/harness:ai-ready` has no alias (D33a)
 - [ ] 20.2 Blind naming test for the two skill names (D33; result in D33a)
 - [ ] 20.3 Short install guide, "tested with" list, newcomer section and config-folder README
+- [ ] 20.4 `/harness:feedback`: an issue without labels in the plugin's own repository, with technical context and no private data, shown in full and sent only after a yes; verify a no sends nothing (H-140; D43)
+- [ ] 20.5 Release checklist file in the plugin repository: automated tests, real terminals and the main success flow (H-141, H-142, H-143)
 
 ## 21. Evaluation programme
 
@@ -132,8 +135,9 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 21.6 Every notification flow, end to end (R28.10)
 - [ ] 21.7 Comparison runs across flows, including review steps on Codex (R29.8, D31)
 - [ ] 21.8 Fix failures at once without over-engineering, escalate big changes, and re-test shorter, up to 4 cycles (R27.11)
-- [ ] 21.9 Verify the main success flow works end to end (R30.5, R27.17)
-- [ ] 21.10 Real-terminal acceptance before release: run the iTerm2 backend once on the real app, from launch to close, together with the two trials of 17.2, and log the result; until then the backend counts as tested against fakes only (D42n; issue #78)
+- [ ] 21.9 Verify the main success flow works end to end, as the release checklist states it (H-143; R30.5, R27.17)
+- [ ] 21.10 Real-terminal acceptance before release: run the iTerm2 backend once on the real app, from launch to close, together with the two trials of 17.2, and log the result; until then the backend counts as tested against fakes only (H-142; D42n; issue #78)
+- [ ] 21.11 Run the release checklist in full and record the results for the release PR (H-141)
 
 ## 22. Release
 

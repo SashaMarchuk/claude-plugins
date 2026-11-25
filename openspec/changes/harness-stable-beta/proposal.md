@@ -12,13 +12,13 @@ The owner's interview of 2026-11-24 fixed the features of a stable beta. The goa
 - **Tracker comments:** every role adds new comments and never edits old ones. Exactly one state label per ticket. Questions to humans go to the ticket, and only a writer's reply resumes it. A writer can unblock a ticket. The harness records who answered.
 - **Autonomy and git:** every step can be autonomous or a human gate. Ready-made autonomy profiles plus a custom one. The default is safe: nothing leaves the machine. Push, draft PR, merge, merge confirmation by git and production deploy are each gated by the profile. Release to stage is a per-project setting for projects that have a stage. No ready-made profile deploys to production.
 - **Verification:** an independent verdict is required before any merge. At least one test must exist and all must pass, unless a profile allows zero tests. Every PR carries a Verification block with the checks actually done. External review bots are handled. An optional verify-and-prove skill is installed separately.
-- **Flow and configuration:** any flow system is supported, with one owner per step. A flow config is separate from the autonomy profile. Configs may live in the repo, and a local file selects one. Codex can run steps through a runtime profile. Using OpenSpec is optional.
+- **Flow and configuration:** any flow system is supported, with one owner per step. A flow config is separate from the autonomy profile. Configs may live in the repo, and a local file selects one. Codex can run steps through a runtime profile. With nothing configured, the default is the GSD flow with OpenSpec, and the person confirms it once at project setup. The confirmation can be saved in the user settings, and a project setting beats a user setting. An unattended run with no confirmation stops and asks. OpenSpec stays optional.
 - **Run lifecycle:** a run ends when all tickets are done. Standby is a setting. Soft, hard and custom stops exist; the default is a soft stop after the current step. Recovery after sleep or a crash is automatic by default.
 - **Sessions and liveness:** interactive terminal sessions are preferred. Instructions go as messages between sessions, with osascript as the fallback, and nothing is ever typed to wake a session. Liveness comes from hooks, transcripts and process IDs. A hung session is resumed by ID first. A small script watches for service outages and restarts a dead orchestrator.
-- **Limits and resources:** the user sets the worker cap (default 1), and the engine enforces it. A confirmed out-of-memory stop lowers it by one. Heavy work has its own limit. Subscription limits are read for every added account. Thresholds and actions are configurable. An unreadable limit does not stop work.
+- **Limits and resources:** the user sets the worker cap (default 1), and the engine enforces it. A confirmed out-of-memory stop lowers it by one. Heavy work has its own limit. Subscription limits are read for every added account, in every window it has. Thresholds are optional and set by the user, one per window, and a project may set its own. Setup offers 90% for every window. The action at each threshold is configurable. An unreadable limit does not stop work.
 - **Notifications:** Gmail, Telegram and Slack are optional channels that mirror the tracker. They have a user-set priority and fall back in that order. Answers are written back to the tracker with their author. The tracker stays the source of truth.
-- **Distribution and setup:** the plugin id stays `harness` and the display name is "Harness Orchestrator". It ships a short install guide and two setup skills: one configures the harness, one prepares a project for AI development. It also has a "tested with" list and a note for newcomers who join a project that uses it.
-- Requirement IDs run from H-002 to H-139 and continue after H-001. They are never reused.
+- **Distribution and setup:** the plugin id stays `harness` and the display name is "Harness Orchestrator". It ships a short install guide and two setup skills: one configures the harness, one prepares a project for AI development. It also has a "tested with" list and a note for newcomers who join a project that uses it. `/harness:feedback` files a problem report as an issue in the plugin's own repository, with technical context and no private data, after the person reads the text and says yes. A release checklist is run before every release: the real terminals (tmux and iTerm2) with the real runtime, plus the main success flow.
+- New requirement IDs run from H-002 to H-143 and continue after H-001. They are never reused.
 
 ## Capabilities
 
@@ -35,7 +35,7 @@ The owner's interview of 2026-11-24 fixed the features of a stable beta. The goa
 - `harness/distribution-and-setup`
 
 ### Modified Capabilities
-None. `harness/orchestrator-workflow` (H-001) is unchanged. The requirements format default is decided in design.md D37-FLOW-7. The H-001 rewording waits for the owner (design.md OPEN-1).
+- `harness/orchestrator-workflow`: H-001 states the default when nothing is configured (the GSD flow with OpenSpec), its single confirmation at project setup, the user and project levels, and the stop of an unattended run with no confirmation (owner decision 2026-11-26; design.md D37-FLOW-4, D37-FLOW-7).
 
 ## Non-goals
 
@@ -64,7 +64,7 @@ Not in this beta. These come from items the owner answered "no" or "later", from
 - A comment command as a trigger: no. Only a label (or its fallback) triggers pickup (R1.2).
 - A separate intake command besides `/harness:add`, and a Slack intake agent: no (rejected entry 8).
 - Generic SMTP e-mail: not in this beta, by agent decision S8-28a. Gmail is the only e-mail channel.
-- Comparison runs across flows as a user-facing feature: not in this beta. In this beta they are evaluation tests only (R29.8). Whether they ever become a user feature is open (design.md OPEN-26).
+- Comparison runs across flows as a user-facing feature: no. They are an evaluation test only (R29.8; owner decision 2026-11-26).
 - Adopting an existing open-source orchestrator instead of this plugin (rejected entry 1).
 - Binding the harness to one flow, or hard-coding a vendor or model name in plugin code (rejected entry 2).
 - Mixing a ready-made and a custom process in one flow config (rejected entry 3).
@@ -81,4 +81,4 @@ Not in this beta. These come from items the owner answered "no" or "later", from
 - `main` keeps `plugins/harness` at 0.6.0, unchanged, until one release PR from `harness/next`. The owner merges that PR.
 - No version bump happens without the owner's yes. The release PR carries the display name, an "Upgrading from 0.6.0" section and the migration note this repository requires, so users update with `/plugin update`.
 - Kept for users at release: plugin id `harness`, the `/harness:*` command prefix, the `harness:*` label prefix, user and project config, and the STOP file. Old run data is never deleted or rewritten.
-- `openspec/specs/harness/orchestrator-workflow` is not touched. The new capabilities join it under `openspec/specs/harness/` at archive.
+- `openspec/specs/harness/orchestrator-workflow` takes the H-001 delta at archive. The new capabilities join it under `openspec/specs/harness/` at the same time.

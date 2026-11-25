@@ -1,12 +1,12 @@
 ## MODIFIED Requirements
 
 ### Requirement: H-001 Agnostic workflow of replaceable elements
-The orchestrator's workflow MUST be agnostic and built from replaceable elements. When nothing is configured, the default MUST be GSD for execution and OpenSpec for requirements, and the person MUST confirm it once during project setup. The confirmation MAY be saved in the person's user settings. A project setting MUST beat a user setting. OpenSpec MUST be swappable for another requirements format, or for none.
+The orchestrator's workflow MUST be agnostic and built from replaceable elements. When nothing is configured, the default MUST be GSD for execution and OpenSpec for requirements, and the person MUST confirm it once, in the configuration skill or at the first start. The confirmation MAY be saved in the person's user settings. A project setting MUST beat a user setting. OpenSpec MUST be swappable for another requirements format, or for none.
 
 Source: owner decision 2026-11-26
 
 #### Scenario: Default workflow
-- **WHEN** project setup runs and nothing is configured
+- **WHEN** the configuration skill or a first start runs and nothing is configured
 - **THEN** the harness offers GSD for execution and OpenSpec for requirements
 - **AND** it uses them only after the person confirms
 
@@ -20,7 +20,7 @@ Source: owner decision 2026-11-26
 
 #### Scenario: An unattended run with no confirmation
 - **WHEN** an unattended run starts and no confirmation exists at the user level or the project level
-- **THEN** the run stops and asks
+- **THEN** it stops and raises an attention notice
 - **AND** it never picks a flow or a requirements format silently
 
 #### Scenario: Another requirements format

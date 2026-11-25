@@ -73,7 +73,8 @@ Source: interview 2026-11-24 R27.8
 
 #### Scenario: Nothing is configured yet
 - **WHEN** a person runs the harness configuration skill and nothing is configured
-- **THEN** the skill offers the default of H-001 for one confirmation
+- **THEN** the skill recommends a flow the person already uses, if it finds one (H-069)
+- **AND** otherwise it offers the default of H-001 for one confirmation
 - **AND** it asks whether to save the confirmation in the user settings
 
 #### Scenario: Limit thresholds are offered

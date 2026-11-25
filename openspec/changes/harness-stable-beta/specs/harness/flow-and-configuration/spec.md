@@ -176,7 +176,7 @@ Source: interview 2026-11-24 R17.1, R17.2, R17.3
 - **THEN** the harness runs by the one that is selected, and ignores the other
 
 ### Requirement: H-071 A local file selects the config to use
-A local file on each machine SHALL select which committed config the harness uses. Two machines that clone the same repo MUST be able to do a short harness setup and then reuse the same committed workflow. Whether the flow is chosen per project or per person is set in design.md S8-16b.
+A local file on each machine SHALL select which committed config the harness uses, or record that the confirmed default is used. Two machines that clone the same repo MUST be able to do a short harness setup and then reuse the same committed workflow. Whether the flow is chosen per project or per person is set in design.md S8-16b.
 
 Source: interview 2026-11-24 R17.4; S8-16b
 Decided: design.md D37-FLOW-5 (where the local file lives, that it is not committed, and what remote config means)
@@ -196,7 +196,7 @@ Decided: design.md D37-FLOW-5 (where the local file lives, that it is not commit
 - **AND** the repository's shared ignore file is unchanged
 
 ### Requirement: H-072 A missing confirmation stops the harness and asks once
-With no confirmed config for the project on this machine, the harness SHALL stop development and ask once. A committed config SHALL need the person's yes on this machine. With no config anywhere, the harness SHALL offer the default of H-001. A saved user default SHALL count only when the repo holds no config. An unattended run SHALL stop with an attention notice and MUST NOT pick silently.
+With no confirmed config for the project on this machine, the harness SHALL stop development and ask once. A committed config SHALL need the person's yes on this machine. With no config anywhere, the harness SHALL offer the default of H-001. A saved user default SHALL count only when the repo holds no config. An unattended run SHALL stop and raise an attention notice, and MUST NOT pick silently.
 
 Source: interview 2026-11-24 R17.9; owner decision 2026-11-26
 Decided: design.md D37-FLOW-4
@@ -213,7 +213,7 @@ Decided: design.md D37-FLOW-4
 
 #### Scenario: Nothing is configured anywhere
 - **WHEN** the harness starts with no local selection, the repo holds no config, and the user settings hold no confirmed default
-- **THEN** the harness stops and offers the default: the GSD flow with OpenSpec
+- **THEN** the harness stops, offers the default (the GSD flow with OpenSpec) and names the configuration skill, which recommends a flow the person already uses (H-069)
 - **AND** on yes, it writes the local file that records the confirmation, and asks whether to save the confirmation in the user settings
 - **AND** the person may pick another flow or requirements format through the configuration skill instead
 

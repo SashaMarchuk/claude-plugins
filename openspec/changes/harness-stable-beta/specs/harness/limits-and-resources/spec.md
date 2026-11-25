@@ -193,17 +193,16 @@ Source: interview 2026-11-24 R23.7; D29; owner decision 2026-11-26
 - **THEN** that project's runs keep the reserve, and other projects are not affected
 
 ### Requirement: H-113 The limit banner in the terminal is recognised
-The harness MUST recognise the subscription-limit banner that the coding tool shows in a session's terminal, and this SHALL be validated in the final product check. If that is not possible before release, a prepared deferred test task is left in the build tasks (tasks.md), not the released plugin, and the owner starts it.
-OPEN: see design.md OPEN-LIMITS-3
-Source: interview 2026-11-24 R27.4; D35
+The harness MUST recognise the subscription-limit banner that the coding tool shows in a session's terminal, and this SHALL be validated in the final product check. If that is not possible before release, a prepared deferred test task is left in the build tasks (tasks.md), not the released plugin. The build session MAY start that test itself when the build account comes close to a real limit.
+Source: interview 2026-11-24 R27.4; D35; owner decision 2026-11-26
 
 #### Scenario: The builder plans around current limits
 - **WHEN** the build is planned
-- **THEN** the owner instructs the builder to plan around the current limits so the banner test can happen
+- **THEN** the builder plans around the current limits so the banner test can happen
 
-#### Scenario: An approaching limit prompts the test
-- **WHEN** an account approaches its limit while the deferred test task is still open
-- **THEN** that prompts the owner to start the banner test
+#### Scenario: An approaching limit starts the test
+- **WHEN** the build account comes close to a real limit while the deferred test task is still open
+- **THEN** the build session starts the banner test itself, and no owner start is needed
 
 #### Scenario: A session shows the limit banner
 - **WHEN** a session's terminal shows the subscription-limit banner
@@ -211,7 +210,7 @@ Source: interview 2026-11-24 R27.4; D35
 
 #### Scenario: The banner cannot be validated before release
 - **WHEN** no account reaches a limit during the final product check
-- **THEN** banner recognition is recorded as not yet validated, a prepared deferred test task is left in the build tasks, and only the owner starts it
+- **THEN** banner recognition is recorded as not yet validated, and a prepared deferred test task is left in the build tasks
 
 ### Requirement: H-114 A hit limit waits for reset and the run continues
 When a session stops because its account hit a subscription limit, the harness SHALL wait until that limit resets and then continue the work. This is existing behaviour that stays; it was decided before the interview and was not restated in it. The wait and resume mechanism is an agent decision (design.md D28c).

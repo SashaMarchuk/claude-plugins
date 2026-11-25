@@ -30,7 +30,7 @@ Source: interview 2026-11-24 R21.2; D26a. S8-21 only rules out a free-memory che
 
 ### Requirement: H-106 A confirmed out-of-memory stop lowers the cap by one
 When a container stops because the machine ran out of memory, and that cause is confirmed, the harness SHALL lower the worker cap by one automatically. When the cap is already 1, the harness SHALL keep the cap at 1 and restart the task. The harness MUST NOT lower the cap for a stop whose cause is not confirmed as lack of memory.
-Decided: design.md D37-LIMITS-1, D37-LIMITS-2, D37-LIMITS-4, D37-LIMITS-6
+Decided: design.md D37-LIMITS-1, D37-LIMITS-2, D37-LIMITS-4, D37-LIMITS-6, D37-FLOW-8
 Source: interview 2026-11-24 R21.3
 
 #### Scenario: Confirmed out-of-memory stop with a cap above one
@@ -56,6 +56,11 @@ Source: interview 2026-11-24 R21.3
 #### Scenario: The stopped task after the cap is lowered (design.md D37-LIMITS-4)
 - **WHEN** the worker cap is 3, three workers run, and one ticket's container stops with a confirmed lack of memory
 - **THEN** the cap becomes 2, the other two workers continue, and the stopped task restarts when a slot is free under the cap of 2
+
+#### Scenario: The project config holds a check command (design.md D37-FLOW-8)
+- **WHEN** the selected project config holds a non-empty command for the out-of-memory check
+- **THEN** the harness refuses to start and runs no command from that config
+- **AND** the message tells the person to move the command to the user config and to keep only its label in the project config
 
 ### Requirement: H-107 Per-stage and heavy-operation limits
 The harness SHALL support limits per stage, such as a browser or UI check, next to the overall worker cap, and one shared limit for heavy operations. The owner left the choice of heavy operations to the orchestrator or a recommended list; as an agent decision, a default list is fixed and stage and heavy limits default to 1 (design.md D26). The orchestrator MAY extend the list but MUST NOT raise a limit.

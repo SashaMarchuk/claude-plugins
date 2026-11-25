@@ -199,6 +199,7 @@ Decided: design.md D37-FLOW-4 (the hard stop is an agent decision)
 - **WHEN** the harness starts with no local selection and the repo holds a config
 - **THEN** the harness stops and asks whether to use that config
 - **AND** on yes, it creates a local file that points to the config
+- **AND** the same yes writes the record of the approved profile, so the first start does not stop a second time (design.md D37-FLOW-8)
 
 #### Scenario: The committed config is declined
 - **WHEN** the person declines the committed config

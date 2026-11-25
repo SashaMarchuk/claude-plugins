@@ -157,7 +157,8 @@ ho_rt_probe() {
 ho_rt_home() {
   local h
   h=$(printf '%s\n' "$1" | awk -F '\t' '$1 == "HOME" { v = $2 } END { print v }')
-  printf '%s\n' "${h:-${HOME:-}}"
+  [ -n "$h" ] || h=${HOME-}
+  printf '%s\n' "$h"
 }
 
 # ho_rt_config_dir <profile> <account-pairs>: the tool's own folder, from the account's

@@ -269,7 +269,7 @@ for s in acme-plan acme-review; do
 done
 mkdir -p "$base/ah"
 jq -n --arg d "$base/ah" '{schemaVersion: 2, accounts: {roles: {worker: "work"},
-  list: {work: {env_command: ("printf \"HOME=" + $d + "\\n\"")}}}}' > "$user/config.json"
+  list: {work: {env_command: ("printf \"HOME=" + $d + "\\n\"")} } } }' > "$user/config.json"
 rc=0; out=$(env -u CLAUDE_CONFIG_DIR -u CODEX_HOME "$h" flow preflight sys 2>&1) || rc=$?
 assert_eq "D31: skills are looked up under the HOME the worker account sets (exit 69)" "69" "$rc"
 assert_contains "D31: the missing skill is named in the account HOME's config folder" "$out" "not installed in $base/ah/.claude"

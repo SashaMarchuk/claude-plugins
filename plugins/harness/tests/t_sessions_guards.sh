@@ -21,6 +21,10 @@ p="$base/prompt.md"
 refused r1 "Rebuild launcher wrong role (admin)" 65 --role admin --cwd "$proj/src" --prompt "$p"
 refused r2 "Rebuild launcher missing role" 64 --cwd "$proj/src" --prompt "$p"
 refused r3 "Rebuild launcher role with shell text" 65 --role 'worker;id' --cwd "$proj/src" --prompt "$p"
+# Review of wave 2 (B2): a role must equal one role of the list, not a part of the list text.
+refused r4 "Rebuild launcher two roles (worker validator)" 65 --role 'worker validator' --cwd "$proj/src" --prompt "$p"
+refused r5 "Rebuild launcher two roles (watcher worker)" 65 --role 'watcher worker' --cwd "$proj/src" --prompt "$p"
+refused r6 "Rebuild launcher role with a leading space" 65 --role ' worker' --cwd "$proj/src" --prompt "$p"
 
 # ---- wrong folder -------------------------------------------------------------------
 mkdir -p "$base/outside" "$proj/src/a\$(id)"

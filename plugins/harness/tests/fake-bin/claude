@@ -3,8 +3,10 @@
 # Opt-in hold (for session tests): with HO_FAKE_CLAUDE_HOLD=exit it stays alive until a line
 # "/exit" reaches its fake terminal input; with HO_FAKE_CLAUDE_HOLD=ignore it ignores input.
 # Either way it ends after HO_FAKE_CLAUDE_HOLD_MAX seconds (default 20).
-# HO_FAKE_CLAUDE_FAIL_MODEL=<m>: exit 1 at once when started with "--model <m>".
+# HO_FAKE_CLAUDE_FAIL_MODEL=<m>: exit 1 when started with "--model <m>", at once or after
+# HO_FAKE_CLAUDE_FAIL_AFTER seconds.
 # HO_FAKE_CLAUDE_SHOW_ENV=<NAME>: also log "env NAME=<value>".
+# HO_FAKE_CLAUDE_ON_EXIT=<shell command>: run just before it leaves on "/exit".
 set -euo pipefail
 if [ "${1:-}" = "--version" ]; then
   echo "0.0.0 (fake claude)"
@@ -22,7 +24,10 @@ fi
 if [ -n "${HO_FAKE_CLAUDE_FAIL_MODEL:-}" ]; then
   prev=""
   for a in "$@"; do
-    [ "$prev" = --model ] && [ "$a" = "$HO_FAKE_CLAUDE_FAIL_MODEL" ] && exit 1
+    if [ "$prev" = --model ] && [ "$a" = "$HO_FAKE_CLAUDE_FAIL_MODEL" ]; then
+      sleep "${HO_FAKE_CLAUDE_FAIL_AFTER:-0}"
+      exit 1
+    fi
     prev=$a
   done
 fi
@@ -35,6 +40,7 @@ case ${HO_FAKE_CLAUDE_HOLD:-} in
     end=$(( $(date +%s) + ${HO_FAKE_CLAUDE_HOLD_MAX:-20} ))
     while [ "$(date +%s)" -lt "$end" ]; do
       if [ "$HO_FAKE_CLAUDE_HOLD" = exit ] && [ -f "$in" ] && grep -qx '/exit' "$in"; then
+        [ -z "${HO_FAKE_CLAUDE_ON_EXIT:-}" ] || sh -c "$HO_FAKE_CLAUDE_ON_EXIT"
         exit 0
       fi
       sleep 0.1

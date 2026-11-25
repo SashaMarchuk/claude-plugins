@@ -41,10 +41,12 @@ ho_session_name_ok() {
   [ "${#1}" -le 40 ] || { echo "harness: session name is longer than 40 characters" >&2; return 65; }
 }
 
+# The role must equal one role of the list; "worker validator" is no role.
 ho_session_role_ok() {
-  case " $HO_SESSION_ROLES " in
-    *" ${1-} "*) [ -n "${1-}" ] && return 0 ;;
-  esac
+  local r
+  for r in $HO_SESSION_ROLES; do
+    [ "${1-}" = "$r" ] && return 0
+  done
   printf 'harness: unknown role %s (roles: %s)\n' "${1-}" "$HO_SESSION_ROLES" >&2
   return 65
 }
@@ -206,18 +208,29 @@ ho_session_pidfile_pid() {
   return 0
 }
 
-# ho_session_live_pid <record>: the exact live process of the session, or nothing. The launcher's
-# PID file wins when it names a newer live process of the same run and session (model fallback).
-ho_session_live_pid() {
+# ho_session_current_pid <record>: the exact live process of the session, or nothing; reads
+# only. The launcher's PID file wins when it names a newer live process of the same run and
+# session (model fallback).
+ho_session_current_pid() {
   local rec=$1 sid pid fpid
   sid=$(jq -r '.session_id // ""' "$rec")
   pid=$(jq -r '.pid // ""' "$rec")
   fpid=$(ho_session_pidfile_pid "$(jq -r '.pid_file // ""' "$rec")" "$sid")
   if [ -n "$fpid" ] && [ "$fpid" != "$pid" ] && ho_session_identity "$fpid" "$sid"; then
-    ho_session_set "$rec" '.pid = ($p | tonumber)' --arg p "$fpid" || return 1
     pid=$fpid
   fi
   ho_session_identity "$pid" "$sid" && printf '%s\n' "$pid"
+  return 0
+}
+
+# ho_session_live_pid <record>: as ho_session_current_pid, and the record is brought up to date.
+ho_session_live_pid() {
+  local rec=$1 pid
+  pid=$(ho_session_current_pid "$rec")
+  if [ -n "$pid" ] && [ "$pid" != "$(jq -r '.pid // ""' "$rec")" ]; then
+    ho_session_set "$rec" '.pid = ($p | tonumber)' --arg p "$pid" || return 1
+  fi
+  [ -z "$pid" ] || printf '%s\n' "$pid"
   return 0
 }
 
@@ -407,7 +420,7 @@ ho_session_launch() {
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"
 
   local handle rc=0
-  handle=$(ho_term_open "$group" "$title" "$launcher") || rc=$?
+  handle=$(ho_term_open "$group" "$title" "$launcher" "$sid") || rc=$?
   if [ "$rc" -ne 0 ]; then
     ho_session_set "$rec" '.status = "launch-failed"' || rm -f "$rec"
     ho_ledger_append session-launch-failed name "$name" reason "terminal did not open"
@@ -489,10 +502,14 @@ ho_session_close() {
   HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec")
   ho_ledger_append session-close-request name "$name" session_id "$sid" pid "$pid"
   local rc=0
-  ho_term_send "$handle" "$exitcmd" || rc=$?
+  ho_term_send "$handle" "$sid" "$exitcmd" || rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -f "$closing"
-    ho_ledger_append session-close-failed name "$name" reason "exit command not delivered"
+    if [ "$rc" -eq 66 ]; then
+      ho_ledger_append session-close-failed name "$name" reason "terminal $handle is not this session's; nothing typed"
+    else
+      ho_ledger_append session-close-failed name "$name" reason "exit command not delivered"
+    fi
     printf 'harness: could not reach the terminal of session %s; left open\n' "$name" >&2
     return 70
   fi
@@ -508,24 +525,35 @@ ho_session_close() {
     sleep 0.2
   done
   # The session process has ended. If a new process of the same session appeared anyway, the
-  # terminal is left alone. Otherwise its tab or pane is closed (it may have closed by itself).
+  # terminal is left alone. Otherwise its tab or pane is closed (it may have closed by itself),
+  # but only while it still carries this session's tag: its handle may name another session by
+  # now (H-103, S8-27). A skipped close is recorded with its reason.
   if [ -n "$(ho_session_live_pid "$rec")" ]; then
     ho_ledger_append session-close-timeout name "$name" session_id "$sid" reason "a new process of the session is running"
     printf 'harness: session %s started a new process during the close; left open\n' "$name" >&2
     return 1
   fi
-  ho_term_close "$handle" 2>/dev/null || true
+  rc=0
+  ho_term_close "$handle" "$sid" 2>/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    ho_ledger_append session-close-terminal-skipped name "$name" session_id "$sid" handle "$handle" \
+      reason "$([ "$rc" -eq 66 ] && echo "the handle is gone or names another session" || echo "terminal call failed (exit $rc)")"
+  fi
   ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "exited"' --arg ts "$(ho_now)" || return 1
   ho_ledger_append session-close name "$name" session_id "$sid" result exited
   printf 'session %s closed\n' "$name"
 }
 
+# For a running session, list shows the process that runs now: after a model fallback that is
+# the newer process the launcher reported, and the record is brought up to date.
 ho_session_list() {
-  local f line
+  local f line cur
   printf 'NAME\tROLE\tSTATUS\tPID\tSESSION\tHANDLE\n'
   for f in "$HO_RUN_DIR"/sessions/*.json; do
     [ -f "$f" ] || continue
-    line=$(jq -r '[.name, .role, .status, (.pid // "-" | tostring), .session_id, (.handle // "-")] | @tsv' "$f" 2>/dev/null || true)
+    cur=""
+    [ "$(jq -r '.status // ""' "$f" 2>/dev/null)" = running ] && cur=$(ho_session_live_pid "$f" 2>/dev/null)
+    line=$(jq -r --arg cur "$cur" '[.name, .role, .status, (if $cur != "" then $cur else (.pid // "-" | tostring) end), .session_id, (.handle // "-")] | @tsv' "$f" 2>/dev/null || true)
     [ -n "$line" ] || line="$(basename "$f" .json)	-	unreadable"
     # A launcher that could not start its session leaves a .failed note.
     [ -f "${f%.json}.failed" ] && line="$line	(start failed: $(head -n 1 "${f%.json}.failed"))"

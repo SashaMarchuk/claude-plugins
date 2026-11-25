@@ -6,6 +6,24 @@ set -euo pipefail
 # The harness pins its own server; anything else (the user's default server) is refused here.
 [ "${1:-}" = -L ] && [ "${2:-}" = ho-harness ] || exit 2
 shift 2
+# ft_fmt <pane> <format>: expand the few pane formats the backend uses; a missing pane
+# expands to empty values (as real tmux does for if-shell -F).
+ft_fmt() {
+  local h=$1 out=$2 f ses="" pid="" tag=""
+  f=$(ft_file "$h")
+  if ft_known "$h"; then
+    ses=$(cat "$f.session")
+    pid=$(cat "$f.pid")
+    tag=$(cat "$f.tag" 2>/dev/null || true)
+  else
+    h=""
+  fi
+  out=${out//'#{pane_id}'/$h}
+  out=${out//'#{session_name}'/$ses}
+  out=${out//'#{pane_pid}'/$pid}
+  out=${out//'#{@ho_session}'/$tag}
+  printf '%s\n' "$out"
+}
 op=${1:-}
 [ $# -gt 0 ] && shift
 case $op in
@@ -27,7 +45,8 @@ case $op in
         *) cmd=$1; shift ;;
       esac
     done
-    [ "$fmt" = '#{pane_id}' ] && [ -n "$cmd" ] && [ -n "$ses" ] || exit 2
+    case $fmt in '#{pane_id}' | '#{pane_id} #{pane_pid}') ;; *) exit 2 ;; esac
+    [ -n "$cmd" ] && [ -n "$ses" ] || exit 2
     if [ "$op" = new-session ]; then
       printf '%s\n' "$ses" >> "$ft_dir/sessions"
     else
@@ -37,7 +56,7 @@ case $op in
     printf '%s\n' "$ses" > "$(ft_file "$h").session"
     ft_log "tmux $op $h"
     ft_start "$h" "$cmd"
-    printf '%s\n' "$h"
+    ft_fmt "$h" "$fmt"
     ;;
   send-keys)
     [ "${1:-}" = -t ] || exit 2
@@ -56,9 +75,32 @@ case $op in
     fi
     ;;
   display-message)
-    [ "${1:-}" = -p ] && [ "${2:-}" = -t ] && [ "${4:-}" = '#{session_name}' ] || exit 2
+    [ "${1:-}" = -p ] || exit 2
+    if [ $# -eq 2 ]; then printf '%s\n' "$2"; exit 0; fi
+    [ "${2:-}" = -t ] && [ $# -eq 4 ] || exit 2
     ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
-    cat "$(ft_file "$3").session"
+    ft_fmt "$3" "$4"
+    ;;
+  set-option)
+    [ "${1:-}" = -p ] && [ "${2:-}" = -t ] && [ "${4:-}" = @ho_session ] && [ $# -eq 5 ] || exit 2
+    ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
+    [ -z "${HO_FAKE_TMUX_NO_TAG:-}" ] || { echo "invalid option: -p" >&2; exit 1; }
+    ft_log "tmux tag $3 $5"
+    printf '%s\n' "$5" > "$(ft_file "$3").tag"
+    ;;
+  if-shell)
+    # if-shell -F -t <pane> '#{==:<format>,<expected>}' <command> <else-command>
+    [ "${1:-}" = -F ] && [ "${2:-}" = -t ] && [ $# -eq 6 ] || exit 2
+    h=$3 cond=$4
+    case $cond in '#{==:'*'}') ;; *) exit 2 ;; esac
+    cond=${cond#'#{==:'}
+    cond=${cond%'}'}
+    want=${cond##*,}
+    have=$(ft_fmt "$h" "${cond%,*}")
+    if [ "$have" = "$want" ]; then pick=$5; else pick=$6; fi
+    # The commands come from the backend with checked values; split them like tmux does.
+    eval "set -- $pick"
+    exec "$0" -L ho-harness "$@"
     ;;
   capture-pane)
     [ "${1:-}" = -p ] && [ "${2:-}" = -t ] || exit 2

@@ -14,7 +14,9 @@
 # pass over the tokens of the template: each value is inserted literally and never scanned
 # again, so a value may quote placeholders (field note D3). A value that is not valid UTF-8
 # is refused (exit 65), never changed. Only the names in HO_FLOW_MULTILINE_TOKENS may hold
-# line breaks; any other value with a byte below 0x20 other than tab is refused (exit 65).
+# line breaks; any other value is one line and is refused (exit 65) when it holds a byte
+# below 0x20 other than tab, DEL, a Unicode line or paragraph separator (U+0085, U+2028,
+# U+2029) or a bidi control (U+202A-U+202E, U+2066-U+2069). TICKET_ID is a number.
 # A template token with no value, or an empty one, fails the render and nothing is
 # printed. Values reach jq through files, never as one big argument.
 #
@@ -168,12 +170,19 @@ ho_flow_render() {
         fi
         case " $HO_FLOW_MULTILINE_TOKENS " in
           *" $name "*) ;;
-          *) # One line: no line break, CR or other byte below 0x20; tab is allowed.
-            if [ "$(LC_ALL=C tr -d '\011\040-\377' < "$tmpd/$name" | wc -c)" -ne 0 ]; then
-              printf 'harness: the value of %s must be one line, with no control characters\n' "$name" >&2
+          *) # One line: no line break, CR, other byte below 0x20 or DEL; tab is allowed. No
+            # character that some readers take as a line break, and no bidi control.
+            if [ "$(LC_ALL=C tr -d '\011\040-\176\200-\377' < "$tmpd/$name" | wc -c)" -ne 0 ] ||
+              jq -Rse 'test("[\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069]")' "$tmpd/$name" >/dev/null 2>&1; then
+              printf 'harness: the value of %s must be one line, with no control, line separator or bidi characters\n' "$name" >&2
               exit "$HO_EXIT_DATA"
             fi ;;
         esac
+        if [ "$name" = TICKET_ID ] && [ -s "$tmpd/$name" ]; then
+          case $(cat "$tmpd/$name") in
+            *[!0-9]* | ??????????*) printf 'harness: TICKET_ID must be a ticket number (digits only, at most 9)\n' >&2; exit "$HO_EXIT_DATA" ;;
+          esac
+        fi
         shift 3
         ;;
       *) ho_flow_usage; exit "$HO_EXIT_USAGE" ;;

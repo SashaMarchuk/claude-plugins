@@ -16,6 +16,19 @@ assert_eq "H-103: a similar session of the same run keeps running" "yes" "$(aliv
 assert_eq "H-103: the similar session's record is untouched" "running" "$(rec c2 .status)"
 assert_contains "Rebuild graceful close: the ledger records the close" "$(cat "$run/ledger.jsonl")" '"kind":"session-close"'
 assert_exit "Rebuild graceful close: closing a closed session again is a no-op" 0 "$h" session "$run" close c1
+assert_contains "Rebuild graceful close: the closed session's own pane is closed" "$(calls)" "tmux close $h1"
+
+# ---- H-103, S8-27 (review of wave 2, B1): the pane ID names another session by now -------
+# As the session leaves, the tmux server restarts and another session of this run gets the
+# same pane ID. The fake acts this out by giving the pane another session's tag.
+HO_FAKE_CLAUDE_ON_EXIT='echo 33333333-3333-4333-8333-333333333333 > "$HO_FAKE_TERM_DIR/$(printf %s "$HO_FAKE_TERM_HANDLE" | tr -c A-Za-z0-9- _).tag"' \
+  launch c4 >/dev/null
+h4=$(rec c4 .handle) p4=$(rec c4 .pid)
+assert_exit "H-103: close of a session whose pane ID was taken over succeeds" 0 "$h" session "$run" close c4
+assert_eq "H-103: the session's own process has ended" "yes" "$(wait_gone "$p4" && echo yes || echo no)"
+assert_eq "H-103: the pane that now belongs to another session is not closed" "" "$(calls | grep -F "tmux close $h4" || true)"
+assert_contains "H-103: the skipped pane close is recorded with its reason" "$(grep session-close-terminal-skipped "$run/ledger.jsonl" || true)" "names another session"
+assert_eq "H-103: the session is still marked closed" "closed" "$(rec c4 .status)"
 
 # ---- close uses the backend the session was launched with -----------------------------------
 launch c3 >/dev/null

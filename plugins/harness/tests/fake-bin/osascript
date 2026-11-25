@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Fake osascript for the iTerm2 backend tests. It reads the AppleScript the backend sends
 # (from -e or stdin) and acts out the few shapes that backend uses; any other script exits 2.
-# See fake-term-lib.sh for the state it keeps.
+# See fake-term-lib.sh for the state it keeps. Per session it also keeps <h>.window (its
+# window) and <h>.var.<name> (its session variables, such as user.ho_run).
+# HO_FAKE_ITERM_NO_VARS=1 acts out an iTerm2 that cannot set session variables.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/fake-term-lib.sh"
 if [ "${1:-}" = -e ]; then script=$2; else script=$(cat); fi
@@ -18,21 +20,59 @@ case $script in
     winid=$(quoted_after '(id of x as string) is ')
     cmd=$(quoted_after 'command ')
     [ -n "$cmd" ] || exit 2
+    w=""
     if [ -n "$winid" ] && grep -qxF -- "$winid" "$ft_dir/windows" 2>/dev/null; then
-      w=$winid
-    else
+      case $script in
+        *'if r0 is "'*)
+          # Reuse the window only while it holds a live session whose user.ho_run matches.
+          run=$(quoted_after 'if r0 is ')
+          for wf in "$ft_dir"/*.window; do
+            [ -f "$wf" ] || continue
+            [ "$(cat "$wf")" = "$winid" ] || continue
+            f=${wf%.window}
+            [ -f "$f.pid" ] && [ ! -f "$f.closed" ] || continue
+            [ "$(cat "$f.var.user.ho_run" 2>/dev/null || true)" = "$run" ] && w=$winid
+          done
+          ;;
+        *) w=$winid ;;
+      esac
+    fi
+    if [ -z "$w" ]; then
       w="W$(ft_next)"
       printf '%s\n' "$w" >> "$ft_dir/windows"
     fi
     h="FAKE-ITERM-$(ft_next)"
-    ft_log "osascript open $h"
+    ft_log "osascript open $h in $w"
     ft_start "$h" "$cmd"
+    f=$(ft_file "$h")
+    printf '%s\n' "$w" > "$f.window"
+    case $script in
+      *'set variable named "'*)
+        if [ -n "${HO_FAKE_ITERM_NO_VARS:-}" ]; then
+          ft_log "osascript close $h"
+          : > "$f.closed"
+          echo notag
+          exit 0
+        fi
+        for v in user.ho_run user.ho_session; do
+          val=$(quoted_after "set variable named \"$v\" to ")
+          [ -z "$val" ] || { printf '%s\n' "$val" > "$f.var.$v"; ft_log "osascript tag $h $v $val"; }
+        done
+        ;;
+    esac
     printf '%s %s\n' "$w" "$h"
     ;;
   *'(unique id of s) is "'*)
     h=$(quoted_after '(unique id of s) is ')
     if ! ft_known "$h"; then echo notfound; exit 0; fi
     f=$(ft_file "$h")
+    case $script in
+      *'if ho_tag is not "'*)
+        want=$(quoted_after 'if ho_tag is not ')
+        have="$(cat "$f.var.user.ho_run" 2>/dev/null || true)/$(cat "$f.var.user.ho_session" 2>/dev/null || true)"
+        [ "$have" = "$want" ] || { echo notmine; exit 0; }
+        ;;
+    esac
     case $script in
       *'write text (ASCII character 27) newline NO'*) ft_log "osascript key $h Escape"; printf '<ESC>' >> "$f.in" ;;
       *'write text "" newline YES'*) ft_log "osascript key $h Enter"; printf '\n' >> "$f.in" ;;

@@ -74,6 +74,15 @@ assert_contains "Rebuild model chain: the first model is tried first" "$(grep -F
 assert_contains "Rebuild model chain: a start failure falls through to the next model" "$(grep -F "$(rec w6 .session_id)" "$HO_FAKE_CLAUDE_LOG" | tail -n 1)" "--model	m-good"
 w6pid=$(awk '{print $1}' "$run/sessions/w6.pid")
 assert_contains "S8-27: after a fallback the launcher reports the running process" "$(ps -o command= -p "$w6pid")" "m-good"
+# Codex review of #90 (P2): the first model passes the boot check, then fails within the
+# grace time; list shows the process that runs now, not the first one.
+HO_FAKE_CLAUDE_FAIL_MODEL=m-bad HO_FAKE_CLAUDE_FAIL_AFTER=2 launch w11 >/dev/null
+first=$(rec w11 .pid)
+i=0; now=$first
+while [ "$now" = "$first" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); now=$(awk '{print $1}' "$run/sessions/w11.pid"); done
+assert_eq "S8-27: after a late fallback the launcher reports a new process" "yes" "$([ "$now" != "$first" ] && alive "$now" && echo yes || echo no)"
+assert_contains "S8-27: session list shows the process that runs now" "$("$h" session "$run" list | grep '^w11	')" "	running	$now	"
+assert_eq "S8-27: after list the registry holds the process that runs now" "$now" "$(rec w11 .pid)"
 jq '.session.boot_timeout_seconds = 3' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 assert_exit "Rebuild model chain: a launch where every model fails to start reports it" 69 env HO_FAKE_CLAUDE_FAIL_MODEL=m-only "$h" session "$run" launch --role worker --name w10 --cwd "$proj/src" --prompt "$base/prompt.md" --model m-only
 assert_eq "Rebuild model chain: the failed launch is recorded as boot-failed" "boot-failed" "$(rec w10 .status)"

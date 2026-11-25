@@ -2,6 +2,7 @@
 
 ### Requirement: H-036 Each project selects an autonomy profile during setup
 Each project SHALL select its level of autonomy through a profile. During setup, the harness MUST ask the user what level of autonomy they want and store the answer as the project's profile.
+Decided: design.md D37-FLOW-8 (a changed profile never raises autonomy silently)
 Source: interview 2026-11-24 R1.1, R8.1, R8.3
 
 #### Scenario: Setup asks for the autonomy level
@@ -12,6 +13,15 @@ Source: interview 2026-11-24 R1.1, R8.1, R8.3
 #### Scenario: Two projects use different profiles
 - **WHEN** two projects have different autonomy profiles
 - **THEN** each project runs under its own profile
+
+#### Scenario: The committed profile now allows more than the person selected (design.md D37-FLOW-8)
+- **WHEN** a run starts and the selected committed profile raises a permission above the person's local record, for example a human gate became automatic or push became allowed
+- **THEN** the run stops at start and names the changed fields
+- **AND** it asks the person to select the profile again with the configuration skill, and no ticket work runs before that
+
+#### Scenario: The committed profile now allows less (design.md D37-FLOW-8)
+- **WHEN** a run starts and every change in the selected committed profile lowers a permission
+- **THEN** the run starts under the lower permissions and the local record is updated
 
 ### Requirement: H-037 Every step can be autonomous or a human gate
 Every step of the flow SHALL be configurable as autonomous or as a human gate. This includes whether a ticket may start without a human. The interview did not discuss whether the engine checks these settings. Per design.md S8-08a (agent decision on an unanswered point, under D37), the engine, not the prompt, MUST check the gate settings before it moves past a gated point.

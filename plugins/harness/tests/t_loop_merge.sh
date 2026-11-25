@@ -170,3 +170,28 @@ assert_eq "Field note C5: a checked-out branch moved by ref refuses the merge" 6
 git -C "$proj" update-ref "refs/heads/$(jq -r .branch "$run/integration.json")" "$e_tip"
 assert_eq "H-046: once the tip is back the merge goes through" 0 "$(merge_rc f)"
 assert_eq "H-046: every confirmed merge has its own ledger line" 3 "$(ledger_has merge-confirmed)"
+
+# ---- a ledger that cannot be written never reads as success (field note I3) -------------------
+lane g g.txt "from g"
+"$h" loop "$run" ready g --worktree "$PWD/w-g" >/dev/null
+chmod a-w "$run/ledger.jsonl"
+rc=$(merge_rc g)
+assert_eq "H-055: a refusal whose ledger line fails is not exit 0" "yes" "$([ "$rc" -ne 0 ] && echo yes || echo no)"
+verdict_path="$run/verdicts/g/$(git -C "$PWD/w-g" rev-parse HEAD).md"
+chmod u+w "$run/ledger.jsonl"; verdict g passed; chmod a-w "$run/ledger.jsonl"
+g_before=$(tip)
+rc=$(merge_rc g)
+assert_eq "H-046: a merge whose confirmed line cannot be written is not exit 0" "yes" "$([ "$rc" -ne 0 ] && echo yes || echo no)"
+assert_eq "H-046: without its ledger line the recorded tip does not move" "$g_before" "$(jq -r .tip "$run/integration.json")"
+chmod u+w "$run/ledger.jsonl"
+assert_eq "H-046: the unconfirmed merge refuses the next merge" 65 "$(merge_rc g)"
+
+# ---- status ----------------------------------------------------------------------------------
+st=$("$h" loop "$run" status)
+assert_contains "Rebuild loop status: names the integration tip" "$st" "at $g_before"
+assert_contains "Rebuild loop status: lists a confirmed merge" "$st" "merged a "
+
+# ---- a lock with no holder file does not block merges forever ----------------------------------
+git -C "$int" reset -q --hard "$g_before"
+mkdir "$run/merge.lock"; touch -t 202001010000 "$run/merge.lock"
+assert_eq "Rebuild loop lock: a stale lock with no holder is taken over" 69 "$(merge_rc a)"

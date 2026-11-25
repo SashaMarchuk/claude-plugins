@@ -172,6 +172,60 @@ ho_session_clean_path() {
   printf '%s\n' "$out"
 }
 
+# ho_session_project_roots: print the physical folders a runtime binary may not live in: the
+# project, each configured repos[].worktrees_dir, and every git worktree of the project
+# repository and of each configured repo (D37-FLOW-8, Codex security review of #90).
+ho_session_project_roots() {
+  local proj cfg d r
+  proj=$(cd "$HO_PROJECT_DIR" && pwd -P) || return 1
+  cfg="$HO_PROJECT_DIR/.harness/config.json"
+  printf '%s\n' "$proj"
+  {
+    jq -r '.repos[]? | objects | .worktrees_dir | strings' "$cfg" 2>/dev/null || true
+  } | while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    case $d in /*) ;; *) d="$proj/$d" ;; esac
+    (cd "$d" 2>/dev/null && pwd -P) || true
+  done
+  {
+    printf '%s\n' "$proj"
+    jq -r '.repos[]? | objects | .path | strings' "$cfg" 2>/dev/null || true
+  } | while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case $r in /*) ;; *) r="$proj/$r" ;; esac
+    { git -C "$r" worktree list --porcelain 2>/dev/null || true; } | sed -n 's/^worktree //p' | while IFS= read -r d; do
+      (cd "$d" 2>/dev/null && pwd -P) || true
+    done
+  done
+}
+
+# ho_session_runtime_path_ok <cmdpath>: refuse (65) a runtime binary that is, or links to, a
+# file inside the project, its worktrees folder or a worktree of the project repository.
+# Folders are compared as physical paths; every link on the way is checked.
+ho_session_runtime_path_ok() {
+  local f=$1 d t root roots n=0
+  roots=$(ho_session_project_roots) || { echo "harness: cannot read the project folder" >&2; return 65; }
+  while :; do
+    d=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P) || { printf 'harness: cannot resolve the runtime command path %s\n' "$f" >&2; return 65; }
+    while IFS= read -r root; do
+      [ -n "$root" ] || continue
+      case "$d/" in
+        "$root"/*)
+          printf 'harness: the runtime command resolves to %s, inside %s; a runtime binary from the project, its worktrees folder or a worktree is never run. Put the runtime first on PATH from a folder outside the project.\n' "$f" "$root" >&2
+          return 65
+          ;;
+      esac
+    done <<EOF_ROOTS
+$roots
+EOF_ROOTS
+    [ -L "$f" ] || return 0
+    n=$((n + 1))
+    [ "$n" -le 40 ] || { printf 'harness: the runtime command %s has too many links\n' "$1" >&2; return 65; }
+    t=$(readlink "$f") || return 65
+    case $t in /*) f=$t ;; *) f="$d/$t" ;; esac
+  done
+}
+
 ho_session_new_id() {
   local u
   if u=$(uuidgen 2>/dev/null); then
@@ -355,7 +409,17 @@ ho_session_launch() {
   fi
   local profile perm cmd cmdpath models acct acct_name="" acct_cmd=""
   profile=$(ho_runtime_profile) || return $?
-  perm=$(ho_cfg '.session.permissions' bypass)
+  # D37-FLOW-8: the permission mode is never read from the project config (interim, fail
+  # closed, until the local approval record of D37-FLOW-8 (b) exists).
+  perm=$(jq -r 'if (.session.permissions // null) == null or .session.permissions == "" then "" else "set" end' \
+    "$HO_PROJECT_DIR/.harness/config.json" 2>/dev/null) || perm=set
+  if [ -n "$perm" ]; then
+    printf 'harness: the project config %s sets session.permissions. A project config may not set the permission mode until the local approval record exists; move session.permissions to the user config %s\n' \
+      "$HO_PROJECT_DIR/.harness/config.json" "$(ho_user_config)" >&2
+    return 65
+  fi
+  perm=$(ho_cfg_user '.session.permissions' | jq -r 'if . == null then "" elif type == "string" then . else tojson end') || return 78
+  [ -n "$perm" ] || perm=bypass
   jq -e --arg p "$perm" '.permissions[$p] | type == "array"' "$profile" >/dev/null 2>&1 || {
     printf 'harness: session.permissions %s is not known to runtime %s\n' "$perm" "$(basename "$profile" .json)" >&2
     return 65
@@ -371,6 +435,7 @@ ho_session_launch() {
   cmd=$(jq -r .command "$profile")
   cmdpath=$(command -v "$cmd" 2>/dev/null || true)
   case $cmdpath in /*) ;; *) printf 'harness: the runtime command %s is not on PATH\n' "$cmd" >&2; return 65 ;; esac
+  ho_session_runtime_path_ok "$cmdpath" || return 65
   local path
   path=$(ho_session_clean_path)
   [ -n "$path" ] || { echo "harness: PATH has no usable absolute entry" >&2; return 65; }

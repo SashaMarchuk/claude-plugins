@@ -177,3 +177,10 @@ set_app terminal
 assert_exit "Drop list: the Terminal.app backend is refused" 65 ho_term_backend
 set_app other
 assert_exit "Rebuild terminal adapter: an unknown backend is refused" 65 ho_term_backend
+
+# Inside 'tell application "iTerm2"' the word "contents" compiles to iTerm2's session
+# property, so "contents of x" on a loop item fails with -1728 on the real app (PR #90,
+# real-app run). The fake cannot see this, so this check reads the AppleScript text:
+# outside the ho_flat handler, no iTerm2 script may use "contents of" or "repeat with x in".
+bad=$(awk '/^on ho_flat/,/^end ho_flat/ {next} /contents of|repeat with [a-z0-9_]+ in /' "$HO_PLUGIN_ROOT/lib/term.sh" | grep -v '^ *#' | grep -v '^-- ' || true)
+assert_eq "iTerm2 scripts: no 'contents of' or 'repeat with x in' inside the app tell" "" "$bad"

@@ -170,6 +170,9 @@ ho_term_iterm2_open() {
   # session is tagged through its unique ID, only while it carries no tag yet; if the tags
   # cannot be set, it is closed the same way.
   out=$(osascript <<OSA
+-- No "contents of" and no "repeat with x in" inside the iTerm2 tell: there "contents"
+-- compiles to the session property of iTerm2 and fails with -1728 on the real app.
+-- Loops inside the tell walk by index with "item i of".
 on ho_flat(xs)
   set out to {}
   repeat with x in xs
@@ -208,8 +211,9 @@ tell application "iTerm2"
     create window with default profile command "/bin/bash $launcher"
     set ws1 to (id of every window)
     set nws to {}
-    repeat with x in ws1
-      if ws0 does not contain (contents of x) then set end of nws to (contents of x)
+    repeat with i from 1 to (count of ws1)
+      set x to (item i of ws1)
+      if ws0 does not contain x then set end of nws to x
     end repeat
     if (count of nws) is not 1 then return "ambiguous " & (count of nws) & " new windows"
     set wid to (item 1 of nws)
@@ -226,8 +230,10 @@ tell application "iTerm2"
   end if
   set f0 to my ho_flat(us0)
   set fresh to {}
-  repeat with x in my ho_flat(us1)
-    if f0 does not contain (contents of x) then set end of fresh to (contents of x)
+  set f1 to my ho_flat(us1)
+  repeat with i from 1 to (count of f1)
+    set x to (item i of f1)
+    if f0 does not contain x then set end of fresh to x
   end repeat
   if (count of fresh) is not 1 then return "ambiguous " & (count of fresh) & " new sessions"
   set u to (item 1 of fresh)
@@ -235,10 +241,11 @@ tell application "iTerm2"
     if (unique ID of every session of (tab k of (first window whose id is wid))) contains u then
       tell (first session of (tab k of (first window whose id is wid)) whose unique ID is u)
         set clean to true
-        repeat with vn in {"user.ho_run", "user.ho_session", "user.ho_session_id"}
+        set vns to {"user.ho_run", "user.ho_session", "user.ho_session_id"}
+        repeat with i from 1 to (count of vns)
           set v to ""
           try
-            set v to (variable named (contents of vn))
+            set v to (variable named (item i of vns))
           end try
           if v is not missing value and v is not "" then set clean to false
         end repeat

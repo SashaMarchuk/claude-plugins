@@ -11,13 +11,16 @@ mkdir -p "$proj/.harness" "$proj/src" "$user"
 cat > "$proj/.harness/config.json" <<'JSON'
 {"schemaVersion": 2,
  "terminal": {"app": "tmux", "enter_delay_seconds": 0},
- "session": {"boot_timeout_seconds": 10, "close_timeout_seconds": 5, "boot_grace_seconds": 5, "fatal_hold_seconds": 0}}
+ "session": {"boot_timeout_seconds": 30, "close_timeout_seconds": 5, "boot_grace_seconds": 5, "fatal_hold_seconds": 0}}
 JSON
 cat > "$user/config.json" <<'JSON'
 {"schemaVersion": 2, "runtime": {"main": "claude-code"}}
 JSON
 export HO_PROJECT_DIR="$proj" HO_USER_DIR="$user"
-export HO_FAKE_TERM_DIR="$base/term" HO_FAKE_CLAUDE_LOG="$base/claude.log" HO_FAKE_CLAUDE_HOLD=exit
+# A slow or briefly sleeping machine must not end a held fake session before its check:
+# hold up to 10 min (cleanup stops every process by its exact PID anyway) and allow a
+# 30 s boot. Tests that need a boot failure set their own short timeout.
+export HO_FAKE_TERM_DIR="$base/term" HO_FAKE_CLAUDE_LOG="$base/claude.log" HO_FAKE_CLAUDE_HOLD=exit HO_FAKE_CLAUDE_HOLD_MAX=600
 run=$("$h" run new)
 printf 'do the work\n' > "$base/prompt.md"
 

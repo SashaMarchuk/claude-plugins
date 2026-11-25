@@ -6,15 +6,29 @@
 # finalize commit as the only completion signal.
 #
 #   <run>/integration.json            {branch, worktree, base, tip}; tip is the last confirmed tip
-#   <run>/lanes/<lane>.json           {lane, worktree, branch, sha}: the finalize commit
-#   <run>/verdicts/<lane>/<sha>.md    validator verdict for that exact commit
+#   <run>/lanes/<lane>.json           {lane, worktree, branch, sha, worker_session}: the finalize
+#                                     commit, and the session that called ready (null outside one)
+#   <run>/verdicts/<lane>/<sha>.json  {lane, sha, session_id, session_name, text}: the validator
+#                                     verdict for that exact commit, written only by `verdict`
 #   <run>/gates/<lane>-<sha>.log      output of the gate on the merged tree
 #
-# Exit codes: 65 refused before any merge, 69 the merge would change nothing, 70 the merge was
-# not confirmed (conflict or a failed git check), 72 the gate failed on the merged tree,
-# 75 the run is stopped. On 69, 72 and a failed merge or check (70) the integration branch is put
-# back at its old tip; when the branch moved while the gate ran (70) it is left for a person.
-# Requires lib/run.sh, lib/config.sh, lib/files.sh and ho_cfg_user from lib/sessions.sh.
+# Verdict author (H-055, D37-FLOW-8a): `verdict` runs inside a launched session. It takes the
+# session name and ID that the launcher exports and records the session ID with the verdict.
+# A merge accepts the verdict only when that session ID belongs to this run's registry with the
+# role validator and with no other role (a resumed worker keeps its session ID), and when it is
+# not the session that called ready for the lane. This guards against a worker or a committed
+# file passing as the validator. It does not guard against a same-user process that sets the
+# variables or edits the run folder by hand: D37-FLOW-8a puts that outside the beta's boundary.
+#
+# Exit codes: 64 usage, 65 refused before any merge, 69 the merge would change nothing, 70 the
+# merge was not confirmed (conflict or a failed git check) or the branch is left for a person,
+# 72 the gate failed on the merged tree, 75 the run is stopped, the merge was stopped by a signal
+# or another merge holds the lock, 78 config error. On 69, 72, 75 and a failed merge or check
+# (70) the integration branch is put back at its old tip, but only while it is still at the old
+# tip or at this merge's commit. When it moved to anything else, or the roll back fails, it is
+# left for a person (70) and the message never says "rolled back".
+# Requires lib/run.sh, lib/config.sh, lib/files.sh, lib/common.sh and ho_cfg_user from
+# lib/sessions.sh.
 
 HO_EXIT_NOOP=69
 HO_EXIT_UNCONFIRMED=70
@@ -86,11 +100,101 @@ ho_loop_ready() {
     *) ho_loop_err "lane $lane: the tip is not a finalize($lane): commit; not ready"; return 65 ;;
   esac
   wt=$(cd -P "$wt" && pwd -P)
-  mkdir -p "$HO_RUN_DIR/lanes" "$HO_RUN_DIR/verdicts/$lane"
-  jq -n --arg lane "$lane" --arg worktree "$wt" --arg branch "$branch" --arg sha "$sha" '$ARGS.named' \
+  mkdir -p "$HO_RUN_DIR/lanes"
+  jq -n --arg lane "$lane" --arg worktree "$wt" --arg branch "$branch" --arg sha "$sha" --arg ws "${HO_SESSION_ID-}" \
+    '{lane: $lane, worktree: $worktree, branch: $branch, sha: $sha, worker_session: (if $ws == "" then null else $ws end)}' \
     | ho_atomic_write "$HO_RUN_DIR/lanes/$lane.json" || return 1
   ho_ledger_append lane-ready lane "$lane" sha "$sha"
-  printf '%s\n' "$HO_RUN_DIR/verdicts/$lane/$sha.md"
+  printf '%s\n' "$HO_RUN_DIR/verdicts/$lane/$sha.json"
+}
+
+# ho_loop_author_ok <session-id> <lane worker session>: prints why not and returns 1 unless the
+# session is a validator of this run and nothing else, and not the lane's worker. The role comes
+# from the registry, never from the caller.
+ho_loop_author_ok() {
+  local sid=$1 worker=$2 sdir="$HO_RUN_DIR/sessions" f roles
+  [ -n "$sid" ] || { echo "the verdict names no author session"; return 1; }
+  [ -d "$sdir" ] && [ ! -L "$sdir" ] || { echo "run $HO_RUN_ID has no session registry"; return 1; }
+  roles=$(for f in "$sdir"/*.json; do
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
+      jq -r --arg sid "$sid" --arg run "$HO_RUN_ID" \
+        'select(type == "object" and .session_id == $sid) | if .run == $run then (.role | tostring) else "of another run" end' "$f" 2>/dev/null || true
+    done | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ $//')
+  [ -n "$roles" ] || { echo "session $sid is not in the session registry of run $HO_RUN_ID"; return 1; }
+  [ "$roles" = validator ] || { echo "session $sid has the role(s) $roles in run $HO_RUN_ID; only a session that is a validator and nothing else counts"; return 1; }
+  [ "$sid" != "$worker" ] || { echo "session $sid is the lane's own worker"; return 1; }
+}
+
+# ho_loop_vdir_ok <lane>: the verdicts folder and the lane's folder are no links.
+ho_loop_vdir_ok() {
+  local d
+  for d in "$HO_RUN_DIR/verdicts" "$HO_RUN_DIR/verdicts/$1"; do
+    [ ! -L "$d" ] || { echo "$d is a link; a verdict is never read or written through a link"; return 1; }
+  done
+}
+
+# ho_loop_verdict_check <lane> <sha> <lane worker session>: 0 when the verdict allows a merge;
+# then HO_LOOP_VSNAP holds the record exactly as read (one snapshot). Otherwise 1, and
+# HO_LOOP_VWHY says why.
+ho_loop_verdict_check() {
+  local lane=$1 sha=$2 worker=$3 vf="$HO_RUN_DIR/verdicts/$1/$2.json" snap why first sid
+  HO_LOOP_VSNAP=""
+  HO_LOOP_VWHY=""
+  why=$(ho_loop_vdir_ok "$lane") || { HO_LOOP_VWHY=$why; return 1; }
+  if [ -L "$vf" ] || [ ! -f "$vf" ]; then HO_LOOP_VWHY="no verdict file for $sha (a link does not count)"; return 1; fi
+  snap=$(cat "$vf" 2>/dev/null) || { HO_LOOP_VWHY="the verdict for $sha cannot be read"; return 1; }
+  why=$(printf '%s' "$snap" | jq -rs --arg lane "$lane" --arg sha "$sha" '
+    if length != 1 or (.[0] | type) != "object" then "the verdict record is not one JSON object"
+    else .[0] | if .lane != $lane or .sha != $sha then "the verdict record is not for lane \($lane) at \($sha)"
+      elif (.text | type) != "string" then "the verdict record holds no text"
+      elif (.session_id | type) != "string" then "the verdict names no author session; only the validator verdict counts, recorded with harness loop verdict"
+      else "" end end' 2>/dev/null) || why="the verdict record is not readable JSON"
+  [ -z "$why" ] || { HO_LOOP_VWHY=$why; return 1; }
+  sid=$(printf '%s' "$snap" | jq -r .session_id)
+  why=$(ho_loop_author_ok "$sid" "$worker") || { HO_LOOP_VWHY="the verdict for $sha is not from the independent validator: $why"; return 1; }
+  first=$(printf '%s' "$snap" | jq -r '.text | split("\n")[0]')
+  [ "$first" = passed ] || { HO_LOOP_VWHY="the verdict for $sha is not \"passed\" (first line: ${first:0:60})"; return 1; }
+  HO_LOOP_VSNAP=$snap
+}
+
+# ---- verdict <lane> --sha S: the validator records its verdict (text on stdin) ----------------
+ho_loop_verdict() {
+  local lane=${1-} sha lj lsha worker sid name rec why text f
+  shift || true
+  [ "${1-}" = --sha ] && [ -n "${2-}" ] && [ $# -eq 2 ] || { ho_loop_usage; return 64; }
+  sha=$2
+  ho_loop_lane_ok "$lane" || return 65
+  lj="$HO_RUN_DIR/lanes/$lane.json"
+  [ -f "$lj" ] || { ho_loop_err "lane $lane is not ready (no finalize commit recorded)"; return 65; }
+  lsha=$(ho_loop_field "$lj" sha) || { ho_loop_err "lane record of $lane is unreadable"; return 65; }
+  [ "$sha" = "$lsha" ] || { ho_loop_err "lane $lane is recorded at $lsha, not $sha; a verdict covers only the recorded commit"; return 65; }
+  sid=${HO_SESSION_ID-}
+  name=${HO_SESSION_NAME-}
+  if [ -z "$sid" ] || [ -z "$name" ]; then
+    ho_loop_err "a verdict is recorded only from inside the validator's session (HO_SESSION_NAME and HO_SESSION_ID are not set)"
+    return 65
+  fi
+  rec="$HO_RUN_DIR/sessions/$name.json"
+  if ! ho_session_name_ok "$name" 2>/dev/null || [ -L "$rec" ] || [ ! -f "$rec" ] \
+      || [ "$(jq -r '.session_id // ""' "$rec" 2>/dev/null)" != "$sid" ]; then
+    ho_loop_err "session $name ($sid) is not a session of run $HO_RUN_ID"
+    return 65
+  fi
+  worker=$(jq -r '.worker_session // ""' "$lj" 2>/dev/null) || worker=""
+  why=$(ho_loop_author_ok "$sid" "$worker") || { ho_loop_err "verdict refused: $why"; return 65; }
+  text=$(cat; printf x) || { ho_loop_err "cannot read the verdict text"; return 65; }
+  text=${text%x}
+  [ -n "$text" ] || { ho_loop_err "the verdict text is empty"; return 65; }
+  why=$(ho_loop_vdir_ok "$lane") || { ho_loop_err "$why"; return 65; }
+  mkdir -p "$HO_RUN_DIR/verdicts/$lane" || return 1
+  why=$(ho_loop_vdir_ok "$lane") || { ho_loop_err "$why"; return 65; }
+  f="$HO_RUN_DIR/verdicts/$lane/$sha.json"
+  [ ! -L "$f" ] || { ho_loop_err "$f is a link; nothing is written through it"; return 65; }
+  jq -n --arg lane "$lane" --arg sha "$sha" --arg sid "$sid" --arg name "$name" --arg text "$text" --arg ts "$(ho_now)" \
+    '{schemaVersion: 2, lane: $lane, sha: $sha, session_id: $sid, session_name: $name, text: $text, written: $ts}' \
+    | ho_atomic_write "$f" || return 1
+  ho_ledger_append verdict-recorded lane "$lane" sha "$sha" session_id "$sid" verdict "$(printf '%s' "$text" | head -n 1 | cut -c1-60)"
+  printf 'verdict for lane %s at %s recorded from session %s\n' "$lane" "$sha" "$name"
 }
 
 # ho_loop_gate_cmd: the gate command (D37-FLOW-8 (a): from the user config only; the
@@ -121,10 +225,20 @@ ho_loop_refuse() { # <code> <lane> <reason>
   return "$1"
 }
 
-# ho_loop_rollback <worktree> <branch> <old>: put the checked-out integration branch back.
-# reset --hard inside its own worktree, never update-ref (field note C5).
+# ho_loop_rollback <worktree> <branch> <old> <merge>: put the checked-out integration branch
+# back to <old>, but only while it is at <old> or at this merge's commit <merge>, so a commit
+# made on it meanwhile is never thrown away. reset --hard inside its own worktree, never
+# update-ref (field note C5). Returns 0 put back, 1 the roll back failed, 2 left alone because
+# the branch moved (HO_LOOP_MOVED_TO says where).
 ho_loop_rollback() {
-  local wt=$1 branch=$2 old=$3
+  local wt=$1 branch=$2 old=$3 mc=$4 cur
+  cur=$(ho_loop_ref "$wt" "refs/heads/$branch") || cur=""
+  HO_LOOP_MOVED_TO=${cur:-an unreadable tip}
+  if { [ "$cur" != "$old" ] && [ "$cur" != "$mc" ]; } \
+      || [ "$(git -C "$wt" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$branch" ]; then
+    ho_ledger_append merge-rollback-skipped branch "$branch" tip "$HO_LOOP_MOVED_TO" expected "$mc" || true
+    return 2
+  fi
   if git -C "$wt" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
     git -C "$wt" merge --abort >/dev/null 2>&1 || true
   fi
@@ -132,32 +246,41 @@ ho_loop_rollback() {
   if [ "$(ho_loop_ref "$wt" "refs/heads/$branch")" = "$old" ] && ho_loop_clean "$wt"; then
     return 0
   fi
-  ho_ledger_append merge-rollback-failed branch "$branch" tip "$old"
-  ho_loop_err "could not put $branch back to $old in $wt; fix it by hand before the next merge"
+  ho_ledger_append merge-rollback-failed branch "$branch" tip "$old" || true
   return 1
+}
+
+# ho_loop_undo <code> <lane> <reason> <merge>: roll back, then refuse with a message that says
+# what really happened. Uses iwt, branch and old of the caller.
+ho_loop_undo() {
+  local r=0
+  ho_loop_rollback "$iwt" "$branch" "$old" "$4" || r=$?
+  case $r in
+    0) ho_loop_refuse "$1" "$2" "$3; rolled back to $old" ;;
+    1) ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$2" "$3; putting $branch back to $old failed in $iwt, so it is left for a person to fix before the next merge" ;;
+    *) ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$2" "$3; $branch is at $HO_LOOP_MOVED_TO, not at $old or this merge, so it is not reset and is left for a person" ;;
+  esac
 }
 
 # ---- merge <lane> ------------------------------------------------------------------------
 ho_loop_merge_locked() {
   local lane=$1 ij="$HO_RUN_DIR/integration.json" lj="$HO_RUN_DIR/lanes/$1.json"
-  local iwt branch old lwt lbranch lsha vf first gate stopped=0 rc=0 new gw log grc=0
+  local iwt branch old lwt lbranch lsha worker vsnap gate stopped=0 rc=0 new gw log grc=0 gpid
   ho_stopped || stopped=$?
   [ "$stopped" -eq 1 ] || { ho_loop_err "the run is stopped (or its stop state is unknown); no merge"; return 75; }
+  [ "$ho_loop_sig" -eq 0 ] || { ho_loop_err "the merge was stopped by a signal before it started"; return 75; }
   [ -f "$ij" ] || { ho_loop_err "run $HO_RUN_ID has no integration branch"; return 65; }
   [ -f "$lj" ] || ho_loop_refuse 65 "$lane" "lane is not ready (no finalize commit recorded)" || return
   iwt=$(ho_loop_field "$ij" worktree) && branch=$(ho_loop_field "$ij" branch) && old=$(ho_loop_field "$ij" tip) \
     || ho_loop_refuse 65 "$lane" "integration.json is unreadable" || return
   lwt=$(ho_loop_field "$lj" worktree) && lbranch=$(ho_loop_field "$lj" branch) && lsha=$(ho_loop_field "$lj" sha) \
     || ho_loop_refuse 65 "$lane" "lane record is unreadable" || return
+  worker=$(jq -r '.worker_session // ""' "$lj" 2>/dev/null) || worker=""
   gate=$(ho_loop_gate_cmd) || { rc=$?; ho_ledger_append merge-refused lane "$lane" reason "gate not configured"; return "$rc"; }
 
-  # H-055: a plain "passed" verdict for the exact finalize commit.
-  vf="$HO_RUN_DIR/verdicts/$lane/$lsha.md"
-  if [ -L "$vf" ] || [ ! -f "$vf" ]; then
-    ho_loop_refuse 65 "$lane" "no verdict file for $lsha (a link does not count)"; return
-  fi
-  first=$(head -n 1 "$vf")
-  [ "$first" = passed ] || { ho_loop_refuse 65 "$lane" "the verdict for $lsha is not \"passed\" (first line: ${first:0:60})"; return; }
+  # H-055: a plain "passed" verdict of the independent validator for the exact finalize commit.
+  ho_loop_verdict_check "$lane" "$lsha" "$worker" || { ho_loop_refuse 65 "$lane" "$HO_LOOP_VWHY"; return; }
+  vsnap=$HO_LOOP_VSNAP
 
   # The lane: still at the validated finalize commit, clean (PR-9).
   [ "$(ho_loop_ref "$lwt" "refs/heads/$lbranch")" = "$lsha" ] && [ "$(ho_loop_ref "$lwt" HEAD)" = "$lsha" ] \
@@ -178,16 +301,20 @@ ho_loop_merge_locked() {
   [ "$rc" -eq 0 ] || { ho_loop_refuse 65 "$lane" "the integration worktree is not clean (or cannot be read)"; return; }
   ho_loop_ref "$iwt" "$lsha" >/dev/null || { ho_loop_refuse 65 "$lane" "$lsha is not in the integration repository"; return; }
 
-  # No-op before merging: the lane is already in the branch.
-  if git -C "$iwt" merge-base --is-ancestor "$lsha" "$old" 2>/dev/null; then
-    ho_loop_refuse "$HO_EXIT_NOOP" "$lane" "no-op: $lsha is already in $branch; nothing would change"; return
-  fi
+  # No-op before merging: the lane is already in the branch. Exit 1 is "no"; any other code is a
+  # git error, never a "no".
+  rc=0; git -C "$iwt" merge-base --is-ancestor "$lsha" "$old" 2>/dev/null || rc=$?
+  case $rc in
+    0) ho_loop_refuse "$HO_EXIT_NOOP" "$lane" "no-op: $lsha is already in $branch; nothing would change"; return ;;
+    1) ;;
+    *) ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "git cannot tell whether $lsha is already in $branch (git exit $rc)"; return ;;
+  esac
+  [ "$ho_loop_sig" -eq 0 ] || { ho_loop_refuse 75 "$lane" "the merge was stopped by a signal before it started"; return; }
 
   mkdir -p "$HO_RUN_DIR/gates"
   if ! git -C "$iwt" merge -q --no-ff --no-edit -m "merge($lane): $lsha into $branch" "$lsha" \
       > "$HO_RUN_DIR/gates/$lane-$lsha.merge.log" 2>&1; then
-    ho_loop_rollback "$iwt" "$branch" "$old" || true
-    ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "git merge failed (conflict or error, log gates/$lane-$lsha.merge.log); aborted, $branch stays at $old"; return
+    ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "git merge failed (conflict or error, log gates/$lane-$lsha.merge.log)" "$old"; return
   fi
 
   # H-046: confirm through git, from the branch ref, not from what the merge printed.
@@ -198,68 +325,132 @@ ho_loop_merge_locked() {
       || [ "$(ho_loop_ref "$iwt" "$new^2")" != "$lsha" ] \
       || ! git -C "$iwt" merge-base --is-ancestor "$lsha" "refs/heads/$branch" 2>/dev/null \
       || ! ho_loop_clean "$iwt"; then
-    ho_loop_rollback "$iwt" "$branch" "$old" || true
-    ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "git does not confirm the merge of $lsha into $branch; rolled back to $old"; return
+    ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "git does not confirm the merge of $lsha into $branch" "${new:-$old}"; return
   fi
-  if git -C "$iwt" diff --quiet "$old" "$new" 2>/dev/null; then
-    ho_loop_rollback "$iwt" "$branch" "$old" || true
-    ho_loop_refuse "$HO_EXIT_NOOP" "$lane" "no-op: the merge of $lsha changed no file in $branch; rolled back to $old"; return
-  fi
+  rc=0; git -C "$iwt" diff --quiet "$old" "$new" 2>/dev/null || rc=$?
+  case $rc in
+    0) ho_loop_undo "$HO_EXIT_NOOP" "$lane" "no-op: the merge of $lsha changed no file in $branch" "$new"; return ;;
+    1) ;;
+    *) ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "git cannot compare $old with $new (git exit $rc), so the merge is not confirmed" "$new"; return ;;
+  esac
+  [ "$ho_loop_sig" -eq 0 ] || { ho_loop_undo 75 "$lane" "the merge was stopped by a signal" "$new"; return; }
 
   # The gate re-runs on the merged tree, in a throwaway detached worktree, so whatever the
-  # gate writes never dirties the integration worktree (field note C1).
-  mkdir -p "$HO_RUN_DIR/gates"
+  # gate writes never dirties the integration worktree (field note C1). It runs in its own
+  # process group, so a signal stops it and every child it started (by exact group ID).
   log="$HO_RUN_DIR/gates/$lane-$lsha.log"
   if ! { gw=$(mktemp -d "${TMPDIR:-/tmp}/ho-gate.XXXXXX") && rmdir "$gw" \
       && git -C "$iwt" worktree add -q --detach "$gw" "$new" >/dev/null 2>&1; }; then
-    ho_loop_rollback "$iwt" "$branch" "$old" || true
-    ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "cannot create a worktree to run the gate on the merged tree; rolled back to $old"; return
+    ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "cannot create a worktree to run the gate on the merged tree" "$new"; return
   fi
-  (cd "$gw" && /bin/bash -c "$gate") > "$log" 2>&1 || grc=$?
+  ho_group_start /bin/bash -c 'cd "$1" && exec /bin/bash -c "$2"' ho-gate "$gw" "$gate" < /dev/null > "$log" 2>&1
+  gpid=$HO_GROUP_PID
+  while :; do
+    grc=0; wait "$gpid" || grc=$?
+    kill -0 "$gpid" 2>/dev/null || break
+    # wait was cut short by a signal while the gate still runs.
+    [ "$ho_loop_sig" -eq 0 ] || { ho_group_stop "$gpid"; grc=143; break; }
+  done
   git -C "$iwt" worktree remove --force "$gw" >/dev/null 2>&1 || rm -rf "$gw"
   git -C "$iwt" worktree prune >/dev/null 2>&1 || true
+  [ "$ho_loop_sig" -eq 0 ] || { ho_loop_undo 75 "$lane" "the merge was stopped by a signal while the gate ran" "$new"; return; }
   if [ "$grc" -ne 0 ]; then
-    ho_loop_rollback "$iwt" "$branch" "$old" || true
-    ho_loop_refuse "$HO_EXIT_GATE" "$lane" "the gate failed on the merged tree (exit $grc, log $log); rolled back to $old"; return
+    ho_loop_undo "$HO_EXIT_GATE" "$lane" "the gate failed on the merged tree (exit $grc, log $log)" "$new"; return
   fi
   # Tip check after: nothing moved the branch while the gate ran.
   if [ "$(ho_loop_ref "$iwt" "refs/heads/$branch")" != "$new" ] || ! ho_loop_clean "$iwt"; then
-    ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "$branch moved or got dirty while the gate ran; the merge is not confirmed"; return
+    ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "$branch moved or got dirty while the gate ran; the merge is not confirmed and the branch is left for a person"; return
   fi
+  # H-055 again, under the merge lock after the gate: the verdict is the same one, still passed.
+  if ! ho_loop_verdict_check "$lane" "$lsha" "$worker" || [ "$HO_LOOP_VSNAP" != "$vsnap" ]; then
+    ho_loop_undo 65 "$lane" "the verdict for $lsha changed while the gate ran${HO_LOOP_VWHY:+ ($HO_LOOP_VWHY)}" "$new"; return
+  fi
+  [ "$ho_loop_sig" -eq 0 ] || { ho_loop_undo 75 "$lane" "the merge was stopped by a signal" "$new"; return; }
 
   # Ledger line first: if the tip write then fails, the next merge refuses on the tip check.
+  # From here on a signal no longer undoes the merge.
   ho_ledger_append merge-confirmed lane "$lane" sha "$lsha" branch "$branch" base "$old" tip "$new"
   jq --arg tip "$new" '.tip = $tip' "$ij" | ho_atomic_write "$ij" || return 1
   printf 'merged lane %s (%s) into %s at %s\n' "$lane" "$lsha" "$branch" "$new"
 }
 
-# One merge at a time per run, under its own lock (not the ledger lock), in a subshell so the
-# EXIT trap stays local. A lock whose holder is dead is taken over.
+# ho_loop_lock_old <path>: the path exists and was last changed more than one minute ago.
+ho_loop_lock_old() { [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }
+
+# ho_loop_lock_take <lock> <me>: one merge at a time per run (its own lock, not the ledger
+# lock). A lock whose holder is dead is taken over in place, under <lock>/takeover, and is never
+# removed by a waiter: so a waiter can never delete a lock that another waiter has just made.
+# A lock with no PID (holder killed between mkdir and writing it) counts as dead after a minute.
+ho_loop_lock_take() {
+  local lock=$1 me=$2 n=0 pid stale
+  until mkdir "$lock" 2>/dev/null; do
+    [ "$ho_loop_sig" -eq 0 ] || { ho_loop_err "stopped by a signal while waiting for the merge lock"; return 75; }
+    pid=$(cat "$lock/pid" 2>/dev/null || true)
+    stale=0
+    if [ -n "$pid" ]; then kill -0 "$pid" 2>/dev/null || stale=1; else ho_loop_lock_old "$lock" && stale=1; fi
+    if [ "$stale" -eq 1 ]; then
+      if mkdir "$lock/takeover" 2>/dev/null; then
+        HO_LOOP_TAKEOVER=1
+        # Under the takeover folder no other waiter changes the PID file: check it again, then
+        # write ours. (The age of a lock with no PID was checked above; the takeover folder
+        # itself changes the lock folder's time.)
+        if [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$pid" ] \
+            && { [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; } \
+            && printf '%s\n' "$me" > "$lock/pid.$me" && mv -f "$lock/pid.$me" "$lock/pid"; then
+          rmdir "$lock/takeover" 2>/dev/null || true
+          HO_LOOP_TAKEOVER=0
+          return 0
+        fi
+        rm -f "$lock/pid.$me"
+        rmdir "$lock/takeover" 2>/dev/null || true
+        HO_LOOP_TAKEOVER=0
+        continue
+      fi
+      # A waiter that died while taking over leaves an empty takeover folder; after a minute it goes.
+      if ho_loop_lock_old "$lock/takeover"; then rmdir "$lock/takeover" 2>/dev/null || true; continue; fi
+    fi
+    n=$((n + 1))
+    [ "$n" -lt 1800 ] || { ho_loop_err "another merge of run $HO_RUN_ID holds $lock (holder ${pid:-unknown})"; return 75; }
+    sleep 0.1
+  done
+  printf '%s\n' "$me" > "$lock/pid"
+}
+
+# The merge runs in a background subshell under the lock, so its traps stay local and the
+# caller can wait for it. A TERM, INT or HUP to the caller is passed on to that exact subshell,
+# which stops the gate, rolls back as far as it safely can, releases its lock and exits 75; the
+# caller then returns that code. So a killed caller never leaves a merge running behind it.
 ho_loop_merge() {
-  local lane=${1-}
+  local lane=${1-} mpid rc
   [ $# -eq 1 ] || { ho_loop_usage; return 64; }
   ho_loop_lane_ok "$lane" || return 65
   (
     HO_LOOP_LOCK="$HO_RUN_DIR/merge.lock"
+    HO_LOOP_TAKEOVER=0
+    ho_loop_sig=0
     ho_loop_rc=70
-    n=0
-    until mkdir "$HO_LOOP_LOCK" 2>/dev/null; do
-      pid=$(cat "$HO_LOOP_LOCK/pid" 2>/dev/null || true)
-      if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then rm -rf "$HO_LOOP_LOCK"; continue; fi
-      # A holder killed between mkdir and writing its PID: stale after one minute.
-      if [ -z "$pid" ] && [ -n "$(find "$HO_LOOP_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then rm -rf "$HO_LOOP_LOCK"; continue; fi
-      n=$((n + 1))
-      [ "$n" -lt 1800 ] || { ho_loop_err "another merge of run $HO_RUN_ID holds $HO_LOOP_LOCK"; exit 75; }
-      sleep 0.1
-    done
+    trap 'ho_loop_sig=1' TERM INT HUP
+    # This subshell's own PID (bash 3.2 has no BASHPID): exec keeps the PID of the substitution
+    # child, whose parent is this subshell.
+    me=$(exec sh -c 'echo "$PPID"')
+    held=0
     # The code stays 70 until the merge step returns: a step that ends with exit (a failed
-    # ledger write) must never leave through this trap as 0.
-    trap 'rm -rf "$HO_LOOP_LOCK"; exit "$ho_loop_rc"' EXIT
-    # bash 3.2 has no BASHPID: the parent of a child shell is this subshell.
-    sh -c 'echo "$PPID"' > "$HO_LOOP_LOCK/pid" 2>/dev/null || true
+    # ledger write) must never leave through this trap as 0. Only our own lock is released.
+    trap 'if [ "$HO_LOOP_TAKEOVER" = 1 ]; then rmdir "$HO_LOOP_LOCK/takeover" 2>/dev/null || true; fi
+          if [ "$held" = 1 ] && [ "$(cat "$HO_LOOP_LOCK/pid" 2>/dev/null || true)" = "$me" ]; then rm -rf "$HO_LOOP_LOCK"; fi
+          exit "$ho_loop_rc"' EXIT
+    if ho_loop_lock_take "$HO_LOOP_LOCK" "$me"; then held=1; else ho_loop_rc=$?; exit "$ho_loop_rc"; fi
     if ho_loop_merge_locked "$lane"; then ho_loop_rc=0; else ho_loop_rc=$?; fi
     exit "$ho_loop_rc"
-  )
+  ) &
+  mpid=$!
+  trap 'kill -TERM "$mpid" 2>/dev/null || true' TERM INT HUP
+  while :; do
+    rc=0; wait "$mpid" || rc=$?
+    kill -0 "$mpid" 2>/dev/null || break
+  done
+  trap - TERM INT HUP
+  return "$rc"
 }
 
 ho_loop_status() {
@@ -273,11 +464,16 @@ ho_loop_usage() {
 usage: harness loop <run-dir> <verb> [args]
   integration --repo R --base B --worktree W   create the run's local integration branch
   ready <lane> --worktree W                    the lane's tip must be a finalize(<lane>): commit
-                                               on a clean tree; prints the verdict file path
-  merge <lane>                                 merge only on a "passed" verdict, clean trees and
-                                               checked tips; confirmed through git; gate re-run
+                                               on a clean tree; prints the verdict record path
+  verdict <lane> --sha S                       from inside the validator's session: record its
+                                               verdict for commit S (text on stdin)
+  merge <lane>                                 merge only on a "passed" verdict of the validator,
+                                               clean trees and checked tips; confirmed through
+                                               git; gate re-run
   status                                       the integration tip and the confirmed merges
-exit: 65 refused, 69 no-op, 70 not confirmed, 72 gate failed, 75 stopped
+exit: 64 usage, 65 refused, 69 no-op, 70 not confirmed or left for a person, 72 gate failed,
+      75 run stopped, merge stopped by a signal or merge lock held by another merge,
+      78 config error
 USAGE
 }
 
@@ -289,6 +485,7 @@ ho_loop_main() {
   case $verb in
     integration) ho_loop_integration "$@" || rc=$? ;;
     ready) ho_loop_ready "$@" || rc=$? ;;
+    verdict) ho_loop_verdict "$@" || rc=$? ;;
     merge) ho_loop_merge "$@" || rc=$? ;;
     status) ho_loop_status || rc=$? ;;
     *) ho_loop_usage; rc=64 ;;

@@ -31,10 +31,25 @@ lane() {
   if [ -n "${2-}" ]; then printf '%s\n' "$3" > "$w/$2"; git -C "$w" add "$2"; git -C "$w" commit -qm "work $n"; fi
   git -C "$w" commit -q --allow-empty -m "finalize($n): done"
 }
+# Registry records of this run (lib/sessions.sh writes them on launch): one validator, one worker.
+vsid=11111111-1111-4111-8111-111111111111
+wsid=22222222-2222-4222-8222-222222222222
+mkdir -p "$run/sessions"
+srec() { # <name> <role> <session-id>
+  jq -n --arg run "$(basename "$run")" --arg n "$1" --arg r "$2" --arg sid "$3" \
+    '{schemaVersion: 2, run: $run, name: $n, role: $r, session_id: $sid, status: "running"}' > "$run/sessions/$1.json"
+}
+srec val validator "$vsid"
+srec wrk worker "$wsid"
+# as <name> <session-id> <cmd...>: run a command the way a launched session does (the launcher
+# exports HO_SESSION_NAME and HO_SESSION_ID).
+as() { local n=$1 sid=$2; shift 2; HO_SESSION_NAME=$n HO_SESSION_ID=$sid "$@"; }
+lsha() { git -C "$PWD/w-$1" rev-parse HEAD; }
+# vtext <lane> <text>: the validator records a verdict for the lane's recorded commit.
+vtext() { printf '%b' "$2" | as val "$vsid" "$h" loop "$run" verdict "$1" --sha "$(lsha "$1")"; }
 verdict() { # <lane> <first line>
-  local p
-  p=$("$h" loop "$run" ready "$1" --worktree "$PWD/w-$1") || { echo "ready failed for $1" >&2; return 1; }
-  printf '%s\nevidence\n' "$2" > "$p"
+  "$h" loop "$run" ready "$1" --worktree "$PWD/w-$1" >/dev/null || { echo "ready failed for $1" >&2; return 1; }
+  vtext "$1" "$2\nevidence\n" >/dev/null
 }
 
 # ---- integration branch ----------------------------------------------------------------
@@ -60,25 +75,29 @@ assert_exit "Rebuild completion: a lane with a dirty tree is not ready" 65 "$h" 
 git -C "$PWD/w-a" checkout -q -- a.txt
 assert_exit "Rebuild completion: a lane name that is not a plain name is refused" 65 "$h" loop "$run" ready ../a --worktree "$PWD/w-a"
 vp=$("$h" loop "$run" ready a --worktree "$PWD/w-a")
-assert_eq "H-055: the verdict path is bound to the exact finalize commit" \
-  "$run/verdicts/a/$(git -C "$PWD/w-a" rev-parse HEAD).md" "$vp"
+assert_eq "H-055: the verdict record is bound to the exact finalize commit" \
+  "$run/verdicts/a/$(git -C "$PWD/w-a" rev-parse HEAD).json" "$vp"
 
 # ---- H-055: no merge without a plain "passed" verdict for that commit ---------------------
 assert_eq "H-055 verdict missing: the merge step refuses (8.2)" 65 "$(merge_rc a)"
 assert_eq "H-055 verdict missing: the integration tip is unchanged" "$base_tip" "$(tip)"
 assert_contains "H-055 verdict missing: the message names the missing verdict" "$(cat "$PWD/err")" "no verdict"
-printf 'failed\nbroken\n' > "$vp"
+vtext a 'failed\nbroken\n' >/dev/null
 assert_eq "H-055 fail verdict: the merge step refuses" 65 "$(merge_rc a)"
-printf 'passed with remarks\nlook at x\n' > "$vp"
+vtext a 'passed with remarks\nlook at x\n' >/dev/null
 assert_eq "H-055 passed-with-remarks verdict: does not merge" 65 "$(merge_rc a)"
 assert_eq "H-055 passed-with-remarks verdict: the integration tip is unchanged" "$base_tip" "$(tip)"
-printf '\n' > "$vp"
+vtext a '\n' >/dev/null
 assert_eq "H-055: an empty first line is not a verdict" 65 "$(merge_rc a)"
-rm -f "$vp"; printf 'passed\n' > "$PWD/vtarget"; ln -s "$PWD/vtarget" "$vp"
+for t in 'passed\r\n' 'passed \n' 'Passed\n' 'passed.\n'; do
+  vtext a "$t" >/dev/null
+  assert_eq "H-055: a first line [$t] is not a plain passed" 65 "$(merge_rc a)"
+done
+vtext a 'passed\n' >/dev/null; cp "$vp" "$PWD/vtarget"; rm -f "$vp"; ln -s "$PWD/vtarget" "$vp"
 assert_eq "H-055: a verdict that is a link is refused" 65 "$(merge_rc a)"
 rm -f "$vp"
 # A verdict written for an older commit does not cover a newer tip (PR-9).
-printf 'passed\n' > "$vp"
+vtext a 'passed\n' >/dev/null
 printf 'later\n' > "$PWD/w-a/later.txt"; git -C "$PWD/w-a" add later.txt; git -C "$PWD/w-a" commit -qm "later"
 git -C "$PWD/w-a" commit -q --allow-empty -m "finalize(a): again"
 assert_eq "H-055: a verdict for an older commit does not cover the new tip" 65 "$(merge_rc a)"
@@ -111,6 +130,42 @@ assert_eq "D37-FLOW-8: nothing was merged while the config was refused" "$base_t
 "$h" state "$run" stop "test" >/dev/null
 assert_eq "Rebuild STOP: a stopped run does not merge" 75 "$(merge_rc a)"
 "$h" state "$run" resume >/dev/null
+
+# ---- H-055: only the independent validator's verdict counts (validator concern 1 on #43) ------
+va=$(lsha a); vf="$run/verdicts/a/$va.json"; cp "$vf" "$PWD/good-verdict"
+jq -n --arg s "$va" '{schemaVersion: 2, lane: "a", sha: $s, text: "passed\n"}' > "$vf"
+assert_eq "H-055 author: a verdict file written without the engine verb is refused" 65 "$(merge_rc a)"
+assert_contains "H-055 author: the refusal names the missing author" "$(cat "$PWD/err")" "validator"
+jq --arg sid "$wsid" '.session_id = $sid | .session_name = "wrk"' "$PWD/good-verdict" > "$vf"
+assert_eq "H-055 author: a verdict whose author is a worker session is refused" 65 "$(merge_rc a)"
+rc=0; printf 'passed\n' | as wrk "$wsid" "$h" loop "$run" verdict a --sha "$va" >/dev/null 2>&1 || rc=$?
+assert_eq "H-055 author: a worker session cannot record a verdict" 65 "$rc"
+rc=0; printf 'passed\n' | as ghost 33333333-3333-4333-8333-333333333333 "$h" loop "$run" verdict a --sha "$va" >/dev/null 2>&1 || rc=$?
+assert_eq "H-055 author: a session that is not in the run's registry cannot record a verdict" 65 "$rc"
+rc=0; printf 'passed\n' | "$h" loop "$run" verdict a --sha "$va" >/dev/null 2>&1 || rc=$?
+assert_eq "H-055 author: a verdict from outside a session is refused" 65 "$rc"
+rc=0; printf 'passed\n' | as val "$vsid" "$h" loop "$run" verdict a --sha "$base_tip" >/dev/null 2>&1 || rc=$?
+assert_eq "H-055 author: a verdict for another commit than the recorded one is refused" 65 "$rc"
+# A worker's session resumed under a validator record keeps the worker's session ID.
+srec val2 validator "$wsid"
+rc=0; printf 'passed\n' | as val2 "$wsid" "$h" loop "$run" verdict a --sha "$va" >/dev/null 2>&1 || rc=$?
+assert_eq "H-055 author: a worker session resumed as a validator cannot record a verdict" 65 "$rc"
+jq --arg sid "$wsid" '.session_id = $sid | .session_name = "val2"' "$PWD/good-verdict" > "$vf"
+assert_eq "H-055 author: a verdict of a worker session resumed as a validator is refused" 65 "$(merge_rc a)"
+rm -f "$run/sessions/val2.json"
+cp "$PWD/good-verdict" "$vf"
+# The lane's own worker never validates it.
+as val "$vsid" "$h" loop "$run" ready a --worktree "$PWD/w-a" >/dev/null
+assert_eq "H-055 author: the lane's own worker session cannot be its validator" 65 "$(merge_rc a)"
+"$h" loop "$run" ready a --worktree "$PWD/w-a" >/dev/null
+# Links: the verdicts folder, the lane's folder and the file.
+mv "$run/verdicts/a" "$PWD/vdir-a"; ln -s "$PWD/vdir-a" "$run/verdicts/a"
+assert_eq "H-055 author: a linked verdicts/<lane> folder is refused" 65 "$(merge_rc a)"
+rm -f "$run/verdicts/a"; mv "$PWD/vdir-a" "$run/verdicts/a"
+mv "$run/verdicts" "$PWD/vdir"; ln -s "$PWD/vdir" "$run/verdicts"
+assert_eq "H-055 author: a linked verdicts folder is refused" 65 "$(merge_rc a)"
+rm -f "$run/verdicts"; mv "$PWD/vdir" "$run/verdicts"
+assert_eq "H-055 author: nothing was merged by a refused verdict" "$base_tip" "$(tip)"
 
 # ---- happy path: merge confirmed by git (H-046, 8.1) ----------------------------------------
 lane_tip=$(git -C "$PWD/w-a" rev-parse HEAD)
@@ -177,7 +232,6 @@ lane g g.txt "from g"
 chmod a-w "$run/ledger.jsonl"
 rc=$(merge_rc g)
 assert_eq "H-055: a refusal whose ledger line fails is not exit 0" "yes" "$([ "$rc" -ne 0 ] && echo yes || echo no)"
-verdict_path="$run/verdicts/g/$(git -C "$PWD/w-g" rev-parse HEAD).md"
 chmod u+w "$run/ledger.jsonl"; verdict g passed; chmod a-w "$run/ledger.jsonl"
 g_before=$(tip)
 rc=$(merge_rc g)
@@ -195,3 +249,105 @@ assert_contains "Rebuild loop status: lists a confirmed merge" "$st" "merged a "
 git -C "$int" reset -q --hard "$g_before"
 mkdir "$run/merge.lock"; touch -t 202001010000 "$run/merge.lock"
 assert_eq "Rebuild loop lock: a stale lock with no holder is taken over" 69 "$(merge_rc a)"
+
+# ---- validator concerns on #43: verdict after the gate, roll back, git errors, signals, lock ----
+cur=$(tip)
+gitdir_int=$(git -C "$int" rev-parse --absolute-git-dir)
+setgate() { jq -n --arg c "$1" '{schemaVersion: 2, gate: {use: "t", list: {t: {command: $c}}}}' > "$PWD/user/config.json"; }
+no_rolled_back() { case $(cat "$PWD/err") in *"rolled back"*) bad "$1" "$(cat "$PWD/err")" ;; *) ok "$1" ;; esac; }
+
+# H-055: the verdict is read again under the merge lock after the gate.
+lane r r.txt "from r"; verdict r passed
+jq '.text = "failed\n"' "$run/verdicts/r/$(lsha r).json" > "$PWD/vr-failed"
+setgate "cp '$PWD/vr-failed' '$run/verdicts/r/$(lsha r).json'"
+assert_eq "H-055: a verdict that turns into a fail while the gate runs does not merge" 65 "$(merge_rc r)"
+assert_eq "H-055: that merge is rolled back" "$cur" "$(tip)"
+assert_contains "H-055: the refusal names the verdict" "$(cat "$PWD/err")" "verdict"
+
+# A commit made on the branch while the gate ran is never thrown away (concern 3).
+lane i i.txt "from i"; verdict i passed
+setgate "git -C '$int' commit -q --allow-empty -m 'during the gate'; exit 1"
+assert_eq "H-046 roll back: a failed gate after the branch moved is left for a person (exit 70)" 70 "$(merge_rc i)"
+assert_eq "H-046 roll back: the commit made during the gate is kept" "during the gate" "$(git -C "$proj" log -1 --format=%s "$(tip)")"
+assert_contains "H-046 roll back: the message leaves the branch for a person" "$(cat "$PWD/err")" "person"
+no_rolled_back "H-046 roll back: a skipped roll back never says rolled back"
+git -C "$int" reset -q --hard "$cur"
+
+# A roll back that fails never says "rolled back" (concern 4).
+lane j j.txt "from j"; verdict j passed
+setgate "touch '$gitdir_int/index.lock'; exit 1"
+assert_eq "H-046 roll back: a failed roll back exits 70" 70 "$(merge_rc j)"
+no_rolled_back "H-046 roll back: a failed roll back never says rolled back"
+assert_contains "H-046 roll back: a failed roll back leaves the branch for a person" "$(cat "$PWD/err")" "person"
+rm -f "$gitdir_int/index.lock"; git -C "$int" reset -q --hard "$cur"
+
+# A git error in the no-op check is an error, not "changed" (concern 5).
+user_gate
+mkdir -p "$PWD/shim"
+cat > "$PWD/shim/git" <<EOS
+#!/bin/bash
+if [ -n "\${HO_T_FAIL_DIFF:-}" ] && [ "\${*: -3:1}" = --quiet ]; then echo "fatal: test shim" >&2; exit 128; fi
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$PWD/shim/git"
+lane k k.txt "from k"; verdict k passed
+assert_eq "H-046 no-op check: a git error is not taken as a change (exit 70)" 70 "$(HO_T_FAIL_DIFF=1 PATH="$PWD/shim:$PATH" merge_rc k)"
+assert_eq "H-046 no-op check: after the git error the branch is back at its tip" "$cur" "$(tip)"
+assert_eq "H-046 no-op check: no merge was confirmed for that lane" "" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "k") | .lane' "$run/ledger.jsonl")"
+
+# The tip check after the gate (concern 8).
+lane m m.txt "from m"; verdict m passed
+setgate "git -C '$int' commit -q --allow-empty -m 'moved by the gate'"
+assert_eq "H-046 tip after the gate: a branch moved while the gate ran is not confirmed (exit 70)" 70 "$(merge_rc m)"
+assert_eq "H-046 tip after the gate: the branch is left where it was moved" "moved by the gate" "$(git -C "$proj" log -1 --format=%s "$(tip)")"
+assert_eq "H-046 tip after the gate: the recorded tip does not move" "$cur" "$(jq -r .tip "$run/integration.json")"
+git -C "$int" reset -q --hard "$cur"
+
+# The git confirmation block (concern 8): a merge that git does not show is rolled back.
+user_gate
+mkdir -p "$PWD/hooks"; printf '#!/bin/sh\ngit update-ref HEAD HEAD^\n' > "$PWD/hooks/post-merge"; chmod +x "$PWD/hooks/post-merge"
+git -C "$proj" config core.hooksPath "$PWD/hooks"
+lane n n.txt "from n"; verdict n passed
+assert_eq "H-046 confirmation: a merge that git does not confirm is a failure (exit 70)" 70 "$(merge_rc n)"
+assert_contains "H-046 confirmation: the message says git does not confirm it" "$(cat "$PWD/err")" "does not confirm"
+assert_eq "H-046 confirmation: the branch is back at its tip" "$cur" "$(tip)"
+assert_eq "H-046 confirmation: the integration tree is clean" "" "$(git -C "$int" status --porcelain)"
+git -C "$proj" config --unset core.hooksPath
+
+# TERM to the caller stops the merge subshell and the gate (concern 6).
+lane p p.txt "from p"; verdict p passed
+rm -f "$PWD/gate.pid" "$PWD/gsleep.pid"
+setgate "echo \$\$ > '$PWD/gate.pid'; sleep 30 & echo \$! > '$PWD/gsleep.pid'; wait"
+confirmed_before=$(ledger_has merge-confirmed)
+"$h" loop "$run" merge p >/dev/null 2>"$PWD/err" & hp=$!
+n=0; while [ ! -s "$PWD/gsleep.pid" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+kill -TERM "$hp"
+rc=0; wait "$hp" || rc=$?
+assert_eq "H-046 signal: a merge stopped by TERM exits 75" 75 "$rc"
+sleep 0.5
+assert_eq "H-046 signal: no merge is confirmed after TERM" "$confirmed_before" "$(ledger_has merge-confirmed)"
+assert_eq "H-046 signal: the branch is back at its tip" "$cur" "$(tip)"
+assert_eq "H-046 signal: the merge lock is released" "no" "$([ -e "$run/merge.lock" ] && echo yes || echo no)"
+for f in gate.pid gsleep.pid; do
+  p=$(cat "$PWD/$f" 2>/dev/null || echo 0)
+  if [ "$p" != 0 ] && ! ps -o pid= -p "$p" >/dev/null 2>&1; then ok "H-103 signal: the gate process ($f) is stopped"; else
+    bad "H-103 signal: the gate process ($f) is stopped" "pid $p"; [ "$p" = 0 ] || kill -KILL "$p" 2>/dev/null || true; fi
+done
+user_gate
+assert_eq "H-046 signal: a retry after the stop merges" 0 "$(merge_rc p)"
+cur=$(tip)
+
+# A stale lock that another waiter is taking over is never removed (concern 7).
+lane q q.txt "from q"; verdict q passed
+sh -c 'exit 0' & dead=$!; wait "$dead" || true
+mkdir "$run/merge.lock"; echo "$dead" > "$run/merge.lock/pid"; mkdir "$run/merge.lock/takeover"
+"$h" loop "$run" merge q >/dev/null 2>"$PWD/err" & hp=$!
+sleep 1.5
+assert_eq "Rebuild loop lock: a lock under takeover by another waiter is not removed" "$dead" "$(cat "$run/merge.lock/pid" 2>/dev/null || echo gone)"
+rmdir "$run/merge.lock/takeover" 2>/dev/null || true
+rc=0; wait "$hp" || rc=$?
+assert_eq "Rebuild loop lock: after the takeover ends the merge goes on" 0 "$rc"
+assert_eq "Rebuild loop lock: the lock is released after the merge" "no" "$([ -e "$run/merge.lock" ] && echo yes || echo no)"
+u=$("$h" loop 2>&1 || true)
+assert_contains "Rebuild loop usage: exit 78 is documented" "$u" "78 config error"
+assert_contains "Rebuild loop usage: exit 75 covers a held merge lock" "$u" "lock"

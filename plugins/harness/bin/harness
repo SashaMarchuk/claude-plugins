@@ -48,7 +48,7 @@ verbs:
   run        run new: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
   session    session <run-dir> launch|close|list: launch, list and close sessions
-  loop       loop <run-dir> integration|ready|merge|status: the engine-checked merge
+  loop       loop <run-dir> integration|ready|verdict|merge|status: the engine-checked merge
   flow       flows: list | check | steps | plan | preflight <flow> | copy <flow> <new> | render <flow> <role> ...
 USAGE
 }

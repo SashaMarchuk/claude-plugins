@@ -203,7 +203,7 @@ ho_session_project_roots() {
 
 # ho_session_runtime_path_ok <cmdpath>: refuse (65) a runtime binary that is, or links to, a
 # file inside the project, its worktrees folder or a worktree of the project repository.
-# Folders are compared by identity (-ef); every link on the way is checked.
+# Folders are compared as physical paths; every link on the way is checked.
 ho_session_runtime_path_ok() {
   local f=$1 d t root roots a n=0
   roots=$(ho_session_project_roots) || { echo "harness: cannot read the project folder" >&2; return 65; }

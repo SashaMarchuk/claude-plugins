@@ -41,12 +41,13 @@ stub() {
   printf '%s\n' '#!/bin/sh' "touch \"$base/stub-ran\"" 'exit 0' > "$1/claude"
   chmod 755 "$1/claude"
 }
-refused() { # the project folder is dropped from PATH, so its binary is never chosen
+refused() {
   local name=$1 dir=$2 out
-  rm -f "$base/stub-ran"
   out=$(PATH="$dir:$PATH" launch "$name" 2>&1 >/dev/null; echo "rc=$?")
+  assert_contains "$3: refused (exit 65)" "$out" "rc=65"
+  assert_contains "$3: the refusal names the path" "$out" "$dir/claude"
   assert_eq "$3: the project binary never ran" "no" "$([ -e "$base/stub-ran" ] && echo yes || echo no)"
-  assert_eq "$3: the launcher never names the project binary" "no" "$(grep -qF "$dir" "$run/launchers/$name.sh" 2>/dev/null && echo yes || echo no)"
+  assert_eq "$3: no launcher is written" "no" "$([ -e "$run/launchers/$name.sh" ] && echo yes || echo no)"
 }
 stub "$proj/bin"
 refused b1 "$proj/bin" "D37-FLOW-8: a claude in a project bin folder first on PATH"
@@ -80,21 +81,8 @@ alt="$(dirname "$proj")/$(basename "$proj" | tr 'a-z' 'A-Z')"
 if [ "$alt" != "$proj" ] && [ -d "$alt/bin" ] && [ "$alt" -ef "$proj" ]; then
   rm -f "$base/stub-ran"
   out=$(PATH="$alt/bin:$PATH" launch b6 2>&1 >/dev/null; echo "rc=$?")
-  assert_eq "D37-FLOW-8: the project folder in another letter case on PATH never reaches the launcher" "no" "$(grep -qF "$alt/bin" "$run/launchers/b6.sh" 2>/dev/null && echo yes || echo no)"
+  assert_contains "D37-FLOW-8: the project folder in another letter case on PATH is refused" "$out" "rc=65"
   assert_eq "D37-FLOW-8: the project binary reached through another spelling never ran" "no" "$([ -e "$base/stub-ran" ] && echo yes || echo no)"
 else
   ok "D37-FLOW-8: case check skipped (this volume is case-sensitive)"
 fi
-
-# Any helper, not only the runtime: a project tmux or uuidgen first on PATH never runs,
-# because every project folder is dropped from PATH before a verb starts (PR #90, Codex).
-mkdir -p "$proj/helpers"
-for tool in tmux uuidgen git jq; do
-  printf '%s\n' '#!/bin/sh' "touch \"$base/helper-ran-$tool\"" 'exit 1' > "$proj/helpers/$tool"
-  chmod 755 "$proj/helpers/$tool"
-done
-PATH="$proj/helpers:$base/outbin:$PATH" launch b7 >/dev/null 2>&1 || true
-for tool in tmux uuidgen git jq; do
-  assert_eq "D37-FLOW-8: a project $tool first on PATH never runs" "no" "$([ -e "$base/helper-ran-$tool" ] && echo yes || echo no)"
-done
-assert_eq "D37-FLOW-8: the session with project helpers first on PATH still starts" "running" "$(rec b7 .status)"

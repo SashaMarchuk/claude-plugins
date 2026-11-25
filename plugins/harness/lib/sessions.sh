@@ -121,7 +121,8 @@ ho_cfg_user() {
   f=$(ho_user_config)
   ho_config_file_check "$f"
   [ -f "$f" ] || { echo null; return 0; }
-  jq -c "$1 // null" "$f"
+  # No "// null" here: that would turn a real false into "unset" (PR #90 re-check).
+  jq -c "$1" "$f"
 }
 
 # ho_session_account <role> <requested>: print "<account>\t<env-command>", or nothing when no
@@ -204,18 +205,23 @@ ho_session_project_roots() {
 # file inside the project, its worktrees folder or a worktree of the project repository.
 # Folders are compared as physical paths; every link on the way is checked.
 ho_session_runtime_path_ok() {
-  local f=$1 d t root roots n=0
+  local f=$1 d t root roots a n=0
   roots=$(ho_session_project_roots) || { echo "harness: cannot read the project folder" >&2; return 65; }
   while :; do
     d=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P) || { printf 'harness: cannot resolve the runtime command path %s\n' "$f" >&2; return 65; }
+    # Folders are compared by identity (-ef), walking up from the binary folder, so
+    # another letter case or Unicode form of the same folder cannot pass.
     while IFS= read -r root; do
       [ -n "$root" ] || continue
-      case "$d/" in
-        "$root"/*)
+      a=$d
+      while :; do
+        if [ "$a" -ef "$root" ]; then
           printf 'harness: the runtime command resolves to %s, inside %s; a runtime binary from the project, its worktrees folder or a worktree is never run. Put the runtime first on PATH from a folder outside the project.\n' "$f" "$root" >&2
           return 65
-          ;;
-      esac
+        fi
+        [ "$a" = / ] && break
+        a=$(dirname "$a")
+      done
     done <<EOF_ROOTS
 $roots
 EOF_ROOTS

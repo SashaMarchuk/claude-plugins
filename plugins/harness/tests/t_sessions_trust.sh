@@ -20,6 +20,14 @@ set_cfg "$pcfg" '.session.permissions = ""'
 launch p2 >/dev/null
 assert_contains "D37-FLOW-8: an empty project placeholder is ignored; the user mode is used" "$(grep -F "$(rec p2 .session_id)" "$HO_FAKE_CLAUDE_LOG" | head -n 1)" "--permission-mode	dontAsk"
 
+# A user value false is a value, not "unset": it is refused, never replaced by bypass
+# (PR #90 re-check, B2).
+set_cfg "$ucfg" '.session.permissions = false'
+set_cfg "$pcfg" 'del(.session.permissions)'
+rc=0; launch pf >/dev/null 2>&1 || rc=$?
+assert_eq "D37-FLOW-8: a user session.permissions false is refused (exit 65), never bypass" "65" "$rc"
+assert_eq "D37-FLOW-8: no launch with false got the bypass flag" "" "$(grep -F -- '--dangerously-skip-permissions' "$HO_FAKE_CLAUDE_LOG" | grep -F "pf" || true)"
+set_cfg "$ucfg" '.session.permissions = "dontAsk"'
 set_cfg "$pcfg" 'del(.session.permissions)'
 launch p3 >/dev/null
 args=$(grep -F "$(rec p3 .session_id)" "$HO_FAKE_CLAUDE_LOG" | head -n 1)
@@ -66,3 +74,15 @@ chmod 755 "$base/outbin/claude"
 PATH="$base/outbin:$PATH" launch b5 >/dev/null
 assert_eq "D37-FLOW-8: a runtime binary outside the project still launches" "running" "$(rec b5 .status)"
 assert_eq "D37-FLOW-8: the launcher runs the binary outside the project" "yes" "$(grep -qF "$base/outbin/claude" "$run/launchers/b5.sh" && echo yes || echo no)"
+
+# Another spelling of the same project folder on PATH (letter case on a case-insensitive
+# volume) is still the project: folders are compared by identity (PR #90 re-check, B1).
+alt="$(dirname "$proj")/$(basename "$proj" | tr 'a-z' 'A-Z')"
+if [ "$alt" != "$proj" ] && [ -d "$alt/bin" ] && [ "$alt" -ef "$proj" ]; then
+  rm -f "$base/stub-ran"
+  out=$(PATH="$alt/bin:$PATH" launch b6 2>&1 >/dev/null; echo "rc=$?")
+  assert_contains "D37-FLOW-8: the project folder in another letter case on PATH is refused" "$out" "rc=65"
+  assert_eq "D37-FLOW-8: the project binary reached through another spelling never ran" "no" "$([ -e "$base/stub-ran" ] && echo yes || echo no)"
+else
+  ok "D37-FLOW-8: case check skipped (this volume is case-sensitive)"
+fi

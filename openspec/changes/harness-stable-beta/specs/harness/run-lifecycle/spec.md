@@ -170,15 +170,27 @@ Source: interview 2026-11-24 R20.10 (confirmed restatement), R20.11; D32
 - **THEN** the harness reads the session registry, leaves every session whose process is alive, and resumes each other session by its recorded ID under its recorded account label (H-139)
 - **AND** each resumed session has a live process within 60 seconds
 
-#### Scenario: A live session stopped on an error after sleep (design.md D42i)
-- **WHEN** the machine wakes, a session of the run is alive, and its last turn ended with an API error
-- **THEN** that session gets a continue instruction with an id, through the delivery of H-101: the orchestrator sends it to a worker, and the watch script sends it to the orchestrator
-- **AND** with the service reachable and the machine awake, the first goes out within 3 minutes of the wake, and it is sent at most 3 times, 2 minutes apart
-- **AND** if no hook event follows, the session is handled as a hung session (H-091)
+#### Scenario: The orchestrator stopped on an error after sleep (design.md D42i)
+- **WHEN** the machine wakes, the orchestrator is alive, and its last turn ended with an API error
+- **THEN** the watch script sends the orchestrator a continue instruction with an id, at most 3 times, 2 minutes apart
+- **AND** with the service reachable and the machine awake, the first goes out within 3 minutes of the wake
+- **AND** if the orchestrator still does not run again, it is restarted as H-098 states
+
+#### Scenario: A worker stopped on an error after sleep (design.md D42i)
+- **WHEN** the orchestrator runs after a wake, a worker is alive, and the worker's last turn ended with an API error
+- **THEN** the orchestrator sends that worker a continue instruction with an id, at most 3 times, 2 minutes apart
+- **AND** if the worker still does not run, it is handled as a hung session (H-091)
+- **AND** before a resume by ID, a worker process that is still alive is closed the normal way, never by force
+
+#### Scenario: The orchestrator and a worker both stopped after sleep (design.md D42i)
+- **WHEN** the machine wakes, and the orchestrator and a worker both ended their last turn with an API error
+- **THEN** the watch script continues the orchestrator first, and the worker gets nothing until the orchestrator runs again
+- **AND** the orchestrator then checks the worker and sends it the continue instruction
 
 #### Scenario: The service is down or the machine sleeps again (design.md D42i)
-- **WHEN** a continue instruction is due and the service is down, or the machine sleeps again before it is sent
-- **THEN** nothing is sent (H-095), the count does not advance, and the instruction is due again after the next wake or when the service is back
+- **WHEN** a continue instruction is due and the service is down
+- **THEN** nothing is sent (H-095), and the count does not advance until the service is back
+- **AND** when the machine sleeps again before the instruction is sent, the count does not advance, and the instruction is due again after the next wake
 
 ### Requirement: H-138 The machine stays awake during a run and while an attended controlling session lives
 While a run is active, the harness SHALL hold one wake assertion for the whole run, not a chain of short ones. It SHALL also hold one for an attended session that controls the harness, for as long as that session lives. Each assertion SHALL end with its process. A setting SHALL switch each one off. See design.md D42j.

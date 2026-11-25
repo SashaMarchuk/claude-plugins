@@ -21,7 +21,7 @@
 #   ho_term_type <handle> <owner> <sid> <text>  type short control text, no Enter (the caller
 #                                         reads the input line again before ho_term_key enter)
 #   ho_term_key <handle> <owner> <sid> enter|escape   press one key
-#   ho_term_bytes <handle> <owner> <sid> <code>...    send control bytes (1-31), one call each
+#   ho_term_bytes <handle> <owner> <sid> <code>...    send control bytes (1-31, not 10 or 13)
 #   ho_term_capture <handle> <owner> <sid> [lines] [styled]  print the tail of the session's
 #                                         screen; "styled" keeps the colour codes where the
 #                                         backend has them (tmux), so dim suggested text can be
@@ -138,6 +138,8 @@ ho_term_bytes() {
   for b in "$@"; do
     case $b in '' | *[!0-9]* | 0*) echo "harness: control byte must be 1-31: $b" >&2; return 65 ;; esac
     [ "$b" -ge 1 ] && [ "$b" -le 31 ] || { echo "harness: control byte must be 1-31: $b" >&2; return 65; }
+    # 10 and 13 act as Enter: never sent as a control byte (minor 12 of the PR #95 review).
+    [ "$b" -ne 10 ] && [ "$b" -ne 13 ] || { echo "harness: control byte $b (line feed or carriage return) is refused" >&2; return 65; }
   done
   backend=$(ho_term_backend) || return $?
   for b in "$@"; do

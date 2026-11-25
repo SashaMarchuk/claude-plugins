@@ -144,7 +144,9 @@ ho_deliver_size() { wc -c < "$1" 2>/dev/null | tr -d ' '; }
 # "queued", "dequeued" (it left the queue and was not taken), or "none".
 # The id is matched as a literal string (jq split), never as a pattern built from input
 # (validator B2), and only as a whole word: no letter of either case, digit, "_", "." or "-"
-# may touch it, so "stop-1" is not found in "stop-10" or "stop-1.txt". Not counted: lines that
+# may touch it, so "stop-1" is not found in "stop-10" or "stop-1.txt". The character on each
+# side is taken out and tested alone, with no line anchor: "$" in a pattern also matches
+# before a final line break, which hid an id at the start of a second line (validator F2). Not counted: lines that
 # are not JSON objects, tool results, and user records marked isMeta, isCompactSummary or
 # isSidechain (a sidechain record of any type). Each record is judged alone, so one odd record
 # hides no other.
@@ -155,8 +157,9 @@ ho_deliver_scan() {
     | def texts: if type == "string" then [.]
         elif type == "array" then [.[] | select(type == "object" and .type == "text") | .text | strings]
         else [] end;
+      def wordch: length > 0 and test("[A-Za-z0-9_.-]");
       def word($s): ($s | split($id)) as $q
-        | any(range(0; ($q | length) - 1); ($q[.] | test("[A-Za-z0-9_.-]$") | not) and ($q[. + 1] | test("^[A-Za-z0-9_.-]") | not));
+        | any(range(0; ($q | length) - 1); ($q[.][-1:] | wordch | not) and ($q[. + 1][0:1] | wordch | not));
       def has_id: any(.[]; word(.));
       def content: if (.message | type) == "object" then (.message.content // "") else "" end;
     fromjson? | select(type == "object") | select((.isSidechain // false) != true)
@@ -298,9 +301,12 @@ ho_deliver_chord() {
   local rec=$1 profile=$2 id=$3 bytes want cmd have rc=0
   # Once per instruction, across both routes: the marker is taken before anything is sent.
   (set -C; : > "$HO_RUN_DIR/messages/$id.chord") 2>/dev/null || return 1
-  bytes=$(jq -r '.force_send.bytes // [] | map(tostring) | join(" ")' "$profile")
+  # Numbers 1-31 only, never 10 (line feed) or 13 (carriage return): a chord must not act as
+  # Enter (minor 12). Any other value, a string included, refuses the whole chord.
+  bytes=$(jq -r '.force_send.bytes // [] | if length > 0 and all(type == "number" and . == floor and . >= 1 and . <= 31 and . != 10 and . != 13)
+    then map(tostring) | join(" ") else "" end' "$profile" 2>/dev/null) || bytes=""
   want=$(jq -r '.force_send.min_version // ""' "$profile")
-  [ -n "$bytes" ] && [ -n "$want" ] || { ho_ledger_append deliver-force-send id "$id" result skipped reason "the runtime data names no send-now chord"; return 1; }
+  [ -n "$bytes" ] && [ -n "$want" ] || { ho_ledger_append deliver-force-send id "$id" result skipped reason "the runtime data names no usable send-now chord"; return 1; }
   # The version comes from the runtime the launch checked and recorded, checked again here;
   # never from a PATH lookup, which a folder the project controls could win (Codex review).
   cmd=$(jq -r '.runtime_path // ""' "$rec")
@@ -467,7 +473,20 @@ ho_session_deliver() {
       ho_deliver_pending "$id" "$name" "$st" || return 1
       ;;
     2) ho_ledger_append deliver-message id "$id" result "no message route in the runtime data" ;;
-    *) ho_ledger_append deliver-message id "$id" result failed ;;
+    *)
+      ho_ledger_append deliver-message id "$id" result failed
+      # A command that fails or times out may still have posted the message: the transcript
+      # decides before any fallback, so a delivered message is never typed again (Codex review).
+      st=$(ho_deliver_scan "$profile" "$tr" "$off" "$id")
+      case $st in
+        delivered*)
+          ho_ledger_append deliver-confirmed id "$id" name "$name" route message proof "${st#delivered }"
+          printf 'DELIVERED id=%s session=%s route=message proof=%s\n' "$id" "$name" "${st#delivered }"
+          return 0
+          ;;
+      esac
+      ho_deliver_pending "$id" "$name" "$st" || return 1
+      ;;
   esac
 
   # ---- 2. the typed fallback (D42g, H-099, H-137) ----

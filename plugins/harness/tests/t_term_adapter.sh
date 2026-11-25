@@ -43,6 +43,10 @@ for backend in tmux iterm2; do
   ho_term_bytes "$h1" "$o1" "$s1" 24 19
   assert_eq "$t: bytes sends each control byte, in order" "<0x18><0x13>" "$(cat "$f1.in")"
   assert_exit "$t: a byte outside 1-31 is refused" 65 ho_term_bytes "$h1" "$o1" "$s1" 65
+  : > "$f1.in"
+  assert_exit "$t: minor 12: byte 10 (line feed) is refused" 65 ho_term_bytes "$h1" "$o1" "$s1" 24 10
+  assert_exit "$t: minor 12: byte 13 (carriage return) is refused" 65 ho_term_bytes "$h1" "$o1" "$s1" 13
+  assert_eq "$t: minor 12: a refused set sends no byte at all" "" "$(cat "$f1.in")"
   assert_exit "$t: bytes to a session tagged with another owner is refused" 66 ho_term_bytes "$h1" "$o2" "$s1" 24
   printf '> \033[2mdim\033[0m\n' > "$f1.out"
   case $backend in

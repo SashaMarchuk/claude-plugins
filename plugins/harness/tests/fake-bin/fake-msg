@@ -10,6 +10,8 @@
 #   queue    the transcript records the text as queued (an enqueue record); exit 0
 #   dequeue  queued, then removed from the queue without being taken; exit 0
 #   fail     nothing is written; exit 1
+#   deliver-fail  the user turn is written, then exit 1
+#   deliver-hang  the user turn is written, then it hangs (the engine's timeout ends it)
 # The transcript is found as $HOME/.claude/projects/*/<session-id>.jsonl.
 set -euo pipefail
 sid=${1:?session id}
@@ -40,5 +42,11 @@ case ${HO_FAKE_MSG_MODE:-deliver} in
     [ "$HO_FAKE_MSG_MODE" = queue ] || jq -cn --arg c "$(cat "$file")" '{type: "queue-operation", operation: "remove", content: $c}' >> "$tr"
     ;;
   fail) exit 1 ;;
+  deliver-fail | deliver-hang)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "user", message: {role: "user", content: $c} }' >> "$tr"
+    [ "$HO_FAKE_MSG_MODE" = deliver-fail ] && exit 1
+    exec sleep 60
+    ;;
   *) exit 2 ;;
 esac

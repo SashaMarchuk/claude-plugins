@@ -318,3 +318,39 @@ chmod 700 "$base/evil/claude"
 out=$(PATH="$base/evil:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver v9 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 assert_eq "Codex P2: a claude found first on PATH after launch is never run" "no" "$([ -e "$base/evil-ran" ] && echo yes || echo no)"
 assert_eq "Codex P2: the force-send still works with the launch-checked runtime" "0" "$rc"
+
+# ==== Fix round 2 of PR #95 (Codex P2 at line 470, validator F2, minor 12) ==================
+# ---- F1, H-101: a message command that fails after it delivered gets no typed copy ----------
+jq '.delivery.message_timeout_seconds = 2' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+set_runtime claude-msg
+for mode in deliver-fail deliver-hang; do
+  start "w-$mode"
+  screen "w-$mode" idle-empty
+  out=$(HO_FAKE_MSG_MODE=$mode deliver "w-$mode" --text "run tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "F1, H-101: a message command that delivered and then failed ($mode): nothing is typed (0 bytes)" "0" "$(inbytes "w-$mode")"
+  assert_eq "F1, H-101: the transcript proof of that message counts ($mode, exit 0)" "0" "$rc"
+  assert_contains "F1, H-101: it is reported as the message route ($mode)" "$out" "route=message"
+done
+set_runtime claude-code
+
+# ---- F2, S8-24: an id that starts a line after a line of text is found -----------------------
+start x1
+jq -cn --arg c "$(printf 'Please do this.\nho-line0001: stop')" '{type: "user", message: {role: "user", content: $c} }' >> "$(trof x1)"
+jq -cn --arg c "$(printf 'ho-line0002\nx')" '{type: "user", message: {role: "user", content: $c} }' >> "$(trof x1)"
+assert_eq "F2, S8-24: an id at the start of a line after a line ending in a dot is found" "delivered user-turn" \
+  "$("$h" session "$run" proof x1 ho-line0001 2>&1 | cut -d' ' -f1-2)"
+assert_eq "F2, S8-24: an id at the end of a line before a line of text is found" "delivered user-turn" \
+  "$("$h" session "$run" proof x1 ho-line0002 2>&1 | cut -d' ' -f1-2)"
+
+# ---- minor 12: no line feed or carriage return as a control byte ----------------------------
+for bad in '[10]' '[13]' '["10"]' '["13"]' '["\n"]' '["\r"]' '["0x0a"]' '[24, 13]'; do
+  jq --argjson b "$bad" '.force_send.bytes = $b' "$plug/runtimes/claude-code.json" > "$plug/runtimes/claude-bad.json"
+  set_runtime claude-bad
+  nm="y$(printf '%s' "$bad" | cksum | cut -c1-6)"
+  start "$nm"
+  screen "$nm" busy
+  : > "$(fbusy "$nm")"
+  out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 deliver "$nm" --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+  assert_eq "minor 12: chord data $bad is refused; no byte is sent" "" "$(calls | grep "byte $(rec "$nm" .handle) " || true)"
+done
+set_runtime claude-code

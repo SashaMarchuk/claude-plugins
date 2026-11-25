@@ -8,7 +8,8 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 0.2 Open the requirements PR for this change, and verify `openspec validate --all --strict` passes
 - [ ] 0.3 Run the read-only connections check and list owner-only actions (D36, OPEN-14)
 - [ ] 0.4 Check that a separate config folder keeps its own plugin cache and that two marketplaces cannot share one name
-- [ ] 0.5 Ask the owner once: who merges wave PRs into `harness/next` (until he answers, he merges each one); whether the redacted field notes may go onto the build branch; whether branch protection may be switched on for `main`; whether one private throwaway repo may be created for GitHub intake tests. Left to the owner or the project, with no agent decision: the per-project worker count and safety rules 3 to 6
+- [x] 0.5 Build-time ground rules: the build session merges wave PRs into `harness/next` after an independent validator pass, a green `bash tests/run-all.sh` and a clean external review, and merges into `main` stay the owner's; the redacted field notes are on `harness/next`; `main` is protected (pull request only, admins included); a private sandbox repository exists for GitHub intake tests
+- [ ] 0.6 Owner item, with no agent decision: the per-project worker count and safety rules 3 to 6 stay with the owner or the project
 
 ## 1. Build branch (after the owner merges the requirements PR)
 

@@ -374,7 +374,7 @@ Sonnet agents mined the recorded runs of the 0.6.0 engine once, narrowly. A Fabl
 - [The builder cannot be rebuilt from git: its hand patches exist only in the installed copy] → freeze it, back it up, no update and no 0.6.1.
 - [The old watch loop reacts to screen text about limits, trust dialogs and passwords] → build those tickets attended, keep fixture text in files, and read the watch log after each wave.
 - [Inherited environment from the builder (old variables, old scripts on PATH)] → new variable names, one entry script, and an isolation self-test before any work.
-- [`main` is public and has no branch protection] → the builder never pushes; only the attended session pushes; branch protection is an owner question (tasks.md 0.5).
+- [`main` is public] → `main` is protected: pull request only, admins included. The builder never pushes; only the attended session pushes, and merges into `main` stay the owner's (tasks.md 0.5).
 - [Long-branch drift] → merge `main` at each wave start; no shared-file edits on the branch.
 - [A rewrite loses knowledge] → recorded lessons and field notes become tests; past runs are mined (D39).
 - [Reuse turns into patching] → the reuse list is closed.

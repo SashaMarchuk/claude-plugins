@@ -4,10 +4,45 @@
 # See fake-term-lib.sh for the state it keeps. Per session it also keeps <h>.window (its
 # window) and <h>.var.<name> (its session variables, such as user.ho_run).
 # HO_FAKE_ITERM_NO_VARS=1 acts out an iTerm2 that cannot set session variables.
+# The backend reaches a window by "first window whose id is <W>" and a session by "first
+# session of (tab <k> of <window>) whose unique ID is <U>", which resolve to that window or
+# session or fail. This fake acts those out by identity, and refuses an open or an action
+# without them, or an action that does not check the tag inside the same tell.
+# Window order: <dir>/windows lists window IDs front to back; <dir>/order lists sessions in the
+# order they opened (one session per tab). A reference such as "item 1 of every session of
+# item 1 of every tab of item 1 of every window" names a position, so iTerm2 resolves it again
+# on every event. HO_FAKE_ITERM_REORDER=1 brings the back window to the front between the tag
+# check and the action, as a click on that window would.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/fake-term-lib.sh"
 if [ "${1:-}" = -e ]; then script=$2; else script=$(cat); fi
 case $script in *'application "iTerm2"'*) ;; *) exit 2 ;; esac
+# ft_tabs <window>: the open sessions of that window, in tab order.
+ft_tabs() {
+  local h
+  while IFS= read -r h; do
+    [ "$(cat "$(ft_file "$h").window" 2>/dev/null)" = "$1" ] && ft_known "$h" && printf '%s\n' "$h"
+  done < "$ft_dir/order"
+}
+# ft_pos <session>: "<window index> <tab index>". ft_at <wi> <ti>: the session there now.
+ft_pos() {
+  local w wi=0 ti x
+  while IFS= read -r w; do
+    wi=$((wi + 1)) ti=0
+    for x in $(ft_tabs "$w"); do
+      ti=$((ti + 1))
+      [ "$x" = "$1" ] && { printf '%s %s\n' "$wi" "$ti"; return 0; }
+    done
+  done < "$ft_dir/windows"
+  return 1
+}
+ft_at() { ft_tabs "$(sed -n "${1}p" "$ft_dir/windows")" | sed -n "${2}p"; }
+ft_reorder() {
+  [ -n "${HO_FAKE_ITERM_REORDER:-}" ] || return 0
+  { tail -n 1 "$ft_dir/windows"; sed '$d' "$ft_dir/windows"; } > "$ft_dir/windows.tmp"
+  mv "$ft_dir/windows.tmp" "$ft_dir/windows"
+  ft_log "osascript reorder $(tr '\n' ' ' < "$ft_dir/windows")"
+}
 quoted_after() { # quoted_after <prefix>: the first "..." value that follows <prefix>
   printf '%s\n' "$script" | sed -n "s/.*$1\"\\([^\"]*\\)\".*/\\1/p" | head -n 1
 }
@@ -17,31 +52,27 @@ case $script in
     echo 0
     ;;
   *'create window with default profile command'*)
-    winid=$(quoted_after '(id of x as string) is ')
+    case $script in
+      *'tell (first session of (tab k of (first window whose id is cand)) whose unique ID is u1)'*'if (variable named "user.ho_run") is "'*'tell (first session of (tab k of (first window whose id is wid)) whose unique ID is u)'*) ;;
+      *) exit 2 ;;
+    esac
+    winid=$(quoted_after '  if ')
     cmd=$(quoted_after 'command ')
     [ -n "$cmd" ] || exit 2
     w=""
     if [ -n "$winid" ] && grep -qxF -- "$winid" "$ft_dir/windows" 2>/dev/null; then
-      case $script in
-        *'if r0 is "'*)
-          # Reuse the window only while it holds a live session whose user.ho_run matches.
-          run=$(quoted_after 'if r0 is ')
-          for wf in "$ft_dir"/*.window; do
-            [ -f "$wf" ] || continue
-            [ "$(cat "$wf")" = "$winid" ] || continue
-            f=${wf%.window}
-            [ -f "$f.pid" ] && [ ! -f "$f.closed" ] || continue
-            [ "$(cat "$f.var.user.ho_run" 2>/dev/null || true)" = "$run" ] && w=$winid
-          done
-          ;;
-        *) w=$winid ;;
-      esac
+      # Reuse the window only while it holds a live session whose user.ho_run matches.
+      run=$(quoted_after 'if (variable named "user.ho_run") is ')
+      for x in $(ft_tabs "$winid"); do
+        [ "$(cat "$(ft_file "$x").var.user.ho_run" 2>/dev/null || true)" = "$run" ] && w=$winid
+      done
     fi
     if [ -z "$w" ]; then
       w="W$(ft_next)"
       printf '%s\n' "$w" >> "$ft_dir/windows"
     fi
     h="FAKE-ITERM-$(ft_next)"
+    printf '%s\n' "$h" >> "$ft_dir/order"
     ft_log "osascript open $h in $w"
     ft_start "$h" "$cmd"
     f=$(ft_file "$h")
@@ -63,6 +94,7 @@ case $script in
     printf '%s %s\n' "$w" "$h"
     ;;
   *'(unique id of s) is "'*)
+    # A loop over windows, tabs and sessions: s is a position, resolved again for the action.
     h=$(quoted_after '(unique id of s) is ')
     if ! ft_known "$h"; then echo notfound; exit 0; fi
     f=$(ft_file "$h")
@@ -73,6 +105,11 @@ case $script in
         [ "$have" = "$want" ] || { echo notmine; exit 0; }
         ;;
     esac
+    pos=$(ft_pos "$h") || { echo notfound; exit 0; }
+    ft_reorder
+    h=$(ft_at $pos)
+    [ -n "$h" ] || exit 1
+    f=$(ft_file "$h")
     case $script in
       *'write text (ASCII character 27) newline NO'*) ft_log "osascript key $h Escape"; printf '<ESC>' >> "$f.in" ;;
       *'write text "" newline YES'*) ft_log "osascript key $h Enter"; printf '\n' >> "$f.in" ;;
@@ -83,6 +120,41 @@ case $script in
         ;;
       *'return (contents of s)'*) ft_log "osascript capture $h"; cat "$f.out"; exit 0 ;;
       *'tell s to close'*) ft_log "osascript close $h"; : > "$f.closed" ;;
+      *) exit 2 ;;
+    esac
+    echo ok
+    ;;
+  *'whose unique ID is "'*)
+    # The pinned form: the tell names the session by its unique ID, and the tag check comes
+    # first inside it. Every event reaches that session, whatever moved in between.
+    h=$(quoted_after 'whose unique ID is ')
+    case $script in
+      *"tell (first session of (tab k of (first window whose id is w1)) whose unique ID is \"$h\")"*) ;;
+      *) exit 2 ;;
+    esac
+    body=$(printf '%s\n' "$script" | awk '
+      /^ *tell \(first session of / { t = 1; next }
+      t && /^ *if ho_tag is not "/ { c = 1; next }
+      t && /^ *end tell/ { exit }
+      t && !c && /write text|close|contents/ { print "UNCHECKED"; exit }
+      c { print }')
+    [ -n "$body" ] && [ "$body" != UNCHECKED ] || exit 2
+    if ! ft_known "$h"; then echo notfound; exit 0; fi
+    f=$(ft_file "$h")
+    want=$(quoted_after 'if ho_tag is not ')
+    have="$h/$(cat "$f.var.user.ho_run" 2>/dev/null || true)/$(cat "$f.var.user.ho_session" 2>/dev/null || true)"
+    [ "$have" = "$want" ] || { echo notmine; exit 0; }
+    ft_reorder
+    case $body in
+      *'write text (ASCII character 27) newline NO'*) ft_log "osascript key $h Escape"; printf '<ESC>' >> "$f.in" ;;
+      *'write text "" newline YES'*) ft_log "osascript key $h Enter"; printf '\n' >> "$f.in" ;;
+      *'write text "'*'" newline NO'*)
+        text=$(printf '%s\n' "$body" | sed -n 's/.*write text "\([^"]*\)".*/\1/p' | head -n 1)
+        ft_log "osascript send-text $h $text"
+        printf '%s' "$text" >> "$f.in"
+        ;;
+      *'return contents'*) ft_log "osascript capture $h"; cat "$f.out"; exit 0 ;;
+      *close*) ft_log "osascript close $h"; : > "$f.closed" ;;
       *) exit 2 ;;
     esac
     echo ok

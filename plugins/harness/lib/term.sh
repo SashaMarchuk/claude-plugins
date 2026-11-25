@@ -6,8 +6,9 @@
 # when it opened the session: an iTerm2 session unique ID or a tmux pane ID. A handle is
 # for addressing only; a session's identity is its process ID plus its session ID.
 # Handles can be reused (a tmux pane ID after the server restarts, an iTerm2 window ID after
-# the app restarts), so open tags the new session with its owner (the harness session ID)
-# and its run, and every later call acts only if the handle still carries that tag.
+# the app restarts), so open tags the new session with its owner and its run, and every later
+# call acts only if the handle still carries that tag. The owner is a tag made new for each
+# launch, not the session ID: a resume reuses the session ID (review of wave 2, N2).
 #
 #   ho_term_backend                       print the backend: iterm2 or tmux
 #   ho_term_open <group> <title> <launcher> <owner>   open a tab or pane that runs the launcher,
@@ -44,14 +45,14 @@ ho_term_text_ok() {
   esac
 }
 
-# The owner is a harness session ID (lower-case UUID). An untagged session has an empty
-# tag, so an empty owner would match it: it is refused.
+# The owner is the launch tag from the session's record (a lower-case UUID). An untagged
+# session has an empty tag, so an empty owner would match it: it is refused.
 ho_term_owner_ok() {
   case ${1-} in
     [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
       ho_term_safe "${HO_RUN_ID-}" 2>/dev/null && return 0 ;;
   esac
-  printf 'harness: terminal owner %s is not a session ID, or HO_RUN_ID is unsafe\n' "${1-}" >&2
+  printf 'harness: terminal owner %s is not a launch tag, or HO_RUN_ID is unsafe\n' "${1-}" >&2
   return 65
 }
 
@@ -140,7 +141,7 @@ ho_term_probe() {
 # session name can collide with it). Window IDs are reused after iTerm2 restarts, so a
 # stored window is used only while it still holds a session tagged with this run.
 # Every session the harness opens carries two iTerm2 session variables: user.ho_run (the
-# run ID) and user.ho_session (the owner). A session without both is never written to,
+# run ID) and user.ho_session (the owner, the launch tag). A session without both is never written to,
 # read or closed.
 ho_term_windows_file() { printf '%s/terminal/windows.json\n' "$HO_RUN_DIR"; }
 
@@ -152,50 +153,75 @@ ho_term_iterm2_open() {
   jq -e 'type == "object"' "$f" >/dev/null 2>&1 || printf '{}\n' | ho_atomic_write "$f" || return 70
   winid=$(jq -r --arg g "$group" '.[$g] // "" | strings' "$f")
   [ -z "$winid" ] || ho_term_safe "$winid" 2>/dev/null || winid=""
-  # If the tags cannot be set, the new session is closed in the same script: it is held by
-  # reference there, not by an ID that could name another session.
+  # iTerm2 resolves a reference again on every event, and a loop variable is a position that
+  # names another session once windows or tabs move. The one unpinned read is the new
+  # session's unique ID, taken once from the window or tab that create returned. So every reference here ends in a filter
+  # on an identity: "first window whose id is <W>", and "first session of (tab <k> of <that
+  # window>) whose unique ID is <U>". Such a reference reaches that one window or session, or
+  # fails; it never reaches another one. Loops run over values only (IDs and counts).
+  # The stored window is used only while it holds a session tagged with this run. The new
+  # session is tagged through its unique ID; if the tags cannot be set, it is closed the same way.
   out=$(osascript <<OSA
 tell application "iTerm2"
-  set w to missing value
-  repeat with x in windows
+  set wid to missing value
+  if "$winid" is not "" then
     try
-      if (id of x as string) is "$winid" then
-        repeat with t0 in tabs of x
-          repeat with s0 in sessions of t0
-            try
-              tell s0 to set r0 to (variable named "user.ho_run")
-              if r0 is "$HO_RUN_ID" then set w to x
-            end try
-          end repeat
+      set cand to ("$winid" as integer)
+      repeat with k from 1 to (count of tabs of (first window whose id is cand))
+        set us to (unique ID of every session of (tab k of (first window whose id is cand)))
+        repeat with j from 1 to (count of us)
+          set u1 to (item j of us)
+          try
+            tell (first session of (tab k of (first window whose id is cand)) whose unique ID is u1)
+              if (variable named "user.ho_run") is "$HO_RUN_ID" then set wid to cand
+            end tell
+          end try
         end repeat
-      end if
+      end repeat
     end try
-  end repeat
-  if w is missing value then
-    set w to (create window with default profile command "/bin/bash $launcher")
-    set s to current session of w
-  else
-    tell w to set t to (create tab with default profile command "/bin/bash $launcher")
-    set s to current session of t
   end if
-  try
-    tell s to set variable named "user.ho_run" to "$HO_RUN_ID"
-    tell s to set variable named "user.ho_session" to "$owner"
-  on error
-    tell s to close
-    return "notag"
-  end try
-  try
-    tell s to set name to "$title"
-  end try
-  return (id of w as string) & " " & (unique id of s)
+  if wid is missing value then
+    set nw to (create window with default profile command "/bin/bash $launcher")
+    set wid to (id of nw)
+    set u to (unique ID of current session of nw)
+  else
+    tell (first window whose id is wid) to set nt to (create tab with default profile command "/bin/bash $launcher")
+    set u to (unique ID of current session of nt)
+  end if
+  repeat with k from 1 to (count of tabs of (first window whose id is wid))
+    if (unique ID of every session of (tab k of (first window whose id is wid))) contains u then
+      tell (first session of (tab k of (first window whose id is wid)) whose unique ID is u)
+        set tagged to false
+        try
+          set variable named "user.ho_run" to "$HO_RUN_ID"
+          set variable named "user.ho_session" to "$owner"
+          set tagged to true
+        end try
+        if not tagged then
+          close
+          return "notag"
+        end if
+        try
+          set name to "$title"
+        end try
+      end tell
+      return (wid as string) & " " & u
+    end if
+  end repeat
+  return "lost"
 end tell
 OSA
 ) || { echo "harness: iTerm2 did not open a session (check the Automation permission)" >&2; return 70; }
-  if [ "$out" = notag ]; then
-    echo "harness: iTerm2 could not tag the new session (session variables need iTerm2 3.3 or later); it was closed" >&2
-    return 70
-  fi
+  case $out in
+    notag)
+      echo "harness: iTerm2 could not tag the new session (session variables need iTerm2 3.3 or later); it was closed" >&2
+      return 70
+      ;;
+    lost)
+      echo "harness: the new iTerm2 session was gone before it could be tagged" >&2
+      return 70
+      ;;
+  esac
   w=${out%% *}
   h=${out#* }
   ho_term_safe "$w" 2>/dev/null && ho_term_safe "$h" 2>/dev/null || { echo "harness: iTerm2 returned no usable session ID" >&2; return 70; }
@@ -205,28 +231,37 @@ OSA
   printf '%s\n' "$h"
 }
 
-# ho_term_iterm2_do <handle> <owner> <AppleScript body using s>: run the body against that one
-# session, only if it carries this run's tag and the owner's tag. The check and the body run
-# in one script.
+# ho_term_iterm2_do <handle> <owner> <AppleScript body>: run the body against that one session,
+# only if it carries this run's tag and the owner's tag. The body runs inside a tell to the
+# session's pinned reference (see open), right after the check in the same tell, so every
+# event of check and body reaches the session with that unique ID or fails.
 ho_term_iterm2_do() {
   local h=$1 owner=$2 body=$3 r
   r=$(osascript <<OSA
 tell application "iTerm2"
-  repeat with w in windows
-    repeat with t in tabs of w
-      repeat with s in sessions of t
-        try
-          if (unique id of s) is "$h" then
-            set ho_tag to ""
-            try
-              tell s to set ho_tag to ((variable named "user.ho_run") & "/" & (variable named "user.ho_session"))
-            end try
-            if ho_tag is not "$HO_RUN_ID/$owner" then return "notmine"
-            $body
-            return "ok"
-          end if
-        end try
-      end repeat
+  set wids to (id of every window)
+  repeat with i from 1 to (count of wids)
+    set w1 to (item i of wids)
+    set n to 0
+    try
+      set n to (count of tabs of (first window whose id is w1))
+    end try
+    repeat with k from 1 to n
+      set hit to false
+      try
+        set hit to ((unique ID of every session of (tab k of (first window whose id is w1))) contains "$h")
+      end try
+      if hit then
+        tell (first session of (tab k of (first window whose id is w1)) whose unique ID is "$h")
+          set ho_tag to ""
+          try
+            set ho_tag to (unique ID) & "/" & (variable named "user.ho_run") & "/" & (variable named "user.ho_session")
+          end try
+          if ho_tag is not "$h/$HO_RUN_ID/$owner" then return "notmine"
+          $body
+        end tell
+        return "ok"
+      end if
     end repeat
   end repeat
   return "notfound"
@@ -235,32 +270,32 @@ OSA
 ) || { echo "harness: iTerm2 call failed" >&2; return 70; }
   case $r in
     notfound) printf 'harness: no iTerm2 session %s\n' "$h" >&2; return 66 ;;
-    notmine) printf 'harness: iTerm2 session %s is not session %s of run %s; nothing was done\n' "$h" "$owner" "$HO_RUN_ID" >&2; return 66 ;;
+    notmine) printf 'harness: iTerm2 session %s does not carry tag %s of run %s; nothing was done\n' "$h" "$owner" "$HO_RUN_ID" >&2; return 66 ;;
   esac
   printf '%s\n' "$r"
 }
 
 ho_term_iterm2_send() {
-  ho_term_iterm2_do "$1" "$2" "tell s to write text \"$3\" newline NO" >/dev/null || return $?
+  ho_term_iterm2_do "$1" "$2" "write text \"$3\" newline NO" >/dev/null || return $?
   sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
   ho_term_iterm2_key "$1" "$2" enter
 }
 
 ho_term_iterm2_key() {
   case $3 in
-    enter) ho_term_iterm2_do "$1" "$2" 'tell s to write text "" newline YES' >/dev/null ;;
-    escape) ho_term_iterm2_do "$1" "$2" 'tell s to write text (ASCII character 27) newline NO' >/dev/null ;;
+    enter) ho_term_iterm2_do "$1" "$2" 'write text "" newline YES' >/dev/null ;;
+    escape) ho_term_iterm2_do "$1" "$2" 'write text (ASCII character 27) newline NO' >/dev/null ;;
   esac
 }
 
 ho_term_iterm2_capture() {
   local out
-  out=$(ho_term_iterm2_do "$1" "$2" 'return (contents of s)') || return $?
+  out=$(ho_term_iterm2_do "$1" "$2" 'return contents') || return $?
   # iTerm2 pads the screen with blank rows: drop trailing blank lines first.
   printf '%s\n' "$out" | sed -e :a -e '/^[[:space:]]*$/{$d;N;ba' -e '}' | tail -n "$3"
 }
 
-ho_term_iterm2_close() { ho_term_iterm2_do "$1" "$2" 'tell s to close' >/dev/null; }
+ho_term_iterm2_close() { ho_term_iterm2_do "$1" "$2" 'close' >/dev/null; }
 
 # ------------------------------------------------------------------------ tmux
 # The harness uses its own tmux server (socket ho-harness), one tmux session per run, and one
@@ -284,7 +319,7 @@ ho_term_tmux_if() {
 }
 
 ho_term_tmux_refused() {
-  printf 'harness: tmux pane %s is not session %s of run %s; nothing was done\n' "$1" "$2" "$HO_RUN_ID" >&2
+  printf 'harness: tmux pane %s does not carry tag %s of run %s; nothing was done\n' "$1" "$2" "$HO_RUN_ID" >&2
   return 66
 }
 

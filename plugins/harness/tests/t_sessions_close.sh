@@ -18,6 +18,16 @@ assert_contains "Rebuild graceful close: the ledger records the close" "$(cat "$
 assert_exit "Rebuild graceful close: closing a closed session again is a no-op" 0 "$h" session "$run" close c1
 assert_contains "Rebuild graceful close: the closed session's own pane is closed" "$(calls)" "tmux close $h1"
 
+# ---- the fake session leaves only on a whole "/exit" line (review of wave 2, N1) ------------
+# The engine types the text and sends Enter in two calls; the fake must not leave between them.
+launch e1 >/dev/null
+pe=$(rec e1 .pid) fe="$HO_FAKE_TERM_DIR/$(printf '%s' "$(rec e1 .handle)" | tr -c 'A-Za-z0-9-' '_').in"
+printf '/exit' >> "$fe"
+sleep 0.5
+assert_eq "N1: the fake session stays while /exit has no Enter yet" "yes" "$(alive "$pe" && echo yes || echo no)"
+printf '\n' >> "$fe"
+assert_eq "N1: the fake session leaves once the /exit line is complete" "yes" "$(wait_gone "$pe" && echo yes || echo no)"
+
 # ---- H-103, S8-27 (review of wave 2, B1): the pane ID names another session by now -------
 # As the session leaves, the tmux server restarts and another session of this run gets the
 # same pane ID. The fake acts this out by giving the pane another session's tag.
@@ -29,6 +39,33 @@ assert_eq "H-103: the session's own process has ended" "yes" "$(wait_gone "$p4" 
 assert_eq "H-103: the pane that now belongs to another session is not closed" "" "$(calls | grep -F "tmux close $h4" || true)"
 assert_contains "H-103: the skipped pane close is recorded with its reason" "$(grep session-close-terminal-skipped "$run/ledger.jsonl" || true)" "names another session"
 assert_eq "H-103: the session is still marked closed" "closed" "$(rec c4 .status)"
+
+# ---- H-103, S8-27 (review of wave 2, N2): a resume reuses the session ID, not the tag -------
+launch r1 >/dev/null
+sr=$(rec r1 .session_id)
+resume_r2() { "$h" session "$run" launch --role worker --name r2 --cwd "$proj/src" --resume "$sr"; }
+rc=0; resume_r2 >/dev/null 2>&1 || rc=$?
+assert_eq "N2: a resume while a record with that session ID is not closed is refused (65)" "65" "$rc"
+assert_eq "N2: the refused resume leaves no record" "no" "$([ -e "$run/sessions/r2.json" ] && echo yes || echo no)"
+"$h" session "$run" close r1 >/dev/null || true
+resume_r2 >/dev/null 2>&1 || true
+hr1=$(rec r1 .handle) hr2=$(rec r2 .handle) pr2=$(rec r2 .pid)
+tag_of() { cat "$HO_FAKE_TERM_DIR/$(printf '%s' "$1" | tr -c 'A-Za-z0-9-' '_').tag"; }
+assert_eq "N2: after the close the resume starts" "running $sr" "$(rec r2 .status) $(rec r2 .session_id)"
+assert_eq "N2: each launch of one session ID tags its pane with its own tag" "yes" \
+  "$([ "$(tag_of "$hr1")" != "$(tag_of "$hr2")" ] && [ "$(tag_of "$hr2")" = "$(rec r2 .term_tag)" ] && [ "$(tag_of "$hr2")" != "$sr" ] && echo yes || echo no)"
+# A late close of the first launch reaches the resumed launch's pane and process (the pane ID
+# was reused, and the process carries the same session ID). It must not type into that pane.
+jq --arg h "$hr2" --argjson p "$pr2" '.status = "running" | .handle = $h | .pid = $p' "$run/sessions/r1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/r1.json"
+rc=0; "$h" session "$run" close r1 >/dev/null 2>&1 || rc=$?
+assert_eq "N2: a close of an earlier launch through the resumed launch's pane is refused (70)" "70" "$rc"
+assert_eq "N2: nothing is typed into the resumed launch's pane" "" "$(calls | grep -F "send-text $hr2 " || true)"
+assert_eq "N2: the resumed launch keeps running" "yes" "$(alive "$pr2" && echo yes || echo no)"
+# A record without a launch tag (written before tags were per launch) is not closed through
+# its terminal: the session ID alone does not name one launch.
+jq 'del(.term_tag)' "$run/sessions/r2.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/r2.json"
+rc=0; "$h" session "$run" close r2 >/dev/null 2>&1 || rc=$?
+assert_eq "N2: a record without a launch tag is left open (70)" "70 yes" "$rc $(alive "$pr2" && echo yes || echo no)"
 
 # ---- close uses the backend the session was launched with -----------------------------------
 launch c3 >/dev/null

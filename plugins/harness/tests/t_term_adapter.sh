@@ -128,6 +128,21 @@ assert_eq "iTerm2 tags (c): a stored window that holds a session of this run is 
 rc=0; HO_FAKE_ITERM_NO_VARS=1 ho_term_open work ho-worker-e "$launcher" "$o2" >/dev/null 2>&1 || rc=$?
 assert_eq "iTerm2 tags (a): a session that cannot be tagged fails the open (exit 70)" "70" "$rc"
 assert_contains "iTerm2 tags (a): the untagged session is closed in the same script" "$(tail -n 1 "$HO_FAKE_TERM_DIR/calls.log")" "osascript close"
+# (d) iTerm2 resolves a loop reference to a session again on every event, by position. A
+# window that comes to the front between the tag check and the action must not move the
+# action to another session (review of wave 2, iTerm2 pinning).
+export HO_FAKE_TERM_DIR="$base/term-reorder"
+qa=$(ho_term_open work ho-worker-a "$launcher" "$o1")
+qb=$(ho_term_open control ho-orch-b "$launcher" "$o2")
+fa=$(it_file "$qa") fb=$(it_file "$qb")
+assert_eq "iTerm2 pinning (d): the two sessions are in two windows" "yes" "$([ "$(cat "$fa.window")" != "$(cat "$fb.window")" ] && echo yes || echo no)"
+HO_FAKE_ITERM_REORDER=1 ho_term_send "$qa" "$o1" "/exit" >/dev/null 2>&1 || true
+assert_contains "iTerm2 pinning (d): the windows were reordered between check and action" "$(cat "$HO_FAKE_TERM_DIR/calls.log")" "osascript reorder"
+assert_eq "iTerm2 pinning (d): nothing is written to the session that moved into the old position" "" "$(cat "$fb.in")"
+assert_eq "iTerm2 pinning (d): the text and its Enter reach the checked session" "/exit" "$(cat "$fa.in")"
+HO_FAKE_ITERM_REORDER=1 ho_term_close "$qa" "$o1" >/dev/null 2>&1 || true
+assert_eq "iTerm2 pinning (d): a close after a reorder closes the checked session only" "yes no" \
+  "$([ -f "$fa.closed" ] && echo yes || echo no) $([ -f "$fb.closed" ] && echo yes || echo no)"
 HO_TERM_BACKEND=iterm2
 assert_eq "Rebuild terminal adapter: a backend recorded for a session wins over the config" "iterm2" "$(ho_term_backend)"
 unset HO_TERM_BACKEND

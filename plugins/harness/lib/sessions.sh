@@ -6,7 +6,8 @@
 # terminal. H-100: sessions run interactively in a terminal. H-103: a process is stopped
 # only through its exact process ID; nothing here matches processes by name.
 #
-#   <run>/sessions/<name>.json     the registry record, one per session
+#   <run>/sessions/<name>.json     the registry record, one per session; its term_tag (new for
+#                                  each launch) is the tag of the session's pane or tab
 #   <run>/sessions/<name>.pid      "<pid> <run-id> <session-id>", written by the launcher
 #   <run>/sessions/<name>.closing  present while a close is under way (stops model fallback)
 #   <run>/sessions/<name>.failed   written by the launcher when the session could not start
@@ -382,8 +383,33 @@ ho_session_launch() {
     return 65
   fi
 
-  local sid ldir launcher title pidfile closing group attempts
+  local sid tag ldir launcher title pidfile closing group attempts
   sid=${resume:-$(ho_session_new_id)}
+  # The terminal tag is new for every launch. A resume reuses the session ID, so the session ID
+  # cannot tell this launch's pane or tab from the one of an earlier launch (review N2).
+  tag=$(ho_session_new_id)
+  ho_session_uuid_ok "$tag" || { rm -f "$rec"; return 70; }
+  # A resume never runs beside a launch of the same session ID that is not closed. The record
+  # carries the session ID before the check, so of two resumes that race, at least one sees
+  # the other and stops.
+  if [ -n "$resume" ]; then
+    jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg sid "$sid" --arg pidfile "$sdir/$name.pid" --arg ts "$(ho_now)" \
+      '{schemaVersion: 2, run: $run, name: $name, session_id: $sid, pid: null, pid_file: $pidfile, status: "launching", created: $ts}' \
+      | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
+    local f other=""
+    for f in "$sdir"/*.json; do
+      [ -f "$f" ] && [ "$f" != "$rec" ] || continue
+      if [ "$(jq -r --arg sid "$sid" 'if type == "object" and .session_id == $sid and .status != "closed" then "yes" else "" end' "$f" 2>/dev/null)" = yes ]; then
+        other=$(basename "$f" .json)
+        break
+      fi
+    done
+    if [ -n "$other" ]; then
+      rm -f "$rec"
+      printf 'harness: session %s of run %s has session ID %s and is not closed; close it before a resume\n' "$other" "$HO_RUN_ID" "$sid" >&2
+      return 65
+    fi
+  fi
   ldir="$HO_RUN_DIR/launchers"
   ho_term_safe "$ldir/$name.sh" 2>/dev/null || ldir="${HO_USER_DIR:-$HOME/.claude/harness}/launchers/$HO_RUN_ID"
   ho_term_safe "$ldir/$name.sh" || { rm -f "$rec"; return 65; }
@@ -412,15 +438,15 @@ ho_session_launch() {
   backend=$(ho_term_backend) || { local rc=$?; rm -f "$rec"; return "$rc"; }
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg account "$acct_name" \
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
-    --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" \
+    --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
-      runtime: $runtime, session_id: $sid, pid: null, backend: $backend, handle: null, cwd: $cwd,
+      runtime: $runtime, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"
 
   local handle rc=0
-  handle=$(ho_term_open "$group" "$title" "$launcher" "$sid") || rc=$?
+  handle=$(ho_term_open "$group" "$title" "$launcher" "$tag") || rc=$?
   if [ "$rc" -ne 0 ]; then
     ho_session_set "$rec" '.status = "launch-failed"' || rm -f "$rec"
     ho_ledger_append session-launch-failed name "$name" reason "terminal did not open"
@@ -457,7 +483,7 @@ ho_session_launch() {
 # a live one is asked to exit through its own terminal, and the close counts only when that
 # exact process has ended. A session still busy at the timeout is left open, never forced.
 ho_session_close() {
-  local name=${1-} rec owner status sid pid handle profile exitcmd
+  local name=${1-} rec owner status sid pid handle tag profile exitcmd
   [ -n "$name" ] || { ho_session_usage; return 64; }
   ho_session_name_ok "$name" || return 65
   rec="$HO_RUN_DIR/sessions/$name.json"
@@ -495,6 +521,14 @@ ho_session_close() {
   fi
   handle=$(jq -r '.handle // ""' "$rec")
   [ -n "$handle" ] || { rm -f "$closing"; printf 'harness: session %s has no terminal handle; left open\n' "$name" >&2; return 70; }
+  # The terminal is reached only through this launch's own tag; the session ID is not enough.
+  tag=$(jq -r '.term_tag // ""' "$rec")
+  ho_session_uuid_ok "$tag" 2>/dev/null || {
+    rm -f "$closing"
+    ho_ledger_append session-close-failed name "$name" reason "the record has no terminal tag; nothing typed"
+    printf 'harness: the record of session %s has no terminal tag; left open\n' "$name" >&2
+    return 70
+  }
   profile="$HO_ROOT/runtimes/$(jq -r '.runtime // ""' "$rec").json"
   exitcmd=$(jq -r '.exit_command // ""' "$profile" 2>/dev/null || true)
   [ -n "$exitcmd" ] || { rm -f "$closing"; printf 'harness: no exit command for session %s; left open\n' "$name" >&2; return 78; }
@@ -502,7 +536,7 @@ ho_session_close() {
   HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec")
   ho_ledger_append session-close-request name "$name" session_id "$sid" pid "$pid"
   local rc=0
-  ho_term_send "$handle" "$sid" "$exitcmd" || rc=$?
+  ho_term_send "$handle" "$tag" "$exitcmd" || rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -f "$closing"
     if [ "$rc" -eq 66 ]; then
@@ -534,7 +568,7 @@ ho_session_close() {
     return 1
   fi
   rc=0
-  ho_term_close "$handle" "$sid" 2>/dev/null || rc=$?
+  ho_term_close "$handle" "$tag" 2>/dev/null || rc=$?
   if [ "$rc" -ne 0 ]; then
     ho_ledger_append session-close-terminal-skipped name "$name" session_id "$sid" handle "$handle" \
       reason "$([ "$rc" -eq 66 ] && echo "the handle is gone or names another session" || echo "terminal call failed (exit $rc)")"

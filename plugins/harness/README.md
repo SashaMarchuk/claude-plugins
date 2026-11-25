@@ -5,7 +5,7 @@ This branch holds the stable-beta rebuild of the harness plugin. The 0.6.0 engin
 ## Engine entry point
 
 The engine has one entry script: `bin/harness <verb> [args]`.
-Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state`, `tickets`, `session` and `flow`.
+Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state`, `tickets`, `session`, `slot` and `flow`.
 Run `bin/harness help` for the list.
 
 ## Ticket queue
@@ -43,6 +43,25 @@ It never reads any `HARNESS_*` variable from the 0.6.0 engine.
 - **Accounts.** Accounts are read from the user config only: `accounts.roles.<role>` (or `accounts.roles.default`) names an account, and `accounts.list.<name>.env_command` prints `KEY=VALUE` lines for it. A launch fails when `--account` differs from the role's account, or when the account is unknown or its command fails.
 - **Trust boundary.** The permission mode `session.permissions` is read only from the user config or the shipped default; a project config that sets it refuses the launch (exit 65) until the local approval record of D37-FLOW-8 exists, so move it to the user config. The runtime command found on PATH must not be, or link to, a file inside the project, a configured `repos[].worktrees_dir` or a git worktree of the project; otherwise the launch is refused (exit 65) and names the path.
 - **Terminal.** `terminal.app` is `auto`, `iterm2` or `tmux`. With tmux the harness uses its own server (`tmux -L ho-harness`) and one tmux session per run, named `ho-<run-id>`; attach with `tmux -L ho-harness attach -t ho-<run-id>`. Other settings: `session.permissions` (user config only, default `bypass`), `session.boot_timeout_seconds` (120), `session.boot_grace_seconds` (45), `session.fatal_hold_seconds` (30), `terminal.enter_delay_seconds` (2), and `models.<role>` for the default chain.
+
+## Liveness
+
+`bin/harness session <run-dir> status [name]` reports facts, one JSON line per session; the orchestrator judges them (D20).
+
+- **Verdicts.** `working`: the recorded process is alive and its command line holds the session ID. `starting`: the launch has not finished, or a model fallback is between two attempts. `dead`: the process is gone or the launch failed; a `running` record then turns `dead` once, with one `session-dead` ledger line. `closed`. `unknown`: the record or the process table cannot be read; this is never reported as `dead`.
+- **Silence is not death.** A session whose transcript has not changed for hours still reads `working` while its process lives. The transcript age is a number in the report and never changes the verdict. There is no stall rule.
+- **Transcript and screen.** `session <run-dir> read <name> transcript|screen [--lines N]` prints the tail of the session's transcript or screen inside an untrusted fence. The transcript is found by the recorded session ID under the root the runtime file names (`transcript` in `runtimes/<runtime>.json`); the root is recorded at launch as `transcript_root`. The screen is read only while the pane or tab carries this launch's tag and the session ID.
+- **No typing.** Nothing in the engine types into a session to wake it (H-099). The only typed text is the exit command of a graceful close.
+
+## Limits and slots
+
+The engine enforces the worker cap, one heavy job at a time and the stage limits (H-104, H-105, H-107, design D26 and D26a).
+
+- **Worker cap.** `bin/harness run new --workers N` sets it for the run. Otherwise `limits.workers` from the config is used, and the default is 1. The minimum is 1, and no maximum is shipped. The limits are fixed in `<run>/limits.json` when the run starts.
+- **Worker slots.** `session launch --role worker` takes a slot under one lock before anything is opened. When the cap is reached, the launch exits 73 and writes nothing, or it waits up to `--slot-wait SECONDS`. Close, a failed launch, or a session that reads `dead` gives the slot back.
+- **Heavy work.** `bin/harness slot <run-dir> acquire heavy --holder NAME --op TYPE [--wait S]` and `release heavy --holder NAME`. The six shipped types are in `limits/heavy-ops.json`. `slot <run-dir> heavy-add TYPE REASON` adds a type for one run; it takes a name only and never changes a limit (`limits.heavy`, default 1).
+- **Stages.** `acquire stage:<id>` and `release stage:<id>`; `browser` and every other stage default to 1 (`limits.stages.<id>`). A session that needs a stage slot and the heavy slot takes the stage slot first.
+- `slot <run-dir> list` shows the held slots and `slot <run-dir> limits` the limits. No free-memory check is made (S8-21).
 
 ## Flow profiles
 

@@ -8,6 +8,7 @@
 # HO_FAKE_CLAUDE_FAIL_AFTER seconds.
 # HO_FAKE_CLAUDE_SHOW_ENV=<NAME>: also log "env NAME=<value>".
 # HO_FAKE_CLAUDE_ON_EXIT=<shell command>: run just before it leaves on "/exit".
+# HO_FAKE_CLAUDE_TRANSCRIPT=1: also write a transcript line (see below).
 set -euo pipefail
 if [ "${1:-}" = "--version" ]; then
   echo "0.0.0 (fake claude)"
@@ -21,6 +22,20 @@ done
 printf '%s\n' "$line" >> "$log"
 if [ -n "${HO_FAKE_CLAUDE_SHOW_ENV:-}" ]; then
   printf 'env %s=%s\n' "$HO_FAKE_CLAUDE_SHOW_ENV" "$(printenv "$HO_FAKE_CLAUDE_SHOW_ENV" || true)" >> "$log"
+fi
+# HO_FAKE_CLAUDE_TRANSCRIPT=1: write one line to the transcript Claude Code would keep for this
+# session: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<working folder, each other byte as ->/<id>.jsonl
+if [ "${HO_FAKE_CLAUDE_TRANSCRIPT:-}" = 1 ]; then
+  prev="" fsid=""
+  for a in "$@"; do
+    case $prev in --session-id | --resume) fsid=$a ;; esac
+    prev=$a
+  done
+  if [ -n "$fsid" ]; then
+    tdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+    mkdir -p "$tdir"
+    printf '{"type":"user","sessionId":"%s","message":"fake turn"}\n' "$fsid" >> "$tdir/$fsid.jsonl"
+  fi
 fi
 if [ -n "${HO_FAKE_CLAUDE_FAIL_MODEL:-}" ]; then
   prev=""

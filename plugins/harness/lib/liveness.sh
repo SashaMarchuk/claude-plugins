@@ -150,6 +150,12 @@ ho_live_record() {
 ho_live_status() {
   local rec f
   if [ $# -gt 0 ]; then
+    # A record that cannot be parsed reads as unknown (field note I1); another run's is refused.
+    rec="$HO_RUN_DIR/sessions/$1.json"
+    if ho_session_name_ok "$1" 2>/dev/null && [ -f "$rec" ] && ! jq -e 'type == "object"' "$rec" >/dev/null 2>&1; then
+      ho_live_status_one "$rec"
+      return 0
+    fi
     rec=$(ho_live_record "$1") || return $?
     ho_live_status_one "$rec"
     return 0

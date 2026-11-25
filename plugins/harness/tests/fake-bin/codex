@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Fake codex for tests: appends its argv as one tab-separated line to $HO_FAKE_CODEX_LOG
+# (default $HOME/fake-codex.log). "login status" prints "Logged in" and exits 0, or with
+# HO_FAKE_CODEX_LOGGED_OUT=1 prints "Not logged in" and exits 1 (the real CLI does the same).
+# HO_FAKE_CODEX_SLEEP=<s>: sleep that long first (for time-limit tests). Anything else exits 0.
+set -euo pipefail
+log=${HO_FAKE_CODEX_LOG:-$HOME/fake-codex.log}
+line=""
+for a in "$@"; do
+  if [ -z "$line" ]; then line=$a; else line="$line	$a"; fi
+done
+printf '%s\n' "$line" >> "$log"
+# HO_FAKE_CODEX_PIDFILE=<f>: write its PID there. HO_FAKE_CODEX_TRAP_TERM=1: ignore TERM.
+[ -z "${HO_FAKE_CODEX_PIDFILE:-}" ] || echo $$ > "$HO_FAKE_CODEX_PIDFILE"
+[ "${HO_FAKE_CODEX_TRAP_TERM:-}" != 1 ] || trap '' TERM
+if [ -n "${HO_FAKE_CODEX_SLEEP:-}" ]; then
+  end=$(( $(date +%s) + HO_FAKE_CODEX_SLEEP ))
+  while [ "$(date +%s)" -lt "$end" ]; do sleep 0.2; done
+fi
+if [ "${1:-}" = login ] && [ "${2:-}" = status ]; then
+  if [ "${HO_FAKE_CODEX_LOGGED_OUT:-}" = 1 ]; then echo "Not logged in"; exit 1; fi
+  echo "Logged in using a test account"
+  exit 0
+fi
+exit 0

@@ -32,6 +32,16 @@ if [ -n "${HO_FAKE_CLAUDE_FAIL_MODEL:-}" ]; then
     prev=$a
   done
 fi
+# "auth status" answers like the real CLI: JSON with "loggedIn", exit 0 when logged in and
+# exit 1 when not. HO_FAKE_CLAUDE_LOGGED_OUT=1 logs out; =lie prints false but exits 0.
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+  [ -z "${HO_FAKE_CLAUDE_SLEEP:-}" ] || sleep "$HO_FAKE_CLAUDE_SLEEP"
+  case ${HO_FAKE_CLAUDE_LOGGED_OUT:-} in
+    1) printf '{\n  "loggedIn": false\n}\n'; exit 1 ;;
+    lie) printf '{\n  "loggedIn": false\n}\n'; exit 0 ;;
+    *) printf '{\n  "loggedIn": true\n}\n'; exit 0 ;;
+  esac
+fi
 if [ -n "${HO_FAKE_CLAUDE_STDOUT:-}" ]; then
   printf '%s\n' "$HO_FAKE_CLAUDE_STDOUT"
 fi

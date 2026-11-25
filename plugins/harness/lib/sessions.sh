@@ -15,8 +15,8 @@
 #   <run>/launchers/<name>.sh      the generated launcher
 #   <run>/logs/launcher.log        what the launchers report
 #
-# The launch command comes from a runtime data file, runtimes/<runtime.main>.json
-# (D37-RUNTIME-1). Accounts come from the user config only (agent decision, T7).
+# The launch command comes from the runtime profile named by runtime.main, read from the user
+# folder or the plugin's runtimes/ (lib/runtime.sh, D37-RUNTIME-1). Accounts come from the user config only (agent decision, T7).
 # Exit codes: 64 usage, 65 refused, 66 not found or another run's session, 69 the session
 # did not start, 70 terminal failed, 75 the run is stopped, 78 config, 1 close timed out.
 #
@@ -76,8 +76,7 @@ ho_runtime_profile() {
   name=$(ho_cfg '.runtime.main' '')
   [ -n "$name" ] || { echo "harness: config runtime.main is not set; set it to a file name in runtimes/ (without .json)" >&2; return 78; }
   case $name in *[!a-z0-9-]*) printf 'harness: runtime.main %s is not a runtime name\n' "$name" >&2; return 78 ;; esac
-  f="$HO_ROOT/runtimes/$name.json"
-  [ -f "$f" ] || { printf 'harness: no runtime file %s\n' "$f" >&2; return 78; }
+  f=$(ho_rt_file "$name") || return 78
   jq -e 'type == "object" and .schemaVersion == 2
     and (.command | type == "string" and length > 0)
     and ([.argv.new, .argv.resume, .argv.model, .argv.title, .argv.prompt] | all(type == "array" and all(type == "string" and (test("\n") | not))))
@@ -176,7 +175,7 @@ ho_session_clean_path() {
 
 # ho_session_project_roots: print the physical folders a runtime binary may not live in: the
 # project, each configured repos[].worktrees_dir, and every git worktree of the project
-# repository and of each configured repo (D37-FLOW-8, Codex security review of #90).
+# repository and of each configured repo (D37-FLOW-8, security review of #90).
 ho_session_project_roots() {
   local proj cfg d r
   proj=$(cd "$HO_PROJECT_DIR" && pwd -P) || return 1

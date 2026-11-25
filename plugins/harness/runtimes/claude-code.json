@@ -1,19 +1,98 @@
 {
   "schemaVersion": 2,
-  "_comment": "Launch data for one runtime (design D37-RUNTIME-1: engine code holds no runtime name). Only the fields the session launcher and graceful close need; full runtime profiles come later (tasks.md 19.1). In argv lists, {session_id}, {model} and {title} are filled in by the engine; {prompt} becomes the prompt file's text when the session starts.",
+  "_comment": "Runtime profile (D31, D37-RUNTIME-2): all the data the engine needs about one tool; engine code holds no runtime name (D37-RUNTIME-1). A user may add or replace a profile in <user dir>/runtimes/; a project never can (D37-FLOW-8). In argv lists, {session_id}, {model} and {title} are filled in by the engine; {prompt} becomes the prompt file's text when the session starts. In path patterns, {home}, {config_dir}, {skill}, {plugin} and {name} are filled in. Checked against claude --help: -p, --session-id, --resume, --permission-mode (plan is read-only) and auth status. Not yet exercised by a real run: skill_call, session_log, limits and plugin_skill_paths.",
+  "title": "Claude Code",
   "command": "claude",
+  "modes": [
+    "interactive",
+    "noninteractive"
+  ],
   "argv": {
-    "new": ["--session-id", "{session_id}"],
-    "resume": ["--resume", "{session_id}"],
-    "model": ["--model", "{model}"],
-    "title": ["-n", "{title}"],
-    "prompt": ["{prompt}"]
+    "new": [
+      "--session-id",
+      "{session_id}"
+    ],
+    "resume": [
+      "--resume",
+      "{session_id}"
+    ],
+    "model": [
+      "--model",
+      "{model}"
+    ],
+    "title": [
+      "-n",
+      "{title}"
+    ],
+    "prompt": [
+      "{prompt}"
+    ]
+  },
+  "noninteractive": {
+    "argv": [
+      "-p",
+      "--session-id",
+      "{session_id}"
+    ],
+    "resume": [
+      "-p",
+      "--resume",
+      "{session_id}"
+    ],
+    "prompt": [
+      "{prompt}"
+    ]
   },
   "permissions": {
-    "bypass": ["--dangerously-skip-permissions"],
-    "auto": ["--permission-mode", "auto"],
-    "acceptEdits": ["--permission-mode", "acceptEdits"],
-    "dontAsk": ["--permission-mode", "dontAsk"]
+    "bypass": [
+      "--dangerously-skip-permissions"
+    ],
+    "auto": [
+      "--permission-mode",
+      "auto"
+    ],
+    "acceptEdits": [
+      "--permission-mode",
+      "acceptEdits"
+    ],
+    "dontAsk": [
+      "--permission-mode",
+      "dontAsk"
+    ]
   },
+  "sandbox": {
+    "read-only": [
+      "--permission-mode",
+      "plan"
+    ]
+  },
+  "skill_call": "/{skill}",
+  "config_dir": {
+    "env": "CLAUDE_CONFIG_DIR",
+    "default": "{home}/.claude"
+  },
+  "session_log": "{config_dir}/projects/<project folder>/<session id>.jsonl",
+  "limits": "The subscription usage endpoint gives five_hour and seven_day utilization with their reset times.",
+  "capabilities": {
+    "hooks": true,
+    "session_messages": true
+  },
+  "check": {
+    "argv": [
+      "auth",
+      "status"
+    ],
+    "expect": "\"loggedIn\": *true",
+    "timeout_seconds": 20
+  },
+  "skill_paths": [
+    "{config_dir}/skills/{skill}/SKILL.md",
+    "{config_dir}/commands/{skill}.md"
+  ],
+  "plugin_skill_paths": [
+    "{config_dir}/plugins/cache/*/{plugin}/*/skills/{name}/SKILL.md",
+    "{config_dir}/plugins/cache/*/{plugin}/*/commands/{name}.md"
+  ],
+  "install": "install Claude Code (https://docs.claude.com/en/docs/claude-code/setup), then log in with: claude auth login",
   "exit_command": "/exit"
 }

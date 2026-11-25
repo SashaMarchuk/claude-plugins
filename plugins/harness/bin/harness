@@ -32,6 +32,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/flow.sh"
 # shellcheck source=../lib/loop.sh
 . "$HO_ROOT/lib/loop.sh"
+# shellcheck source=../lib/runtime.sh
+. "$HO_ROOT/lib/runtime.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -46,8 +48,8 @@ verbs:
   run        run new: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
   session    session <run-dir> launch|close|list: launch, list and close sessions
-  flow       flow profiles: list | check <flow> | steps <flow> | render <flow> <role> ...
   loop       loop <run-dir> integration|ready|merge|status: the engine-checked merge
+  flow       flows: list | check | steps | plan | preflight <flow> | copy <flow> <new> | render <flow> <role> ...
 USAGE
 }
 

@@ -191,3 +191,60 @@ assert_eq "H-073: the gsd flow links its system and gives the install step" "tru
   "$(jq '.system | (.link | type == "string" and length > 0) and (.install | type == "string" and length > 0)' "$g/flow.json")"
 assert_eq "H-073: the gsd flow folder holds no copy of the system" "flow.json $(cd "$g" && ls steps | sed 's#^#steps/#' | tr '\n' ' ' | sed 's/ $//')" \
   "$(cd "$g" && find . -type f | sed 's#^\./##' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+
+# ---- check.timeout_seconds is a whole number of seconds (validator concern 3 on #72) -----------
+mkflow sys "$(printf '%s' "$sys" | jq -c '.steps[2].runtime = "tmo"')"
+for v in 1.5 '"20"' 1e9 0; do
+  jq --argjson v "$v" '.check.timeout_seconds = $v' "$HO_PLUGIN_ROOT/runtimes/codex.json" > "$user/runtimes/tmo.json"
+  rc=0; err=$("$h" flow preflight sys 2>&1) || rc=$?
+  assert_eq "D37-RUNTIME-2: check.timeout_seconds $v is refused (exit 78)" "78" "$rc"
+  assert_contains "D37-RUNTIME-2: the refusal of timeout_seconds $v says what is wrong" "$err" "timeout_seconds must be a whole number"
+done
+for v in 1.0 2e1; do
+  jq --argjson v "$v" '.check.timeout_seconds = $v' "$HO_PLUGIN_ROOT/runtimes/codex.json" > "$user/runtimes/tmo.json"
+  rc=0; err=$("$h" flow preflight sys 2>&1) || rc=$?
+  assert_eq "D37-RUNTIME-2: check.timeout_seconds $v is a whole number and works (exit 0)" "0" "$rc"
+done
+
+# ---- H-073: the agents a flow names are checked too (validator concern 4 on #72) ---------------
+asys=$(printf '%s' "$sys" | jq -c '.system.agents = ["acme-check"]')
+mkflow sys "$asys"
+rc=0; out=$("$h" flow preflight sys 2>&1) || rc=$?
+assert_eq "H-073: a missing agent of the flow system stops the start (exit 69)" "69" "$rc"
+assert_contains "H-073: the stop names the agent for the main runtime" "$out" "agent acme-check for runtime claude-code"
+assert_contains "H-073: the stop names the agent for the second runtime" "$out" "agent acme-check for runtime codex"
+assert_contains "H-073: the missing agent's install step is printed" "$out" "npx acme-flow-installer"
+mkdir -p "$base/cc/agents" "$base/cx/agents"
+printf 'x\n' > "$base/cc/agents/acme-check.md"; printf 'x\n' > "$base/cx/agents/acme-check.toml"
+rc=0; out=$("$h" flow preflight sys 2>&1) || rc=$?
+assert_eq "H-073: with the agent installed for each runtime the start goes on (exit 0)" "0" "$rc"
+jq 'del(.agent_paths)' "$HO_PLUGIN_ROOT/runtimes/codex.json" > "$user/runtimes/noagents.json"
+mkflow sys "$(printf '%s' "$asys" | jq -c '.steps[2].runtime = "noagents"')"
+rc=0; out=$("$h" flow preflight sys 2>&1) || rc=$?
+assert_eq "H-073: an agent on a runtime whose profile cannot check agents stops (exit 69)" "69" "$rc"
+assert_contains "H-073: that stop says the agent cannot be checked" "$out" "agent acme-check for runtime noagents: cannot be checked"
+mkflow sys "$(printf '%s' "$asys" | jq -c '.system.agents = ["../x"]')"
+assert_exit "H-073: an agent name that is no plain name is refused (exit 78)" 78 "$h" flow check sys
+mkflow sys "$asys"
+"$h" flow copy sys sys-own >/dev/null 2>&1 || true
+assert_eq "D37-FLOW-2: flow copy keeps the system's agents on the steps it owned" "acme-check" \
+  "$(jq -r '.steps[] | select(.id == "plan") | .agents[0]' "$fl/sys-own/flow.json" 2>&1)"
+rm -f "$base/cx/agents/acme-check.toml"
+rc=0; out=$("$h" flow preflight sys-own 2>&1) || rc=$?
+assert_eq "H-073: the copied own flow still checks the agent (exit 69)" "69" "$rc"
+assert_contains "H-073: the copied flow names the missing agent" "$out" "agent acme-check for runtime codex"
+for f in claude-code codex; do
+  assert_eq "H-073: shipped profile $f says where agents are installed" "true" \
+    "$(jq '.agent_paths | type == "array" and length > 0' "$HO_PLUGIN_ROOT/runtimes/$f.json" 2>&1)"
+done
+
+# ---- the login check stops the whole process group it started (validator concern 5 on #72) -----
+mkflow sys "$(printf '%s' "$sys" | jq -c '.steps[2].runtime = "slow"')"
+rm -f "$base/child.pid"
+rc=0; out=$(HO_FAKE_CODEX_SLEEP=30 HO_FAKE_CODEX_CHILD_PIDFILE="$base/child.pid" "$h" flow preflight sys 2>&1) || rc=$?
+assert_eq "H-103: a login check that does not answer stops the start (exit 69)" "69" "$rc"
+sleep 0.5
+cp=$(cat "$base/child.pid" 2>/dev/null || echo 0)
+if [ "$cp" != 0 ] && ! ps -o pid= -p "$cp" >/dev/null 2>&1; then ok "H-103: a child of the timed-out login check is stopped too"; else
+  bad "H-103: a child of the timed-out login check is stopped too" "pid $cp"; fi
+[ "$cp" = 0 ] || kill -KILL "$cp" 2>/dev/null || true

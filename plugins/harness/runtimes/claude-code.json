@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "_comment": "Runtime profile (D31, D37-RUNTIME-2): all the data the engine needs about one tool; engine code holds no runtime name (D37-RUNTIME-1). A user may add or replace a profile in <user dir>/runtimes/; a project never can (D37-FLOW-8). In argv lists, {session_id}, {model} and {title} are filled in by the engine; {prompt} becomes the prompt file's text when the session starts. In path patterns, {home}, {config_dir}, {skill}, {plugin} and {name} are filled in. Checked against claude --help: -p, --session-id, --resume, --permission-mode (plan is read-only) and auth status. Not yet exercised by a real run: skill_call, session_log, limits and plugin_skill_paths.",
+  "_comment": "Runtime profile (D31, D37-RUNTIME-2): all the data the engine needs about one tool; engine code holds no runtime name (D37-RUNTIME-1). A user may add or replace a profile in <user dir>/runtimes/; a project never can (D37-FLOW-8). In argv lists, {session_id}, {model} and {title} are filled in by the engine; {prompt} becomes the prompt file's text when the session starts. In path patterns, {home}, {config_dir}, {skill}, {plugin} and {name} are filled in. Checked against claude --help: -p, --session-id, --resume, --permission-mode (plan is read-only) and auth status. Not yet exercised by a real run: skill_call, session_log, limits and plugin_skill_paths. agent_paths is the agents folder of the config folder.",
   "title": "Claude Code",
   "command": "claude",
   "modes": [
@@ -92,6 +92,9 @@
   "plugin_skill_paths": [
     "{config_dir}/plugins/cache/*/{plugin}/*/skills/{name}/SKILL.md",
     "{config_dir}/plugins/cache/*/{plugin}/*/commands/{name}.md"
+  ],
+  "agent_paths": [
+    "{config_dir}/agents/{agent}.md"
   ],
   "install": "install Claude Code (https://docs.claude.com/en/docs/claude-code/setup), then log in with: claude auth login",
   "exit_command": "/exit"

@@ -9,11 +9,11 @@
 #
 #   flow.json  {"schemaVersion": 2, "name": "<folder name>", "description": "...",
 #               "source": "own" | "system",
-#               "system": {"name", "link", "install", "skills": [...], "steps": [ids]},
+#               "system": {"name", "link", "install", "skills": [...], "agents": [...], "steps": [ids]},
 #               "install": {"<skill>": "<install step>"},
 #               "steps": [{"id", "title", "when": "always" | "questions", "prompt",
 #                          "enabled": false, "runtime": "<label>", "kind": "review",
-#                          "skills": [...]}]}
+#                          "skills": [...], "agents": [...]}]}
 #
 # Step order is file order (H-066). "enabled": false switches a step off: it leaves every
 # step list, the numbering and the render. "runtime" names the step's runner, a runtime
@@ -116,7 +116,7 @@ HO_FLOW_AUTONOMY_KEYS='["gates","push","pr","pr_open","merge","post_merge","depl
 
 # The keys a step may hold. Any other key is refused by name, so a typo such as "enable" never
 # passes as a step that stays on.
-HO_FLOW_STEP_KEYS='["id","title","when","prompt","enabled","runtime","kind","skills"]'
+HO_FLOW_STEP_KEYS='["id","title","when","prompt","enabled","runtime","kind","skills","agents"]'
 
 # ho_flow_load <name>: check the whole flow; set HO_FLOW_DIR, HO_FLOW_JSON and HO_FLOW_ORIGIN
 # (project or shipped). Any problem stops with exit 78 and names the flow. It never falls back
@@ -139,6 +139,7 @@ ho_flow_load() {
     def line: type == "string" and (test("[[:cntrl:]\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069]") | not);
     def rtname: type == "string" and test("\\A[a-z0-9][a-z0-9-]*\\z");
     def skill: type == "string" and test("\\A[a-z0-9][a-z0-9-]*(:[a-z0-9][a-z0-9-]*)?\\z");
+    def agent: type == "string" and test("\\A[a-z0-9][a-z0-9-]*\\z");
     def route: "the chosen system owns its steps. To change them, copy its step list into an own flow: harness flow copy \($name) <new-name>";
     if type != "object" then bad("not a JSON object")
     elif .schemaVersion != $schema then bad("schemaVersion must be \($schema)")
@@ -165,7 +166,8 @@ ho_flow_load() {
           or (has("enabled") and ((.enabled | type) != "boolean"))
           or (has("runtime") and (.runtime | rtname | not))
           or (has("kind") and .kind != "review")
-          or (has("skills") and ((.skills | type) != "array" or (.skills | any(skill | not))))) ] as $bad
+          or (has("skills") and ((.skills | type) != "array" or (.skills | any(skill | not))))
+          or (has("agents") and ((.agents | type) != "array" or (.agents | any(agent | not))))) ] as $bad
       | if ($bad | length) > 0 then bad("bad step: \($bad[0] | tojson)")
         elif ([.steps[].id] | unique | length) != (.steps | length) then bad("step ids must be unique")
         elif ([.steps[] | select(.enabled != false)] | length) == 0 then bad("every step is switched off")
@@ -176,6 +178,8 @@ ho_flow_load() {
         elif (.system | has("install")) and (.system.install | line | not) then bad("system.install must be one line of text")
         elif (.system | has("skills")) and ((.system.skills | type) != "array" or (.system.skills | any(skill | not))) then
           bad("system.skills must be a list of skill names (a-z, 0-9, -, one optional plugin: prefix)")
+        elif (.system | has("agents")) and ((.system.agents | type) != "array" or (.system.agents | any(agent | not))) then
+          bad("system.agents must be a list of agent names (a-z, 0-9, -)")
         elif (.system.steps | type) != "array" or (.system.steps | length) == 0 or (.system.steps | any(type != "string")) then
           bad("system.steps must list the ids of the steps the chosen system owns")
         elif (.system.steps | unique | length) != (.system.steps | length) then
@@ -280,10 +284,13 @@ EOF_PROMPTS
     (.system // null) as $s
     | .name = $new | .source = "own" | .copied_from = $src
     | if $s == null then . else
-        ($s.skills // []) as $sk
-        | .steps |= map(if (.id | IN($s.steps[])) then .skills = ((.skills // []) + [$sk[] as $k | select(((.skills // []) | index($k)) == null) | $k]) else . end)
-        | if ($s.install // "") != "" and ($sk | length) > 0
-          then .install = ((.install // {}) + ([$sk[] | {key: ., value: $s.install}] | from_entries)) else . end
+        ($s.skills // []) as $sk | ($s.agents // []) as $ag
+        | .steps |= map(if (.id | IN($s.steps[])) then
+            .skills = ((.skills // []) + [$sk[] as $k | select(((.skills // []) | index($k)) == null) | $k])
+            | if ($ag | length) > 0 then .agents = ((.agents // []) + [$ag[] as $k | select(((.agents // []) | index($k)) == null) | $k]) else . end
+          else . end)
+        | if ($s.install // "") != "" and (($sk + $ag) | length) > 0
+          then .install = ((.install // {}) + ([($sk + $ag)[] | {key: ., value: $s.install}] | from_entries)) else . end
         | .description = ((.description // "") + " Copied from the flow \($src) as an own flow; \($s.name) no longer owns these steps.")
         | del(.system)
       end' "$HO_FLOW_JSON" > "$tmp/flow.json" || { rm -rf "$tmp"; ho_die "cannot write the copied flow file"; }

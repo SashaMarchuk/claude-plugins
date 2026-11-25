@@ -17,6 +17,7 @@
 #                    logged in when it exits 0 within the time and, if set, prints a match
 #   "skill_paths"    path patterns ({config_dir}, {home}, {skill}); "plugin_skill_paths" for a
 #                    "plugin:name" skill ({plugin}, {name}). A skill is installed when one matches.
+#   "agent_paths"    path patterns ({config_dir}, {home}, {agent}) for an agent a flow names.
 #   "install"        the install and login step to print. Nothing is ever installed.
 #
 # Mode (D30, H-102): a step runs interactively in a terminal when its runtime can. Otherwise
@@ -67,17 +68,20 @@ ho_rt_check() {
     elif (.config_dir.default | line | not)
       or ((.config_dir | has("env")) and (.config_dir.env | (type != "string") or (test("\\A[A-Z_][A-Z0-9_]*\\z") | not))) then
       "config_dir needs a default and, if set, an env variable name"
-    elif (.check.argv | strs | not) or ((.check | has("expect")) and (.check.expect | line | not))
-      or ((.check | has("timeout_seconds")) and ((.check.timeout_seconds | type) != "number" or .check.timeout_seconds < 1)) then
-      "check needs argv, and optional expect and timeout_seconds"
+    elif (.check.argv | strs | not) or ((.check | has("expect")) and (.check.expect | line | not)) then
+      "check needs argv, and an optional expect"
+    elif (.check | has("timeout_seconds")) and ((.check.timeout_seconds | type) != "number"
+      or .check.timeout_seconds != (.check.timeout_seconds | floor) or .check.timeout_seconds < 1 or .check.timeout_seconds > 600) then
+      "check.timeout_seconds must be a whole number of seconds from 1 to 600, not \(.check.timeout_seconds | tojson)"
     elif (.skill_paths | strs | not) or (.skill_paths | length) == 0 then "skill_paths must list at least one path pattern"
     elif has("plugin_skill_paths") and (.plugin_skill_paths | strs | not) then "plugin_skill_paths must be a list of path patterns"
+    elif has("agent_paths") and ((.agent_paths | strs | not) or (.agent_paths | length) == 0) then "agent_paths must list at least one path pattern"
     else "" end end' "$f" 2>/dev/null) || why="not readable JSON"
   [ -z "$why" ] || { printf 'harness: runtime profile %s is not valid: %s\n' "$f" "$why" >&2; exit "$HO_EXIT_FLOW"; }
 }
 
 # ho_flow_plan_rows <flow>: after ho_flow_load, one JSON line per step that is on:
-# {n, id, when, title, runtime, file, mode, owner, note, launch, kind, skills}.
+# {n, id, when, title, runtime, file, mode, owner, note, launch, kind, skills, agents}.
 ho_flow_plan_rows() {
   local main row rt f n=0 errf
   main=$(ho_cfg '.runtime.main' '') || exit $?
@@ -105,7 +109,7 @@ ho_flow_plan_rows() {
       | if $mode == "noninteractive" and .kind == "review" and (($p.sandbox["read-only"] | type) != "array") then
           error("review step \(.id) runs without a terminal on runtime \($rt), so it must run read-only, and the profile has no sandbox.read-only")
         else {n: ($n | tonumber), id, when, title, runtime: $rt, file: $f, mode: $mode, owner, kind: (.kind // ""),
-              skills: (.skills // []),
+              skills: (.skills // []), agents: (.agents // []),
               note: (if $mode == "noninteractive" and .kind != "review" then "experimental" else "-" end),
               launch: ($launch | join(" "))} end' 2>"$errf" || {
       printf 'harness: flow %s: cannot plan step %s: %s\n' "$HO_FLOW_NAME" "$(printf '%s' "$row" | jq -r .id)" \
@@ -128,21 +132,16 @@ ho_flow_plan() {
 }
 
 # ho_rt_probe <seconds> <outfile> <cmd...>: run cmd with stdin from /dev/null and a time limit.
-# Returns its exit code, or 124 when it did not answer in time; then that exact process is
-# stopped (H-103: never by name).
+# Returns its exit code, or 124 when it did not answer in time; then the process group it was
+# started in is stopped, so a child it left behind goes too (H-103: by exact ID, never by name).
 ho_rt_probe() {
   local t=$1 out=$2 pid i=0 rc=0
   shift 2
-  "$@" < /dev/null > "$out" 2>&1 &
-  pid=$!
+  ho_group_start "$@" < /dev/null > "$out" 2>&1
+  pid=$HO_GROUP_PID
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$i" -ge $((t * 10)) ]; then
-      # TERM first, then KILL after 2 s; always this exact process ID, never a name.
-      kill "$pid" 2>/dev/null || true
-      i=0
-      while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
-      kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null || true
+      ho_group_stop "$pid"
       return 124
     fi
     sleep 0.1
@@ -152,6 +151,19 @@ ho_rt_probe() {
   return "$rc"
 }
 
+# ho_rt_config_dir <profile> <account-pairs>: the tool's own folder, from the account's
+# variables, then the environment, then the profile default.
+ho_rt_config_dir() {
+  local f=$1 pairs=$2 var dir=""
+  var=$(jq -r '.config_dir.env // ""' "$f")
+  if [ -n "$var" ]; then
+    dir=$(printf '%s\n' "$pairs" | awk -F '\t' -v k="$var" '$1 == k { v = $2 } END { print v }')
+    [ -n "$dir" ] || dir=$(printenv "$var" || true)
+  fi
+  [ -n "$dir" ] || dir=$(jq -r --arg home "${HOME:-}" '.config_dir.default | gsub("\\{home\\}"; $home)' "$f")
+  printf '%s\n' "$dir"
+}
+
 # harness flow preflight <flow>: the start check of D37-RUNTIME-3. Every runtime a step uses
 # must be on PATH (outside the project) and logged in; every skill a step names (and, for a
 # system's steps, the system's skills) must be installed for that step's runtime. The whole
@@ -159,7 +171,7 @@ ho_rt_probe() {
 # the exit is 69. Nothing is installed. Install text from a project flow is printed marked as
 # not checked, because anyone who can write to the repository can change it.
 ho_flow_preflight() {
-  local flow=$1 rows proj acct="" pairs="" missing="" tmpd rt f cmd cmdpath t rc expect out
+  local flow=$1 rows proj acct="" pairs="" missing="" tmpd rt f cmd cmdpath t rc expect out tmo
   local -a envs=() argv=()
   local a
   ho_flow_load "$flow"
@@ -199,16 +211,18 @@ EOF_ENV
       add "runtime $rt: command $cmd resolves to $cmdpath, inside the project; it is never run. Install step: $t"
       continue
     fi
+    # A whole number (ho_rt_check); floor prints 1.0 or 2e1 the way shell arithmetic reads it.
+    tmo=$(jq -r '(.check.timeout_seconds // 20) | floor' "$f")
     argv=()
     while IFS= read -r a; do [ -n "$a" ] && argv+=("$a"); done <<EOF_ARGV
 $(jq -r '.check.argv[]' "$f")
 EOF_ARGV
     rc=0
-    ho_rt_probe "$(jq -r '.check.timeout_seconds // 20' "$f")" "$tmpd/check.out" \
+    ho_rt_probe "$tmo" "$tmpd/check.out" \
       /usr/bin/env PATH="$(ho_session_clean_path)" ${envs[@]+"${envs[@]}"} "$cmdpath" ${argv[@]+"${argv[@]}"} || rc=$?
     expect=$(jq -r '.check.expect // ""' "$f")
     if [ "$rc" -eq 124 ]; then
-      add "runtime $rt: the login check did not answer within $(jq -r '.check.timeout_seconds // 20' "$f") s. Install step: $t"
+      add "runtime $rt: the login check did not answer within $tmo s. Install step: $t"
     elif [ "$rc" -ne 0 ]; then
       add "runtime $rt: not logged in (the login check exited $rc). Install step: $t"
     elif [ -n "$expect" ] && ! jq -Rse --arg re "$expect" 'test($re)' "$tmpd/check.out" >/dev/null 2>&1; then
@@ -227,12 +241,7 @@ EOF_ARGV
     rt=${t#*"$(printf '\t')"}
     f=$(ho_rt_file "$rt")
     home=${HOME:-}
-    dir=$(jq -r '.config_dir.env // ""' "$f")
-    if [ -n "$dir" ]; then
-      dir=$(printf '%s\n' "$pairs" | awk -F '\t' -v k="$dir" '$1 == k { v = $2 } END { print v }')
-      [ -n "$dir" ] || dir=$(printenv "$(jq -r '.config_dir.env' "$f")" || true)
-    fi
-    [ -n "$dir" ] || dir=$(jq -r --arg home "$home" '.config_dir.default | gsub("\\{home\\}"; $home)' "$f")
+    dir=$(ho_rt_config_dir "$f" "$pairs")
     found=0
     while IFS= read -r pattern; do
       [ -n "$pattern" ] || continue
@@ -252,6 +261,36 @@ EOF_PAT
   done <<EOF_NEED
 $need
 EOF_NEED
+
+  # Agents (H-073: every technology the flow names): (agent, runtime) pairs, each once, as for
+  # skills. A runtime whose profile has no agent_paths cannot show an agent, so it counts as missing.
+  need=$(printf '%s\n' "$rows" | jq -r --slurpfile flow "$HO_FLOW_JSON" '
+    ($flow[0].system.agents // []) as $sys
+    | (.agents + (if .owner == "system" then $sys else [] end))[] as $s | "\($s)\t\(.runtime)"' | awk '!seen[$0]++')
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    skill=${t%%"$(printf '\t')"*}
+    rt=${t#*"$(printf '\t')"}
+    f=$(ho_rt_file "$rt")
+    install=$(jq -r --arg s "$skill" '.install[$s] // (if ((.system.agents // []) | index($s)) != null then .system.install else null end) // ""' "$HO_FLOW_JSON")
+    if [ -n "$install" ]; then install="Install step: $install$src_note"; else install="No install step given in the flow."; fi
+    if [ "$(jq -r 'has("agent_paths")' "$f")" != true ]; then
+      add "agent $skill for runtime $rt: cannot be checked, because the runtime profile $f gives no agent_paths. $install"
+      continue
+    fi
+    dir=$(ho_rt_config_dir "$f" "$pairs")
+    found=0
+    while IFS= read -r pattern; do
+      [ -n "$pattern" ] || continue
+      if compgen -G "$pattern" >/dev/null 2>&1; then found=1; break; fi
+    done <<EOF_APAT
+$(jq -r --arg d "$dir" --arg home "${HOME:-}" --arg a "$skill" '.agent_paths[]
+  | gsub("\\{config_dir\\}"; $d) | gsub("\\{home\\}"; $home) | gsub("\\{agent\\}"; $a)' "$f")
+EOF_APAT
+    [ "$found" -eq 1 ] || add "agent $skill for runtime $rt: not installed in $dir. $install"
+  done <<EOF_ANEED
+$need
+EOF_ANEED
 
   printf '%s\n' "$rows" | jq -r 'select(.note == "experimental")
     | "experimental, untested: step \(.id) runs on \(.runtime) without a terminal and is not a review step (D37-RUNTIME-2)"'

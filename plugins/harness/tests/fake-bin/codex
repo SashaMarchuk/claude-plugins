@@ -13,6 +13,8 @@ printf '%s\n' "$line" >> "$log"
 # HO_FAKE_CODEX_PIDFILE=<f>: write its PID there. HO_FAKE_CODEX_TRAP_TERM=1: ignore TERM.
 [ -z "${HO_FAKE_CODEX_PIDFILE:-}" ] || echo $$ > "$HO_FAKE_CODEX_PIDFILE"
 [ "${HO_FAKE_CODEX_TRAP_TERM:-}" != 1 ] || trap '' TERM
+# HO_FAKE_CODEX_CHILD_PIDFILE=<f>: start a child that outlives this process and write its PID there.
+if [ -n "${HO_FAKE_CODEX_CHILD_PIDFILE:-}" ]; then sleep 300 & echo $! > "$HO_FAKE_CODEX_CHILD_PIDFILE"; fi
 if [ -n "${HO_FAKE_CODEX_SLEEP:-}" ]; then
   end=$(( $(date +%s) + HO_FAKE_CODEX_SLEEP ))
   while [ "$(date +%s)" -lt "$end" ]; do sleep 0.2; done

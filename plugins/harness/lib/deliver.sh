@@ -17,13 +17,15 @@
 #
 # Order of a delivery:
 #   1. The message route: the runtime data's message.argv, when it names one. Then the proof.
+#      A message whose outcome is unknown is never typed; a proven failure falls back to
+#      typing (H-101). See the route block in ho_session_deliver.
 #   2. The typed fallback, only when the session's screen shows the runtime's idle input line,
 #      empty, with no busy mark (D42g). The screen is read, never probed with a test key (H-099).
 #      Text of at most terminal.typed_max_bytes bytes (default 800, D42f) inside the safe
 #      character set is typed as it is; any other text goes into <run>/messages/<id>.txt and a
 #      short line that names the file is typed instead (H-137). Then the proof.
-#   3. If neither proves delivery, the instruction is reported as not delivered. Nothing is
-#      typed a second time.
+#   3. If neither proves delivery, the instruction is reported as not delivered. The engine
+#      types an id at most once and never retries by itself.
 # With no readable transcript, nothing is sent at all: delivery could not be checked, and an
 # unchecked send is what lost instructions in field notes B1 and B2.
 #
@@ -35,9 +37,11 @@
 #
 # Settings: terminal.typed_max_bytes (800, at most 1000), delivery.wait_seconds (30, how long
 # each route waits for the proof), delivery.message_timeout_seconds (30, for the message
-# command itself).
+# command itself), delivery.message_kill_grace_seconds (2, between SIGTERM and SIGKILL of a
+# stopped message command), terminal.enter_delay_seconds (2, 0 to 10; anything else exits 78).
 # Exit codes: 0 delivered, 1 not delivered (the reason is printed and written to the ledger),
-# 64 usage, 65 refused, 66 no such session of this run, 78 runtime data missing.
+# 64 usage, 65 refused, 66 no such session of this run, 78 runtime data missing or a setting
+# out of range.
 #
 # Requires lib/run.sh, lib/config.sh, lib/files.sh, lib/term.sh and lib/sessions.sh.
 
@@ -96,44 +100,31 @@ ho_deliver_profile() {
 }
 
 # ho_deliver_transcript <record> <profile>: the session's transcript file, found by its session
-# ID under the runtime's config root: the root the session's account sets, else the engine's
-# own, else the default under HOME. The path is kept in the record once found.
+# ID under the config folder the launch recorded (transcript_root). Delivery never runs the
+# account command (Codex review, PR #95). The recorded folder is checked again as the launch
+# made it: an absolute path with no line break, and a folder. The file found must be a regular,
+# readable file inside it. The path is kept in the record once found.
 ho_deliver_transcript() {
-  local rec=$1 profile=$2 sid cached glob renv root roots acct out f tab
+  local rec=$1 profile=$2 sid cached glob root f
+  root=$(jq -r '.transcript_root // ""' "$rec")
+  case $root in /*) ;; *) return 1 ;; esac
+  case $root in *"
+"*) return 1 ;; esac
+  [ -d "$root" ] || return 1
   cached=$(jq -r '.transcript // ""' "$rec")
-  [ -n "$cached" ] && [ -f "$cached" ] && [ -r "$cached" ] && { printf '%s\n' "$cached"; return 0; }
+  case $cached in
+    "$root"/*) [ -f "$cached" ] && [ ! -L "$cached" ] && [ -r "$cached" ] && { printf '%s\n' "$cached"; return 0; } ;;
+  esac
   sid=$(jq -r '.session_id // ""' "$rec")
   ho_session_uuid_ok "$sid" 2>/dev/null || return 1
   glob=$(jq -r '.transcript.glob' "$profile")
   glob=${glob//\{session_id\}/$sid}
-  renv=$(jq -r '.transcript.root_env // ""' "$profile")
-  roots=""
-  acct=$(jq -r '.account // ""' "$rec")
-  if [ -n "$acct" ] && [ -n "$renv" ]; then
-    tab=$(printf '\t')
-    out=$(ho_session_account "$(jq -r '.role // ""' "$rec")" "$acct" 2>/dev/null) || out=""
-    if [ -n "$out" ]; then
-      out=$(/bin/bash -c "${out#*"$tab"}" 2>/dev/null | ho_account_env_parse 2>/dev/null | awk -F '\t' -v k="$renv" '$1 == k { v = $2 } END { print v }') || out=""
-      [ -z "$out" ] || roots="$out"
-    fi
-  fi
-  if [ -n "$renv" ] && [ -n "$(printenv "$renv" 2>/dev/null)" ]; then
-    roots="$roots
-$(printenv "$renv")"
-  fi
-  roots="$roots
-$HOME/$(jq -r '.transcript.default_root // ".claude"' "$profile")"
-  while IFS= read -r root; do
-    [ -n "$root" ] || continue
-    for f in "$root"/$glob; do
-      [ -f "$f" ] && [ -r "$f" ] || continue
-      ho_session_set "$rec" '.transcript = $t' --arg t "$f" >/dev/null 2>&1 || true
-      printf '%s\n' "$f"
-      return 0
-    done
-  done <<EOF_ROOTS
-$roots
-EOF_ROOTS
+  for f in "$root"/$glob; do
+    [ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ] || continue
+    ho_session_set "$rec" '.transcript = $t' --arg t "$f" >/dev/null 2>&1 || true
+    printf '%s\n' "$f"
+    return 0
+  done
   return 1
 }
 
@@ -362,10 +353,13 @@ ho_deliver_wait() {
 
 # ho_deliver_message <profile> <record> <id> <file>: run the runtime's message command, if
 # any. 0 exited 0, 1 exited non-zero, 4 timed out, 2 no route, 3 refused before start (the
-# command is missing, not executable, or inside the project). Only 2 and 3 mean "not started".
-# The command runs in its own process group. On timeout the group gets SIGTERM, a grace of
+# command is missing, not executable, inside the project, or names a "#!" interpreter that is
+# missing). Only 2 and 3 mean "not started": no process ever ran.
+# The command runs in its own process group. On timeout, and also after a non-zero exit (for
+# what is left of the group), the group gets SIGTERM, a grace of
 # delivery.message_kill_grace_seconds (default 2), then SIGKILL, so the call returns within the
-# timeout plus the grace (Codex review, validator N4). Only that exact group is signalled.
+# timeout plus the grace (Codex review, validator N4). Only that exact group is signalled, and
+# the shell's own notice of a stopped job is not printed.
 ho_deliver_message() {
   local profile=$1 rec=$2 id=$3 file=$4 sid el pid deadline grace cmd rc=0
   local -a argv
@@ -384,6 +378,17 @@ EOF_ARGV
   case $cmd in /*) ;; *) return 3 ;; esac
   [ -f "$cmd" ] && [ -x "$cmd" ] || return 3
   ho_session_runtime_path_ok "$cmd" 2>/dev/null || return 3
+  # A script whose "#!" line names a missing interpreter cannot start (an exec failure).
+  local first interp
+  first=$(head -c 256 "$cmd" 2>/dev/null | head -n 1) || first=""
+  case $first in
+    '#!'*)
+      interp=${first#'#!'}
+      interp=${interp# }
+      interp=${interp%% *}
+      [ -f "$interp" ] && [ -x "$interp" ] || return 3
+      ;;
+  esac
   # set -m gives the background job a process group of its own (its ID is the job's PID).
   set -m
   "$cmd" "${argv[@]:1}" < /dev/null > /dev/null 2>> "$HO_RUN_DIR/logs/deliver.log" &
@@ -392,17 +397,29 @@ EOF_ARGV
   deadline=$(( $(date +%s) + $(ho_cfg_int '.delivery.message_timeout_seconds' 30) ))
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      kill -TERM -- "-$pid" 2>/dev/null || true
-      grace=$(( $(date +%s) + $(ho_cfg_int '.delivery.message_kill_grace_seconds' 2) ))
-      while kill -0 -- "-$pid" 2>/dev/null && [ "$(date +%s)" -lt "$grace" ]; do sleep 0.1; done
-      kill -KILL -- "-$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
+      ho_deliver_stop_group "$pid"
+      { wait "$pid"; } 2>/dev/null || true
       return 4
     fi
     sleep 0.1
   done
-  wait "$pid" 2>/dev/null || rc=$?
-  [ "$rc" -eq 0 ] || return 1
+  { wait "$pid"; } 2>/dev/null || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  # A failed command may have left processes in its group: they are stopped before the
+  # transcript is judged, so nothing of it can write later.
+  ho_deliver_stop_group "$pid"
+  return 1
+}
+
+# ho_deliver_stop_group <pgid>: SIGTERM to that exact process group, a bounded grace, then
+# SIGKILL. A group that is already gone is left alone.
+ho_deliver_stop_group() {
+  local g=$1 grace
+  kill -0 -- "-$g" 2>/dev/null || return 0
+  kill -TERM -- "-$g" 2>/dev/null || true
+  grace=$(( $(date +%s) + $(ho_cfg_int '.delivery.message_kill_grace_seconds' 2) ))
+  while kill -0 -- "-$g" 2>/dev/null && [ "$(date +%s)" -lt "$grace" ]; do sleep 0.1; done
+  kill -KILL -- "-$g" 2>/dev/null || true
 }
 
 # ho_deliver_typed_line <id> <text> <file>: the line to type. The text itself when it is one
@@ -457,6 +474,8 @@ ho_session_deliver() {
   [ -n "$text" ] || { echo "harness: the instruction text is empty" >&2; return 64; }
   [ "$(ho_deliver_bytes "$text")" -le "$HO_DELIVER_MAX_TEXT" ] || { printf 'harness: the instruction is longer than %s bytes\n' "$HO_DELIVER_MAX_TEXT" >&2; return 65; }
   if [ -n "$id" ]; then ho_deliver_id_ok "$id" || return 65; else id=$(ho_deliver_new_id); fi
+  local delay
+  delay=$(ho_term_enter_delay) || return 78
   local rec profile tr off msg tmp st rc pid screen
   rec=$(ho_deliver_record "$name") || return $?
   profile=$(ho_deliver_profile "$rec") || return $?
@@ -483,17 +502,20 @@ ho_session_deliver() {
   rm -f "$tmp"
   ho_ledger_append deliver-request id "$id" name "$name" bytes "$(ho_deliver_bytes "$text")" force_send "$force"
 
-  # ---- 1. the message route: at most once ----
-  # Once the message command has started for an id, that id is never typed, whatever the
-  # command's exit status or timeout and whatever the transcript shows. The transcript is
-  # read with the same bounded wait in every case, and the result is reported: delivered,
-  # queued, dequeued, or unknown. Unknown is one owner-action line, never a retry. Typing is
-  # the fallback only when no route is configured or the route is refused before it starts.
+  # ---- 1. the message route ----
+  # A message whose outcome is unknown is never typed; a proven failure falls back to typing
+  # (H-101). After any start, the transcript is read with the same bounded wait.
+  #   - the id was seen (delivered, queued or dequeued): reported; never typed;
+  #   - known failure, so the typed route runs with all its checks: the command could not
+  #     start (no process ran), or it exited non-zero, its group is gone, and the transcript is
+  #     readable and holds no record of the id;
+  #   - unknown (a timeout, exit 0 with no proof, or an unreadable transcript): one
+  #     owner-action line, nothing typed, no retry.
   rc=0
   ho_deliver_message "$profile" "$rec" "$id" "$msg" || rc=$?
   case $rc in
     2) ho_ledger_append deliver-message id "$id" result "no message route in the runtime data" ;;
-    3) ho_ledger_append deliver-message id "$id" result "refused before start (command missing, not executable or inside the project)" ;;
+    3) ho_ledger_append deliver-message id "$id" result "refused before start (command missing, not executable, inside the project, or its interpreter is missing)" ;;
     *)
       local how=sent
       case $rc in 1) how="failed (non-zero exit)" ;; 4) how="timed out and stopped" ;; esac
@@ -508,11 +530,15 @@ ho_session_deliver() {
       esac
       ho_ledger_append deliver-message id "$id" result unconfirmed transcript_grew "$(ho_deliver_grew "$tr" "$off")" state "$st"
       ho_deliver_pending "$id" "$name" "$st" || return 1
-      ho_ledger_append owner-action title "check instruction $id of session $name" \
-        why "the message command was started ($how) and the transcript shows no record of the instruction; it is not sent again" \
-        command "harness session $HO_RUN_DIR proof $name $id" verify "proof prints delivered, or the owner sends the instruction again by hand"
-      ho_deliver_not "$id" "$name" "unknown, not sent again: the message command was started ($how) but the transcript shows no record of the instruction" "" state "$st"
-      return 1
+      if [ "$rc" -eq 1 ] && [ "$st" = none ]; then
+        ho_ledger_append deliver-message id "$id" result "proven failure: non-zero exit, group gone, no record of the id; typed fallback"
+      else
+        ho_ledger_append owner-action title "check instruction $id of session $name" \
+          why "the message command was started ($how) and its outcome is unknown; it is not sent again" \
+          command "harness session $HO_RUN_DIR proof $name $id" verify "proof prints delivered, or the owner sends the instruction again by hand"
+        ho_deliver_not "$id" "$name" "unknown, not sent again: the message command was started ($how) but its outcome is unknown" "" state "$st"
+        return 1
+      fi
       ;;
   esac
 
@@ -534,7 +560,7 @@ ho_session_deliver() {
   rc=0
   HO_TERM_BACKEND=$backend ho_term_type "$h" "$tag" "$sid" "$line" 2>/dev/null || rc=$?
   [ "$rc" -eq 0 ] || ho_deliver_not "$id" "$name" "the terminal refused the typed line (exit $rc)" "" || return 1
-  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
+  sleep "$delay"
   # Enter goes only when the input line holds exactly the typed text and nothing more: a key
   # pressed or a dialog opened in between gets no Enter (D42g).
   screen=$(ho_deliver_screen "$rec" "$profile")

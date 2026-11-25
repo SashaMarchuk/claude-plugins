@@ -60,6 +60,12 @@ for backend in tmux iterm2; do
   assert_eq "$t: type types the text and sends no Enter" "/exit" "$(cat "$f1.in")"
   assert_exit "$t: type to a session tagged with another owner is refused" 66 ho_term_type "$h1" "$o2" "$s1" "/exit"
   : > "$f1.in"
+  # Codex P2 (PR #95, round 4): an Enter delay above 10 s, or not a number, is refused (78)
+  # before anything is typed.
+  jq '.terminal.enter_delay_seconds = 11' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+  assert_exit "$t: an Enter delay above 10 s is refused (78)" 78 ho_term_send "$h1" "$o1" "$s1" "/exit"
+  assert_eq "$t: with a refused Enter delay nothing is typed" "" "$(cat "$f1.in")"
+  set_app "$backend"
   # The owner tag: a call for another owner, or with no usable owner, does nothing.
   f2="$HO_FAKE_TERM_DIR/$(printf '%s' "$h2" | tr -c 'A-Za-z0-9-' '_')"
   before=$(wc -l < "$HO_FAKE_TERM_DIR/calls.log")

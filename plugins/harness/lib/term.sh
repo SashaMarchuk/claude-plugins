@@ -32,7 +32,7 @@
 # Return codes: 0 ok, 64 usage, 65 refused value, 66 handle not found or not tagged with this
 # run, owner and session ID, 70 terminal failed.
 # Settings: terminal.app = auto | iterm2 | tmux (default auto); terminal.enter_delay_seconds
-# (default 2, as in 0.6.0) between typed text and its Enter. Needs HO_RUN_DIR and HO_RUN_ID.
+# (default 2, as in 0.6.0; a whole number from 0 to 10) between typed text and its Enter. Needs HO_RUN_DIR and HO_RUN_ID.
 
 # Values embedded into AppleScript or a tmux command are checked against a small character
 # set instead of being escaped.
@@ -104,10 +104,25 @@ ho_term_open() {
   "ho_term_${backend}_open" "$group" "$title" "$launcher" "$owner" "$sid"
 }
 
+# ho_term_enter_delay: terminal.enter_delay_seconds as a whole number from 0 to 10. A
+# non-number or a larger value is refused (78) before anything is typed, so a config value
+# cannot hold a send open for long (Codex review, PR #95).
+ho_term_enter_delay() {
+  local v
+  v=$(ho_cfg '.terminal.enter_delay_seconds' 2) || return 78
+  case $v in '' | *[!0-9]*) v=x ;; esac
+  if [ "$v" = x ] || [ "${#v}" -gt 2 ] || [ "$((10#$v))" -gt 10 ]; then
+    echo "harness: terminal.enter_delay_seconds must be a whole number from 0 to 10" >&2
+    return 78
+  fi
+  printf '%s\n' "$((10#$v))"
+}
+
 ho_term_send() {
   local h=${1-} owner=${2-} sid=${3-} text=${4-} backend
   ho_term_safe "$h" && ho_term_owner_ok "$owner" && ho_term_owner_ok "$sid" || return 65
   ho_term_text_ok "$text" || return 65
+  ho_term_enter_delay >/dev/null || return 78
   backend=$(ho_term_backend) || return $?
   "ho_term_${backend}_send" "$h" "$owner" "$sid" "$text"
 }
@@ -383,7 +398,9 @@ ho_term_iterm2_type() {
 
 ho_term_iterm2_send() {
   ho_term_iterm2_type "$1" "$2" "$3" "$4" || return $?
-  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
+  local d
+  d=$(ho_term_enter_delay) || return 78
+  sleep "$d"
   ho_term_iterm2_key "$1" "$2" "$3" enter
 }
 
@@ -466,7 +483,9 @@ ho_term_tmux_type() {
 
 ho_term_tmux_send() {
   ho_term_tmux_type "$1" "$2" "$3" "$4" || return $?
-  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
+  local d
+  d=$(ho_term_enter_delay) || return 78
+  sleep "$d"
   ho_term_tmux_key "$1" "$2" "$3" enter
 }
 

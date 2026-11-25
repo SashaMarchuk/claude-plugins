@@ -86,8 +86,22 @@ start m5
 screen m5 idle-empty
 export HO_FAKE_MSG_MODE=fail
 out=$(deliver m5 --text "run the unit tests" 2>&1) && rc=0 || rc=$?
-assert_eq "H-101 at most once: a failed message command is not followed by typing (exit 1, 0 bytes)" "1 0" "$rc $(inbytes m5)"
-assert_contains "H-101 at most once: the failed message is in the ledger" "$(ledger)" '"result":"failed (non-zero exit)"'
+# Review round 4: a proven failure (non-zero exit, group gone, no record of the id in a
+# readable transcript) falls back to typing (H-101 "Message fails").
+assert_eq "H-101: a proven failure (non-zero exit, nothing in the transcript) is typed once (exit 0)" "0 1" "$rc $(grep -c . "$(fin m5)")"
+assert_contains "H-101: the proven failure names the typed route" "$out" "route=typed"
+assert_contains "H-101: the failed message and the proven failure are in the ledger" "$(ledger)" '"result":"proven failure'
+# A "#!" line that names a missing interpreter: the command never starts, typing follows.
+printf '#!/nonexistent/ho-interp\nexit 0\n' > "$base/bad-shebang"
+chmod 700 "$base/bad-shebang"
+jq --arg m "$base/bad-shebang" '.message.argv = [$m, "{session_id}"]' "$plug/runtimes/claude-code.json" > "$plug/runtimes/claude-shebang.json"
+set_runtime claude-shebang
+start m8
+screen m8 idle-empty
+out=$(deliver m8 --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+assert_eq "H-101: a message command with a bad #! line never starts; the instruction is typed once (exit 0)" "0 1" "$rc $(grep -c . "$(fin m8)")"
+assert_contains "H-101: the bad #! line is a refusal before start" "$(ledger | grep -F "$(printf '%s' "$out" | sed -n 's/.*id=\(ho-[0-9a-f]*\).*/\1/p')")" "refused before start"
+set_runtime claude-msg
 # The route refused before it starts (its command is missing): typing is the fallback.
 jq '.message.argv = ["/nonexistent/ho-msg", "{session_id}"]' "$plug/runtimes/claude-code.json" > "$plug/runtimes/claude-gone.json"
 set_runtime claude-gone
@@ -375,8 +389,13 @@ export HO_FAKE_MSG_PIDS="$base/extra.pids"
 start z1
 screen z1 idle-empty
 out=$(HO_FAKE_MSG_MODE=slow-fail deliver z1 --text "run tests" 2>&1) && rc=0 || rc=$?
-assert_eq "N1, H-101: a turn written after the command failed is found; nothing is typed (exit 0, 0 bytes)" "0 0" "$rc $(inbytes z1)"
-assert_contains "N1, H-101: it is confirmed on the message route" "$out" "route=message"
+# Round 4: the writer is in the command's group, which is stopped after the non-zero exit. Either
+# its turn landed first (delivered, nothing typed) or it never lands (proven failure, typed):
+# exactly one copy either way.
+sleep 1.5
+z1id=$(printf '%s' "$out" | sed -n 's/.*id=\(ho-[0-9a-f]*\).*/\1/p')
+assert_eq "N1, H-101: a slow writer inside the stopped group: delivered once, never twice (exit 0, 1 copy)" "0 1" \
+  "$rc $(jq -r 'select(.type == "user") | .message.content | strings' "$(trof z1)" | grep -c -F "$z1id: " || true)"
 # ---- N2: a transcript unreadable after the command: unknown, not sent again, clean output ---
 start z2
 screen z2 idle-empty
@@ -404,6 +423,7 @@ assert_eq "N4: deliver returns within the timeout plus the grace and the proof w
 tp=$(cat "$base/extra.pids.term" 2>/dev/null || true)
 assert_eq "N4: the command that ignored SIGTERM is gone" "no" "$([ -n "$tp" ] && alive "$tp" && echo yes || echo no)"
 assert_eq "N4: a stopped command is not followed by typing (0 bytes)" "0" "$(inbytes z4)"
+assert_eq "minor 2 (round 4): no raw job notice such as Terminated or Killed reaches the output" "" "$(printf '%s\n' "$out" | grep -E 'Terminated|Killed' || true)"
 set_runtime claude-code
 # ---- minors 1 and 2: the whole-word check ----------------------------------------------------
 start z5
@@ -414,3 +434,31 @@ p6() { "$h" session "$run" proof z5 "$1" 2>&1 | cut -d' ' -f1-2; }
 assert_eq "minor 1: a letter outside ASCII before the id blocks the match" "none id=ho-wide0001" "$(p6 ho-wide0001)"
 assert_eq "minor 1: a letter outside ASCII after the id blocks the match" "none id=ho-wide0002" "$(p6 ho-wide0002)"
 assert_eq "minor 2: an id glued to itself is no whole word" "none id=ho-glue0001" "$(p6 ho-glue0001)"
+
+# ==== Fix round 4 of PR #95 (Codex security findings; minors) ==============================
+# ---- Codex P2 (line 537): the Enter delay has a cap ----------------------------------------
+set_runtime claude-code
+start q1
+screen q1 idle-empty
+for bad in 11 '"abc"'; do
+  jq --argjson d "$bad" '.terminal.enter_delay_seconds = $d' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+  t0=$(date +%s)
+  rc=0; deliver q1 --text "run tests" >/dev/null 2>&1 || rc=$?
+  assert_eq "Codex P2: terminal.enter_delay_seconds=$bad is refused (78) at once, 0 bytes typed" "78 0 yes" "$rc $(inbytes q1) $([ $(( $(date +%s) - t0 )) -le 5 ] && echo yes || echo no)"
+done
+jq '.terminal.enter_delay_seconds = 0' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+
+# ---- Codex P2 (line 116): delivery never runs the account command ---------------------------
+mkdir -p "$base/acct-cfg"
+printf '{"schemaVersion": 2, "runtime": {"main": "claude-code"}, "accounts": {"roles": {"worker": "acct-one"}, "list": {"acct-one": {"env_command": "echo run >> %s/acct-runs; echo CLAUDE_CONFIG_DIR=%s/acct-cfg"} } } }\n' "$base" "$base" > "$user/config.json"
+start q2
+screen q2 idle-empty
+assert_eq "Codex P2: the launch records the account's config folder for delivery" "$base/acct-cfg" "$(rec q2 .transcript_root)"
+runs=$(wc -l < "$base/acct-runs" | tr -d ' ')
+out=$(deliver q2 --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "Codex P2: delivery finds the transcript in the recorded folder (exit 0)" "0" "$rc"
+assert_eq "Codex P2: delivery never runs the account command" "$runs" "$(wc -l < "$base/acct-runs" | tr -d ' ')"
+jq '.transcript_root = "relative/path" | del(.transcript)' "$run/sessions/q2.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/q2.json"
+out=$(deliver q2 --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "Codex P2: a recorded folder that is not absolute is refused; nothing is typed (exit 1)" "1 1" "$rc $(grep -c . "$(fin q2)")"
+set_runtime claude-code

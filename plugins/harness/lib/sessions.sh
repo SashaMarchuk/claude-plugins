@@ -128,10 +128,13 @@ ho_cfg_user() {
   jq -c "$1" "$f"
 }
 
-# ho_session_account <role> <requested>: print "<account>\t<env-command>", or nothing when no
-# account is configured. Refuses (65) a mismatch, an unknown account, or a command that fails.
+# ho_session_account <role> <requested> [<env-key>]: print "<account>\t<env-command>", or
+# nothing when no account is configured. With <env-key>, print "<account>\t<value>\t<env-command>",
+# where <value> is what the account's command sets for that key (empty if it sets none); the
+# launch records it, so delivery never runs the account command again (Codex review, PR #95).
+# Refuses (65) a mismatch, an unknown account, or a command that fails.
 ho_session_account() {
-  local role=$1 want=$2 proj mapped cmd out
+  local role=$1 want=$2 key=${3-} proj mapped cmd out
   proj="$HO_PROJECT_DIR/.harness/config.json"
   if jq -e '.accounts != null' "$proj" >/dev/null 2>&1; then
     printf 'harness: accounts are set in the project config %s; accounts belong in the user config only\n' "$proj" >&2
@@ -155,7 +158,25 @@ ho_session_account() {
     printf 'harness: the env_command of account %s must print KEY=VALUE lines only\n' "$mapped" >&2
     return 65
   }
-  printf '%s\t%s\n' "$mapped" "$cmd"
+  if [ -n "$key" ]; then
+    printf '%s\t%s\t%s\n' "$mapped" "$(printf '%s\n' "$out" | ho_account_env_parse | awk -F '\t' -v k="$key" '$1 == k { v = $2 } END { print v }')" "$cmd"
+  else
+    printf '%s\t%s\n' "$mapped" "$cmd"
+  fi
+}
+
+# ho_session_transcript_root <profile> <account-value>: the runtime's config folder for this
+# session, where its transcripts are: the value the account sets, else the engine's own
+# variable, else the default under HOME. Must be an absolute path with no line break.
+ho_session_transcript_root() {
+  local profile=$1 v=$2 renv
+  renv=$(jq -r '.transcript.root_env // ""' "$profile" 2>/dev/null)
+  if [ -z "$v" ] && [ -n "$renv" ]; then v=$(printenv "$renv" 2>/dev/null || true); fi
+  [ -n "$v" ] || v="$HOME/$(jq -r '.transcript.default_root // ".claude"' "$profile" 2>/dev/null)"
+  case $v in /*) ;; *) return 1 ;; esac
+  case $v in *"
+"*) return 1 ;; esac
+  printf '%s\n' "$v"
 }
 
 # ho_session_clean_path: absolute PATH entries only, each once, without folders that hold a
@@ -437,11 +458,18 @@ ho_session_launch() {
   [ -n "$chain" ] || chain=$(ho_cfg ".models[\"$role\"]" '')
   models=""
   if [ -n "$chain" ]; then models=$(ho_model_chain "$chain") || return 65; fi
-  acct=$(ho_session_account "$role" "$account") || return 65
+  local troot="" rkey acct_root=""
+  rkey=$(jq -r '.transcript.root_env // ""' "$profile")
+  acct=$(ho_session_account "$role" "$account" "$rkey") || return 65
   if [ -n "$acct" ]; then
     acct_name=${acct%%"$(printf '\t')"*}
     acct_cmd=${acct#*"$(printf '\t')"}
+    if [ -n "$rkey" ]; then
+      acct_root=${acct_cmd%%"$(printf '\t')"*}
+      acct_cmd=${acct_cmd#*"$(printf '\t')"}
+    fi
   fi
+  troot=$(ho_session_transcript_root "$profile" "$acct_root") || troot=""
   cmd=$(jq -r .command "$profile")
   cmdpath=$(command -v "$cmd" 2>/dev/null || true)
   case $cmdpath in /*) ;; *) printf 'harness: the runtime command %s is not on PATH\n' "$cmd" >&2; return 65 ;; esac
@@ -543,9 +571,9 @@ ho_session_launch() {
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg account "$acct_name" \
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
-    --arg rpath "$cmdpath" \
+    --arg rpath "$cmdpath" --arg troot "$troot" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
-      runtime: $runtime, runtime_path: $rpath, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
+      runtime: $runtime, runtime_path: $rpath, transcript_root: (if $troot == "" then null else $troot end), session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"

@@ -219,8 +219,16 @@ ho_loop_gate_cmd() {
   printf '%s\n' "$cmd"
 }
 
+# ho_loop_ledger <kind> [key value]...: a ledger line from inside the merge subshell. The ledger
+# append resets the TERM, INT and HUP traps when it frees its lock, so the merge's own signal
+# trap is set again after it (outside a merge, ho_loop_sig is unset and nothing is set).
+ho_loop_ledger() {
+  ho_ledger_append "$@"
+  [ -z "${ho_loop_sig+x}" ] || trap 'ho_loop_sig=1' TERM INT HUP
+}
+
 ho_loop_refuse() { # <code> <lane> <reason>
-  ho_ledger_append merge-refused lane "$2" reason "$3"
+  ho_loop_ledger merge-refused lane "$2" reason "$3"
   ho_loop_err "merge of lane $2 refused: $3"
   return "$1"
 }
@@ -236,7 +244,7 @@ ho_loop_rollback() {
   HO_LOOP_MOVED_TO=${cur:-an unreadable tip}
   if { [ "$cur" != "$old" ] && [ "$cur" != "$mc" ]; } \
       || [ "$(git -C "$wt" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$branch" ]; then
-    ho_ledger_append merge-rollback-skipped branch "$branch" tip "$HO_LOOP_MOVED_TO" expected "$mc" || true
+    ho_loop_ledger merge-rollback-skipped branch "$branch" tip "$HO_LOOP_MOVED_TO" expected "$mc" || true
     return 2
   fi
   if git -C "$wt" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
@@ -246,7 +254,7 @@ ho_loop_rollback() {
   if [ "$(ho_loop_ref "$wt" "refs/heads/$branch")" = "$old" ] && ho_loop_clean "$wt"; then
     return 0
   fi
-  ho_ledger_append merge-rollback-failed branch "$branch" tip "$old" || true
+  ho_loop_ledger merge-rollback-failed branch "$branch" tip "$old" || true
   return 1
 }
 
@@ -276,7 +284,7 @@ ho_loop_merge_locked() {
   lwt=$(ho_loop_field "$lj" worktree) && lbranch=$(ho_loop_field "$lj" branch) && lsha=$(ho_loop_field "$lj" sha) \
     || ho_loop_refuse 65 "$lane" "lane record is unreadable" || return
   worker=$(jq -r '.worker_session // ""' "$lj" 2>/dev/null) || worker=""
-  gate=$(ho_loop_gate_cmd) || { rc=$?; ho_ledger_append merge-refused lane "$lane" reason "gate not configured"; return "$rc"; }
+  gate=$(ho_loop_gate_cmd) || { rc=$?; ho_loop_ledger merge-refused lane "$lane" reason "gate not configured"; return "$rc"; }
 
   # H-055: a plain "passed" verdict of the independent validator for the exact finalize commit.
   ho_loop_verdict_check "$lane" "$lsha" "$worker" || { ho_loop_refuse 65 "$lane" "$HO_LOOP_VWHY"; return; }
@@ -368,8 +376,10 @@ ho_loop_merge_locked() {
   [ "$ho_loop_sig" -eq 0 ] || { ho_loop_undo 75 "$lane" "the merge was stopped by a signal" "$new"; return; }
 
   # Ledger line first: if the tip write then fails, the next merge refuses on the tip check.
-  # From here on a signal no longer undoes the merge.
+  # From here on a signal no longer undoes the merge: it is ignored until the tip is written.
+  trap '' TERM INT HUP
   ho_ledger_append merge-confirmed lane "$lane" sha "$lsha" branch "$branch" base "$old" tip "$new"
+  trap '' TERM INT HUP
   jq --arg tip "$new" '.tip = $tip' "$ij" | ho_atomic_write "$ij" || return 1
   printf 'merged lane %s (%s) into %s at %s\n' "$lane" "$lsha" "$branch" "$new"
 }
@@ -424,6 +434,10 @@ ho_loop_merge() {
   local lane=${1-} mpid rc
   [ $# -eq 1 ] || { ho_loop_usage; return 64; }
   ho_loop_lane_ok "$lane" || return 65
+  # Armed before the fork, so a signal that comes before the PID is known is passed on too.
+  mpid=""
+  ho_loop_caller_sig=0
+  trap 'ho_loop_caller_sig=1; if [ -n "$mpid" ]; then kill -TERM "$mpid" 2>/dev/null || true; fi' TERM INT HUP
   (
     HO_LOOP_LOCK="$HO_RUN_DIR/merge.lock"
     HO_LOOP_TAKEOVER=0
@@ -444,7 +458,7 @@ ho_loop_merge() {
     exit "$ho_loop_rc"
   ) &
   mpid=$!
-  trap 'kill -TERM "$mpid" 2>/dev/null || true' TERM INT HUP
+  [ "$ho_loop_caller_sig" -eq 0 ] || kill -TERM "$mpid" 2>/dev/null || true
   while :; do
     rc=0; wait "$mpid" || rc=$?
     kill -0 "$mpid" 2>/dev/null || break

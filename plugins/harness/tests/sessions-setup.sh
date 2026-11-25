@@ -21,6 +21,10 @@ export HO_PROJECT_DIR="$proj" HO_USER_DIR="$user"
 # hold up to 10 min (cleanup stops every process by its exact PID anyway) and allow a
 # 30 s boot. Tests that need a boot failure set their own short timeout.
 export HO_FAKE_TERM_DIR="$base/term" HO_FAKE_CLAUDE_LOG="$base/claude.log" HO_FAKE_CLAUDE_HOLD=exit HO_FAKE_CLAUDE_HOLD_MAX=600
+# trust_root: the person has trusted the project folder once in the runtime (the runtime's
+# own state file in the scratch HOME). Pre-trust of a working folder needs that consent.
+trust_root() { jq -n --arg p "$proj" '.projects[$p].hasTrustDialogAccepted = true' > "$HOME/.claude.json"; }
+trust_root
 run=$("$h" run new)
 printf 'do the work\n' > "$base/prompt.md"
 

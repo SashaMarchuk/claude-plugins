@@ -179,6 +179,26 @@ ho_screen_shape_match() {
   return 70
 }
 
+# ho_screen_selftest <frames-json>: before the first match, check that this awk runs the
+# patterns as written: a bounded repeat must match, and a backslash-escaped dot must stay a
+# dot. An awk that cannot would read every screen as "none"; this makes it "unknown" with
+# exit 70 and a message instead (PR #97 review). Runs once per process.
+ho_screen_selftest() {
+  local rc=0
+  [ "${HO_SCREEN_SELFTEST:-}" = ok ] && return 0
+  printf 'p.robe\n' | ho_screen_shape_match - '{"anchor":"p\\.ro{1,2}be","companion":""}' "$1" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    rc=0
+    printf 'pxrobe\n' | ho_screen_shape_match - '{"anchor":"p\\.ro{1,2}be","companion":""}' "$1" || rc=$?
+    if [ "$rc" -eq 1 ]; then
+      HO_SCREEN_SELFTEST=ok
+      return 0
+    fi
+  fi
+  printf 'harness: the awk on this machine does not run the screen patterns as written (bounded repeats or escapes); screen text reads as unknown\n' >&2
+  return 70
+}
+
 # ho_screen_classify <capture-file>: print one word and nothing else.
 #   limit | trust | password  a shape was recognised (the first in profile order)
 #   none                      the screen holds text and no shape
@@ -193,6 +213,7 @@ ho_screen_classify() {
     return 66
   fi
   data=$(ho_screen_profile_data) || { echo unknown; return 78; }
+  ho_screen_selftest "$data" || { echo unknown; return 70; }
   n=$(printf '%s' "$data" | jq '.shapes | length')
   i=0
   while [ "$i" -lt "$n" ]; do
@@ -209,21 +230,62 @@ ho_screen_classify() {
   echo none
 }
 
-# ho_screen_pretrust <dir>: trust <dir> for the runtime before a session starts there, and
-# only when <dir> is inside the project or a genuine worktree of it (reuse list: pre-trust
-# inside the project only). Never trusts anything else.
-#   0 trusted, 65 refused (outside the project, or no project), 78 no trust data,
-#   1 the runtime's own file could not be written (the caller continues; the dialog then
-#     becomes an owner action).
-ho_screen_pretrust() {
-  local dir=${1-} data file env_name env_value resolved tmp
-  [ -n "$dir" ] || { echo "harness: screen pretrust <dir>" >&2; return 64; }
-  ho_assert_safe_cwd "$dir" "${HO_PROJECT_DIR:-$(ho_project_root)}" || {
-    printf 'harness: refusing to trust %s: it is not inside the project\n' "$dir" >&2
-    return 65
-  }
-  resolved=$(cd "$dir" && pwd -P) || return 65
-  data=$(ho_screen_trust_data) || return 78
+# ho_screen_git <args>: git with every variable that can point it at another repository
+# cleared, so the engine's own environment cannot steer a trust check (PR #97 review).
+ho_screen_git() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_CEILING_DIRECTORIES \
+    -u GIT_DISCOVERY_ACROSS_FILESYSTEM git "$@"
+}
+
+# ho_screen_git_dir <dir> <rev-parse-flag>: the physical path that rev-parse gives for <dir>.
+ho_screen_git_dir() {
+  local d=$1 out
+  out=$(ho_screen_git -C "$d" rev-parse "$2" 2>/dev/null) || return 1
+  [ -n "$out" ] || return 1
+  case $out in /*) ;; *) out="$d/$out" ;; esac
+  (cd "$out" 2>/dev/null && pwd -P)
+}
+
+# ho_screen_trust_scope <dir> <project>: print root, inside or worktree, or fail.
+#   root      <dir> is the project folder itself
+#   inside    <dir> is a folder inside the project folder
+#   worktree  <dir> is in a linked worktree of the project's own repository: its common git
+#             folder is the project's own, and its top folder is one that
+#             `git worktree list` of the project names. A hand-made .git file, a worktree of
+#             another repository (also one nested inside the project) and a git variable in
+#             the engine's environment do not pass.
+ho_screen_trust_scope() {
+  local d proj common dcommon top line
+  ho_assert_abs "${1-}" "folder" 2>/dev/null || return 1
+  [ -d "$1" ] || return 1
+  d=$(cd "$1" && pwd -P) || return 1
+  proj=$(cd "$2" 2>/dev/null && pwd -P) || return 1
+  [ "$d" = "$proj" ] && { echo root; return 0; }
+  case "$d/" in "$proj"/*) echo inside; return 0 ;; esac
+  common=$(ho_screen_git_dir "$proj" --git-common-dir) || return 1
+  [ "$common" = "$proj/.git" ] || return 1
+  dcommon=$(ho_screen_git_dir "$d" --git-common-dir) || return 1
+  [ "$dcommon" = "$common" ] || return 1
+  top=$(ho_screen_git -C "$d" rev-parse --show-toplevel 2>/dev/null) || return 1
+  top=$(cd "$top" 2>/dev/null && pwd -P) || return 1
+  [ "$top" != "$proj" ] || return 1
+  while IFS= read -r line; do
+    case $line in
+      'worktree '*)
+        line=$(cd "${line#worktree }" 2>/dev/null && pwd -P) || continue
+        [ "$line" = "$top" ] && { echo worktree; return 0; }
+        ;;
+    esac
+  done <<EOF_WT
+$(ho_screen_git -C "$proj" worktree list --porcelain 2>/dev/null)
+EOF_WT
+  return 1
+}
+
+# ho_screen_trust_file <trust-data>: the runtime's own state file, as this engine sees it.
+ho_screen_trust_file() {
+  local data=$1 env_name env_value file
   env_name=$(printf '%s' "$data" | jq -r '.config_dir_env // ""')
   file=$(printf '%s' "$data" | jq -r '.config_file')
   case $file in /*) ;; *)
@@ -232,21 +294,119 @@ ho_screen_pretrust() {
     if [ -n "$env_value" ]; then file="$env_value/$file"; else file="$HOME/$file"; fi
     ;;
   esac
-  if [ ! -s "$file" ] || [ -L "$file" ]; then
-    printf 'harness: %s is missing, empty or a link; %s was not trusted before launch\n' "$file" "$resolved" >&2
+  printf '%s\n' "$file"
+}
+
+# ho_screen_trusted <file> <trust-data> <folder>: 0 when every trust field is already set for
+# that folder; 2 when the file cannot be read as an object.
+ho_screen_trusted() {
+  printf '%s' "$2" | jq -e --arg p "$3" --slurpfile cur "$1" \
+    '.projects_key as $k | .fields as $f
+     | ($cur[0] | select(type == "object")) as $c
+     | ($c[$k][$p] // {}) as $e
+     | [$f | to_entries[] | $e[.key] == .value] | all' >/dev/null 2>&1
+}
+
+# ho_screen_trust_lock <file> / ho_screen_trust_unlock: one writer at a time for the runtime's
+# state file, across every run of this engine (the lock lives in the harness user folder).
+# A lock whose holder is gone is taken over; no lock after 30 s is a failure.
+ho_screen_trust_lock() {
+  local dir n=0 pid
+  dir="${HO_USER_DIR:-$HOME/.claude/harness}/locks"
+  mkdir -p "$dir" || return 1
+  HO_SCREEN_TRUST_LOCK="$dir/trust-$(printf '%s' "$1" | cksum | awk '{ print $1 }').lock"
+  until mkdir "$HO_SCREEN_TRUST_LOCK" 2>/dev/null; do
+    pid=$(cat "$HO_SCREEN_TRUST_LOCK/pid" 2>/dev/null || true)
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      [ "$(cat "$HO_SCREEN_TRUST_LOCK/pid" 2>/dev/null || true)" = "$pid" ] && rm -rf "$HO_SCREEN_TRUST_LOCK"
+      continue
+    fi
+    if [ -z "$pid" ] && [ -n "$(find "$HO_SCREEN_TRUST_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      rm -rf "$HO_SCREEN_TRUST_LOCK"
+      continue
+    fi
+    n=$((n + 1))
+    [ "$n" -lt 600 ] || { printf 'harness: the trust lock %s is held; nothing was written\n' "$HO_SCREEN_TRUST_LOCK" >&2; return 1; }
+    sleep 0.05
+  done
+  printf '%s\n' "$$" > "$HO_SCREEN_TRUST_LOCK/pid"
+}
+ho_screen_trust_unlock() { rm -rf "$HO_SCREEN_TRUST_LOCK"; }
+
+# ho_screen_pretrust <dir>: trust <dir> for the runtime before a session starts there.
+# Consent first (PR #97 review, the Codex security finding): the person must already have
+# trusted the project folder in the runtime, in the state file the session will use. That is
+# the one interactive consent this needs; the repository itself is the untrusted side, so
+# "inside the project" alone is not consent. With it, a folder inside the project, or in a
+# linked worktree of the project's own repository, gets the same trust (reuse list: pre-trust
+# inside the project only). The project folder itself is never written.
+#   0  trusted now, already trusted, or the project folder itself (nothing written)
+#   77 the project folder is not trusted in the runtime: nothing written, the caller stops
+#   65 refused (outside the project and not one of its worktrees)
+#   78 no trust data in the runtime profile
+#   1  the runtime's state file could not be written (a link, unreadable, or locked)
+ho_screen_pretrust() {
+  local dir=${1-} proj data file scope resolved tmp rc=0
+  [ -n "$dir" ] || { echo "harness: screen pretrust <dir>" >&2; return 64; }
+  proj=$(cd "${HO_PROJECT_DIR:-$(ho_project_root)}" 2>/dev/null && pwd -P) || return 65
+  scope=$(ho_screen_trust_scope "$dir" "$proj") || {
+    printf 'harness: refusing to trust %s: it is not inside the project or one of its worktrees\n' "$dir" >&2
+    return 65
+  }
+  resolved=$(cd "$dir" && pwd -P) || return 65
+  data=$(ho_screen_trust_data) || return 78
+  file=$(ho_screen_trust_file "$data")
+  if [ ! -f "$file" ] || ! printf '%s' "$data" | jq -e --arg p "$proj" --slurpfile cur "$file" \
+      '.projects_key as $k | (.consent_field // "") as $c
+       | $c != "" and (($cur[0] | select(type == "object"))[$k][$p][$c] == true)' >/dev/null 2>&1; then
+    printf 'harness: the project %s is not trusted in the runtime yet; nothing was written\n' "$proj" >&2
+    return 77
+  fi
+  [ "$scope" = root ] && return 0
+  ho_screen_trusted "$file" "$data" "$resolved" && return 0
+  if [ -L "$file" ]; then
+    printf 'harness: %s is a link; %s was not trusted before launch\n' "$file" "$resolved" >&2
     return 1
   fi
-  tmp=$(mktemp "$(dirname "$file")/.ho-trust.XXXXXX") || return 1
+  ho_screen_trust_lock "$file" || return 1
+  # Read again under the lock: another launch may have written it meanwhile.
+  if ho_screen_trusted "$file" "$data" "$resolved"; then
+    ho_screen_trust_unlock
+    return 0
+  fi
+  tmp=$(mktemp "$(dirname "$file")/.ho-trust.XXXXXX") || { ho_screen_trust_unlock; return 1; }
   if printf '%s' "$data" | jq -e --arg p "$resolved" --slurpfile cur "$file" \
       '.projects_key as $k | .fields as $f
        | ($cur[0] | select(type == "object"))
        | .[$k] = ((.[$k] // {}) | (.[$p] = ((.[$p] // {}) + $f)))' > "$tmp" 2>/dev/null \
-      && [ -s "$tmp" ]; then
-    mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
-    return 0
+      && [ -s "$tmp" ] && mv "$tmp" "$file"; then
+    ho_screen_trusted "$file" "$data" "$resolved" || rc=1
+  else
+    rm -f "$tmp"
+    rc=1
   fi
-  rm -f "$tmp"
-  printf 'harness: could not write the trust record into %s; %s was not trusted before launch\n' "$file" "$resolved" >&2
+  ho_screen_trust_unlock
+  [ "$rc" -eq 0 ] || printf 'harness: could not write the trust record into %s; %s was not trusted before launch\n' "$file" "$resolved" >&2
+  return "$rc"
+}
+
+# ho_screen_reset_ok <value>: a reset is "unknown" or a plain epoch in seconds: no leading
+# zero, not 0, and inside the 64-bit range of shell arithmetic. Anything else is refused
+# (exit 64), so a reader that falls back to 0, or a number that wraps, never reads as
+# "reset reached" (PR #97 review).
+ho_screen_reset_ok() {
+  case ${1-} in
+    unknown) return 0 ;;
+    [1-9] | [1-9]*[0-9])
+      case $1 in *[!0-9]*) ;; *)
+        if [ "${#1}" -lt 19 ] || { [ "${#1}" -eq 19 ] && [ ! "$1" \> 9223372036854775807 ]; }; then
+          return 0
+        fi
+        ;;
+      esac
+      ;;
+  esac
+  printf 'harness: a reset must be unknown or an epoch in seconds (1 to 9223372036854775807, no leading zero): %s\n' "${1-}" >&2
   return 1
 }
 
@@ -259,9 +419,9 @@ ho_screen_wait() {
   slice=$(ho_cfg_int '.limits.wait_slice_seconds' 300)
   margin=$(ho_cfg_int '.limits.resume_margin_seconds' 90)
   hold=$(ho_cfg_int '.limits.unknown_hold_seconds' 300)
+  ho_screen_reset_ok "$until" || return 64
   case $until in
     unknown) left=$hold; rc=2 ;;
-    '' | *[!0-9]*) echo "harness: screen wait <reset-epoch|unknown>" >&2; return 64 ;;
     *)
       now=$(date -u '+%s')
       left=$((until + margin - now))
@@ -329,10 +489,15 @@ ho_screen_watch() {
   shift
   while [ $# -gt 0 ]; do
     case $1 in
-      --reset) reset=${2-}; shift 2 ;;
+      --reset)
+        [ $# -ge 2 ] || { echo "harness: screen watch <session> [--reset <epoch|unknown>]" >&2; return 64; }
+        reset=$2
+        shift 2
+        ;;
       *) printf 'harness: screen watch: unknown option %s\n' "$1" >&2; return 64 ;;
     esac
   done
+  ho_screen_reset_ok "$reset" || return 64
   dir="$HO_RUN_DIR/screen"
   mkdir -p "$dir"
   chmod 700 "$dir" 2>/dev/null || true

@@ -18,10 +18,11 @@
   "exit_command": "/exit",
   "screen_file": "claude-code.screen.json",
   "trust": {
-    "_comment": "Pre-trust data (reuse list: pre-trust inside the project only). The engine merges these fields under the folder key, and it never answers the dialog on the screen.",
+    "_comment": "Pre-trust data (reuse list: pre-trust inside the project only). The engine writes these fields under a folder key only when the person has already trusted the project folder, which consent_field records under the project key. It never writes the project folder itself, and it never answers the dialog on the screen.",
     "config_dir_env": "CLAUDE_CONFIG_DIR",
     "config_file": ".claude.json",
     "projects_key": "projects",
+    "consent_field": "hasTrustDialogAccepted",
     "fields": {
       "hasTrustDialogAccepted": true,
       "hasCompletedProjectOnboarding": true

@@ -14,7 +14,7 @@
 fix="$HO_PLUGIN_ROOT/tests/fixtures/screen"
 set_cfg() { jq "$2" "$1" > "$base/c.json" && mv "$base/c.json" "$1"; }
 set_cfg "$proj/.harness/config.json" '.limits = {"wait_slice_seconds": 1, "resume_margin_seconds": 0, "unknown_hold_seconds": 0}'
-printf '{}\n' > "$HOME/.claude.json"
+trust_root
 
 # cls <fixture>: the class word for one saved fixture file.
 cls() { "$h" screen "$run" classify "$fix/$1" 2>/dev/null; }
@@ -78,6 +78,20 @@ assert_eq "H-114 (D25b): a STOP ends the wait (exit 75)" "75" "$rc"
 rm -f "$proj/.harness/STOP"
 "$h" state "$run" resume >/dev/null
 
+# A reset that cannot be an epoch is refused, never read as "reset reached" (PR #97 review).
+for v in 0 9999999999999999999 09; do
+  assert_exit "H-114 (PR-8): a reset of $v is refused (exit 64)" 64 "$h" screen "$run" wait "$v"
+done
+
+# An awk that cannot run the patterns as written reads unknown, loudly (PR #97 review).
+mkdir -p "$base/badawk"
+printf '#!/bin/sh\nexit 1\n' > "$base/badawk/awk"
+chmod 755 "$base/badawk/awk"
+rc=0; out=$(PATH="$base/badawk:$PATH" "$h" screen "$run" classify "$fix/limit-notice-boxed.txt" 2>"$base/selftest.err") || rc=$?
+assert_eq "H-113 (I1): an awk that fails the self-test reads unknown, not none" "unknown" "$out"
+assert_eq "H-113 (I1): an awk that fails the self-test exits 70" "70" "$rc"
+assert_eq "H-113 (I1): the self-test failure says why" "1" "$(grep -c 'does not run the screen patterns' "$base/selftest.err" || true)"
+
 # ---- pre-trust: inside the project only (reuse list) -----------------------------------
 assert_exit "H-099 reuse list: a folder inside the project is pre-trusted" 0 "$h" screen "$run" pretrust "$proj/src"
 assert_eq "H-099 reuse list: the trust record names the folder inside the project" "1" \
@@ -90,12 +104,15 @@ assert_eq "H-099 reuse list: nothing outside the project reaches the trust recor
 
 # ---- a live session: read the screen, act, and type nothing -----------------------------
 # The screen is fed by appending a saved fixture to the fake terminal's own output file.
-printf '{}\n' > "$HOME/.claude.json"
+trust_root
 launch w1 >/dev/null
 hfile="$HO_FAKE_TERM_DIR/$(printf '%s' "$(rec w1 .handle)" | tr -c 'A-Za-z0-9-' '_')"
 assert_eq "H-099 reuse list: the launch pre-trusted its own working folder" "1" \
   "$(jq --arg p "$(cd "$proj/src" && pwd -P)" '[.projects | to_entries[] | select(.key == $p and .value.hasTrustDialogAccepted == true)] | length' "$HOME/.claude.json")"
 assert_eq "H-099 reuse list: the launch recorded no skipped pre-trust" "0" "$(count pretrust-skipped "")"
+
+assert_exit "H-114 (PR-8): watch --reset with no value prints usage (exit 64)" 64 "$h" screen "$run" watch w1 --reset
+assert_exit "H-114 (PR-8): watch --reset 0 is refused (exit 64)" 64 "$h" screen "$run" watch w1 --reset 0
 
 typed_before=$(wc -c < "$hfile.in" | tr -d ' ')
 cat "$fix/limit-notice-boxed.txt" >> "$hfile.out"
@@ -125,9 +142,9 @@ assert_eq "H-099 reuse list: the prompt is recognised on a live session" "passwo
 assert_eq "H-099 reuse list: the prompt becomes one owner action" "1" "$(count owner-action "")"
 assert_eq "H-099 reuse list: the prompt was not answered" "$typed_before" "$(wc -c < "$hfile.in" | tr -d ' ')"
 
-# An empty trust file first, so a regression that trusts a folder on the dialog changes it
-# (the launch above already wrote this session's own folder).
-printf '{}\n' > "$HOME/.claude.json"
+# Only the project's own consent in the trust file, so a regression that trusts the working
+# folder on the dialog changes it (the launch above already wrote that folder).
+trust_root
 trust_cks_before=$(cksum < "$HOME/.claude.json")
 cat "$fix/trust-dialog.txt" >> "$hfile.out"
 assert_eq "H-099: the trust dialog is recognised on a live session" "trust" "$("$h" screen "$run" watch w1 2>/dev/null)"

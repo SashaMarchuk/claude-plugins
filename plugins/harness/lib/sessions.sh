@@ -492,20 +492,32 @@ ho_session_launch() {
   pidfile="$sdir/$name.pid"
   closing="$sdir/$name.closing"
   case $role in orchestrator | watcher) group=control ;; *) group=work ;; esac
-  # Pre-trust the working folder before the session starts, and only because it is inside
-  # the project (ho_assert_safe_cwd above): design reuse list, pre-trust inside the project
-  # only. A folder that cannot be trusted is not a launch failure; the dialog then shows on
-  # the screen and becomes an owner action (lib/screen.sh), and nothing is ever typed into it.
+  # Pre-trust the working folder before the session starts (reuse list: pre-trust inside the
+  # project only), and only with the person's consent: the project folder must already be
+  # trusted in the runtime (PR #97 review). Without that consent nothing is written and the
+  # launch stops with one owner action. Any other failure to pre-trust is not a launch
+  # failure: the runtime then holds the folder itself, its dialog shows on the screen and
+  # becomes an owner action (lib/screen.sh), and nothing is ever typed into it.
   local trust_rc=0 trust_why=""
   if [ -n "$acct_cmd" ]; then
     # The account command may move the runtime config folder for this session only, and the
     # engine cannot read that folder without running the command a second time. So nothing
-    # is written: a dialog on the screen then becomes an owner action (lib/screen.sh).
+    # is written, and the runtime's own trust hold applies.
     trust_rc=78
     trust_why="the account command may move the runtime config folder"
   else
     ho_screen_pretrust "$cwd" >/dev/null 2>&1 || trust_rc=$?
     trust_why="exit $trust_rc"
+  fi
+  if [ "$trust_rc" -eq 77 ]; then
+    rm -f "$rec"
+    ho_ledger_append pretrust-refused name "$name" cwd "$cwd" reason "the project is not trusted in the runtime"
+    ho_ledger_append owner-action title "project not trusted in the runtime" \
+      why "the harness trusts a working folder only after you have trusted the project once yourself" \
+      command "open the project once in the runtime and accept its trust question" \
+      verify "the next launch of session $name starts"
+    printf 'harness: the project %s is not trusted in the runtime; open it once in the runtime and accept its trust question. Session %s was not launched.\n' "$HO_PROJECT_DIR" "$name" >&2
+    return 77
   fi
   [ "$trust_rc" -eq 0 ] || ho_ledger_append pretrust-skipped name "$name" cwd "$cwd" reason "$trust_why"
   attempts=$(ho_session_attempts "$profile" "$sid" "$title" "$perm" "$([ -n "$resume" ] && echo 1 || echo 0)" "$models") || { rm -f "$rec"; return 78; }

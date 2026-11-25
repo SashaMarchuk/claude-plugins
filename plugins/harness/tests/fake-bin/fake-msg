@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Fake "message between sessions" sender for the delivery tests (H-101). A test runtime
+# profile names it in message.argv as: fake-msg <session-id> <instruction-id> <text-file>.
+# It logs each call to $HO_FAKE_MSG_LOG (default $HOME/fake-msg.log) and acts by
+# HO_FAKE_MSG_MODE:
+#   deliver  the target transcript records the text as a user turn; exit 0
+#   noise    the transcript grows with unrelated assistant text only; exit 0
+#   other    a user turn that carries another instruction id; exit 0
+#   silent   nothing is written; exit 0
+#   fail     nothing is written; exit 1
+# The transcript is found as $HOME/.claude/projects/*/<session-id>.jsonl.
+set -euo pipefail
+sid=${1:?session id}
+id=${2:?instruction id}
+file=${3:?text file}
+printf '%s\t%s\t%s\n' "$sid" "$id" "$file" >> "${HO_FAKE_MSG_LOG:-$HOME/fake-msg.log}"
+tr=""
+for f in "$HOME"/.claude/projects/*/"$sid.jsonl"; do
+  [ -f "$f" ] && tr=$f
+done
+case ${HO_FAKE_MSG_MODE:-deliver} in
+  deliver)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "user", message: {role: "user", content: $c} }' >> "$tr"
+    ;;
+  noise)
+    [ -n "$tr" ] || exit 1
+    jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "unrelated progress"}]} }' >> "$tr"
+    ;;
+  other)
+    [ -n "$tr" ] || exit 1
+    jq -cn '{type: "user", message: {role: "user", content: "ho-00000000: another instruction"} }' >> "$tr"
+    ;;
+  silent) ;;
+  fail) exit 1 ;;
+  *) exit 2 ;;
+esac

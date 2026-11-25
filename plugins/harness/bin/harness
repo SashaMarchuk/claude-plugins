@@ -28,6 +28,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/term.sh"
 # shellcheck source=../lib/sessions.sh
 . "$HO_ROOT/lib/sessions.sh"
+# shellcheck source=../lib/deliver.sh
+. "$HO_ROOT/lib/deliver.sh"
 # shellcheck source=../lib/flow.sh
 . "$HO_ROOT/lib/flow.sh"
 
@@ -43,7 +45,7 @@ verbs:
   config     config get <jq-path> [default] | config get --int <jq-path> <default> | config check
   run        run new: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
-  session    session <run-dir> launch|close|list: launch, list and close sessions
+  session    session <run-dir> launch|close|list|deliver|proof: sessions and instructions
   flow       flow profiles: list | check <flow> | steps <flow> | render <flow> <role> ...
 USAGE
 }

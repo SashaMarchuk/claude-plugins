@@ -19,7 +19,11 @@
 #                                         print the handle
 #   ho_term_send <handle> <owner> <sid> <text>  type short control text, then a separate Enter
 #   ho_term_key <handle> <owner> <sid> enter|escape   press one key
-#   ho_term_capture <handle> <owner> <sid> [lines]    print the tail of the session's screen
+#   ho_term_bytes <handle> <owner> <sid> <code>...    send control bytes (1-31), one call each
+#   ho_term_capture <handle> <owner> <sid> [lines] [styled]  print the tail of the session's
+#                                         screen; "styled" keeps the colour codes where the
+#                                         backend has them (tmux), so dim suggested text can be
+#                                         told apart from typed text (H-099)
 #   ho_term_close <handle> <owner> <sid>  close that one tab or pane (its process must be gone)
 #   ho_term_probe                         check that the backend can be driven
 #
@@ -114,12 +118,30 @@ ho_term_key() {
   "ho_term_${backend}_key" "$h" "$owner" "$sid" "$key"
 }
 
+# ho_term_bytes: control bytes only (for example a runtime's send-now chord). The byte values
+# come from runtime data; the adapter holds no key name (D37-LIFECYCLE-4).
+ho_term_bytes() {
+  local h=${1-} owner=${2-} sid=${3-} b backend
+  ho_term_safe "$h" && ho_term_owner_ok "$owner" && ho_term_owner_ok "$sid" || return 65
+  shift 3 2>/dev/null || return 64
+  [ $# -gt 0 ] || { echo "harness: bytes needs at least one code" >&2; return 64; }
+  for b in "$@"; do
+    case $b in '' | *[!0-9]* | 0*) echo "harness: control byte must be 1-31: $b" >&2; return 65 ;; esac
+    [ "$b" -ge 1 ] && [ "$b" -le 31 ] || { echo "harness: control byte must be 1-31: $b" >&2; return 65; }
+  done
+  backend=$(ho_term_backend) || return $?
+  for b in "$@"; do
+    "ho_term_${backend}_byte" "$h" "$owner" "$sid" "$b" || return $?
+  done
+}
+
 ho_term_capture() {
-  local h=${1-} owner=${2-} sid=${3-} lines=${4:-40} backend
+  local h=${1-} owner=${2-} sid=${3-} lines=${4:-40} styled=${5-} backend
   ho_term_safe "$h" && ho_term_owner_ok "$owner" && ho_term_owner_ok "$sid" || return 65
   case $lines in '' | *[!0-9]*) echo "harness: lines must be a number" >&2; return 64 ;; esac
+  case $styled in '' | styled) ;; *) echo "harness: capture mode must be styled or empty" >&2; return 64 ;; esac
   backend=$(ho_term_backend) || return $?
-  "ho_term_${backend}_capture" "$h" "$owner" "$sid" "$lines"
+  "ho_term_${backend}_capture" "$h" "$owner" "$sid" "$lines" "$styled"
 }
 
 ho_term_close() {
@@ -356,6 +378,11 @@ ho_term_iterm2_key() {
   esac
 }
 
+ho_term_iterm2_byte() {
+  ho_term_iterm2_do "$1" "$2" "$3" "write text (ASCII character $4) newline NO" >/dev/null
+}
+
+# iTerm2 "contents" has no colours, so a styled capture is a plain one there.
 ho_term_iterm2_capture() {
   local out
   out=$(ho_term_iterm2_do "$1" "$2" "$3" 'return contents') || return $?
@@ -423,6 +450,12 @@ ho_term_tmux_send() {
   ho_term_tmux_key "$1" "$2" "$3" enter
 }
 
+# A byte goes as one hex key (send-keys -H, tmux 3.0 or later), so it is never read as a key name.
+ho_term_tmux_byte() {
+  ho_term_tmux_if "$1" "$HO_TMUX_OWNER_FMT" "$1/$(ho_term_tmux_session)/$2/$3" "send-keys -t $1 -H $(printf '%02x' "$4")" >/dev/null \
+    || { ho_term_tmux_refused "$1" "$2" "$3"; return 66; }
+}
+
 ho_term_tmux_key() {
   local k
   case $4 in enter) k=Enter ;; escape) k=Escape ;; esac
@@ -433,8 +466,9 @@ ho_term_tmux_key() {
 # Capture reads under the same check, in one tmux command. A screen that shows only the refusal
 # marker reads as a refusal, which is the safe side.
 ho_term_tmux_capture() {
-  local out
-  out=$(ho_term_tmux_if "$1" "$HO_TMUX_OWNER_FMT" "$1/$(ho_term_tmux_session)/$2/$3" "capture-pane -p -t $1") \
+  local out e=""
+  [ "${5-}" != styled ] || e="-e "
+  out=$(ho_term_tmux_if "$1" "$HO_TMUX_OWNER_FMT" "$1/$(ho_term_tmux_session)/$2/$3" "capture-pane ${e}-p -t $1") \
     || { ho_term_tmux_refused "$1" "$2" "$3"; return 66; }
   printf '%s\n' "$out" | tail -n "$4"
 }

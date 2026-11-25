@@ -30,6 +30,9 @@ usage: harness session <run-dir> <verb> [args]
   launch --role R --name N --cwd DIR (--prompt FILE | --resume SESSION-ID) [--account A] [--model "a|b"]
   close <name>        ask the session to exit, wait for its exact process to end; never forced
   list                one line per session: name role status pid session-id handle
+  deliver <name> (--text T | --file F) [--id ID] [--force-send]
+                      send one instruction: message first, typing as a checked fallback
+  proof <name> <id>   whether the session's transcript proves that instruction delivered
 USAGE
 }
 
@@ -697,6 +700,8 @@ ho_session_main() {
     launch) ho_session_launch "$@" || rc=$? ;;
     close) ho_session_close "$@" || rc=$? ;;
     list) ho_session_list ;;
+    deliver) ho_session_deliver "$@" || rc=$? ;;
+    proof) ho_session_proof "$@" || rc=$? ;;
     *) ho_session_usage; rc=64 ;;
   esac
   exit "$rc"

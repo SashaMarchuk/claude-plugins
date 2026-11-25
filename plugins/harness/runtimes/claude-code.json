@@ -3,17 +3,80 @@
   "_comment": "Launch data for one runtime (design D37-RUNTIME-1: engine code holds no runtime name). Only the fields the session launcher and graceful close need; full runtime profiles come later (tasks.md 19.1). In argv lists, {session_id}, {model} and {title} are filled in by the engine; {prompt} becomes the prompt file's text when the session starts.",
   "command": "claude",
   "argv": {
-    "new": ["--session-id", "{session_id}"],
-    "resume": ["--resume", "{session_id}"],
-    "model": ["--model", "{model}"],
-    "title": ["-n", "{title}"],
-    "prompt": ["{prompt}"]
+    "new": [
+      "--session-id",
+      "{session_id}"
+    ],
+    "resume": [
+      "--resume",
+      "{session_id}"
+    ],
+    "model": [
+      "--model",
+      "{model}"
+    ],
+    "title": [
+      "-n",
+      "{title}"
+    ],
+    "prompt": [
+      "{prompt}"
+    ]
   },
   "permissions": {
-    "bypass": ["--dangerously-skip-permissions"],
-    "auto": ["--permission-mode", "auto"],
-    "acceptEdits": ["--permission-mode", "acceptEdits"],
-    "dontAsk": ["--permission-mode", "dontAsk"]
+    "bypass": [
+      "--dangerously-skip-permissions"
+    ],
+    "auto": [
+      "--permission-mode",
+      "auto"
+    ],
+    "acceptEdits": [
+      "--permission-mode",
+      "acceptEdits"
+    ],
+    "dontAsk": [
+      "--permission-mode",
+      "dontAsk"
+    ]
   },
-  "exit_command": "/exit"
+  "exit_command": "/exit",
+  "_comment_delivery": "Instruction delivery (H-101, H-099, H-137; design S8-24, D42f, D42g, D37-LIFECYCLE-4). message.argv: a command that posts one instruction to the session as a message between sessions; null means no script route is known, so the engine goes straight to the typed fallback (the orchestrator session sends its own messages with the runtime's message tool and asks the engine only for the proof). Placeholders: {session_id}, {instruction_id}, {text_file}. transcript: where the session transcript is and which records prove delivery; the format is internal to the runtime and changes between versions. screen: what an idle session with an empty input line looks like; any other screen gets nothing typed. force_send: the queued-message send-now chord as control bytes, and the lowest runtime version that knows it.",
+  "message": {
+    "argv": null
+  },
+  "transcript": {
+    "root_env": "CLAUDE_CONFIG_DIR",
+    "default_root": ".claude",
+    "glob": "projects/*/{session_id}.jsonl",
+    "user_types": [
+      "user"
+    ],
+    "reply_types": [
+      "assistant"
+    ],
+    "delivered_attachments": [
+      "queued_command"
+    ],
+    "queue_type": "queue-operation",
+    "queue_enqueue": "enqueue"
+  },
+  "screen": {
+    "rule_char": "─",
+    "prompt_prefixes": [
+      "> ",
+      "❯ "
+    ],
+    "busy_marks": [
+      "esc to interrupt"
+    ],
+    "suggestion_sgr": "2"
+  },
+  "force_send": {
+    "bytes": [
+      24,
+      19
+    ],
+    "min_version": "2.1.275"
+  }
 }

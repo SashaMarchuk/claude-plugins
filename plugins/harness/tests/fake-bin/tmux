@@ -65,7 +65,12 @@ case $op in
     h=$2; shift 2
     ft_known "$h" || { echo "can't find pane: $h" >&2; exit 1; }
     f=$(ft_file "$h")
-    if [ "${1:-}" = -l ]; then
+    if [ "${1:-}" = -H ]; then
+      # One hex byte per call, as the backend sends it; kept in <h>.in as <0xNN>.
+      case ${2:-} in [0-9a-f][0-9a-f]) ;; *) exit 2 ;; esac
+      ft_log "tmux byte $h 0x$2"
+      printf '<0x%s>' "$2" >> "$f.in"
+    elif [ "${1:-}" = -l ]; then
       ft_log "tmux send-text $h $2"
       printf '%s' "$2" >> "$f.in"
     else
@@ -114,10 +119,18 @@ case $op in
     done
     ;;
   capture-pane)
+    # -e keeps the colour codes: <h>.out is shown as it is. Without -e they are removed, as
+    # real tmux does.
+    styled=""
+    [ "${1:-}" != -e ] || { styled=1; shift; }
     [ "${1:-}" = -p ] && [ "${2:-}" = -t ] || exit 2
     ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
-    ft_log "tmux capture $3"
-    cat "$(ft_file "$3").out"
+    ft_log "tmux capture $3${styled:+ styled}"
+    if [ -n "$styled" ]; then
+      cat "$(ft_file "$3").out"
+    else
+      sed "s/$(printf '\033')\[[0-9;]*m//g" "$(ft_file "$3").out"
+    fi
     ;;
   kill-pane)
     [ "${1:-}" = -t ] || exit 2

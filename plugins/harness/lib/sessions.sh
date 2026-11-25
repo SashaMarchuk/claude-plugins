@@ -491,6 +491,34 @@ ho_session_launch() {
   pidfile="$sdir/$name.pid"
   closing="$sdir/$name.closing"
   case $role in orchestrator | watcher) group=control ;; *) group=work ;; esac
+  # Pre-trust the working folder before the session starts (reuse list: pre-trust inside the
+  # project only), and only with the person's consent: the project folder must already be
+  # trusted in the runtime (PR #97 review). Without that consent nothing is written and the
+  # launch stops with one owner action. Any other failure to pre-trust is not a launch
+  # failure: the runtime then holds the folder itself, its dialog shows on the screen and
+  # becomes an owner action (lib/screen.sh), and nothing is ever typed into it.
+  local trust_rc=0 trust_why=""
+  if [ -n "$acct_cmd" ]; then
+    # The account command may move the runtime config folder for this session only, and the
+    # engine cannot read that folder without running the command a second time. So nothing
+    # is written, and the runtime's own trust hold applies.
+    trust_rc=78
+    trust_why="the account command may move the runtime config folder"
+  else
+    ho_screen_pretrust "$cwd" >/dev/null 2>&1 || trust_rc=$?
+    trust_why="exit $trust_rc"
+  fi
+  if [ "$trust_rc" -eq 77 ]; then
+    rm -f "$rec"
+    ho_ledger_append pretrust-refused name "$name" cwd "$cwd" reason "the project is not trusted in the runtime"
+    ho_ledger_append owner-action title "project not trusted in the runtime" \
+      why "the harness trusts a working folder only after you have trusted the project once yourself" \
+      command "open the project once in the runtime and accept its trust question" \
+      verify "the next launch of session $name starts"
+    printf 'harness: the project %s is not trusted in the runtime; open it once in the runtime and accept its trust question. Session %s was not launched.\n' "$HO_PROJECT_DIR" "$name" >&2
+    return 77
+  fi
+  [ "$trust_rc" -eq 0 ] || ho_ledger_append pretrust-skipped name "$name" cwd "$cwd" reason "$trust_why"
   attempts=$(ho_session_attempts "$profile" "$sid" "$title" "$perm" "$([ -n "$resume" ] && echo 1 || echo 0)" "$models") || { rm -f "$rec"; return 78; }
 
   ho_session_launcher_text "$name" "$role" "$acct_name" "$acct_cmd" "$sid" "$cwd" "$prompt" "$pidfile" "$closing" \
@@ -660,6 +688,49 @@ ho_session_close() {
   printf 'session %s closed\n' "$name"
 }
 
+# ho_session_capture <name> <out-file>: write the tail of that session's screen to a file,
+# through the backend the session was launched with and only while the terminal still carries
+# this session's tag and session ID. The text goes to a file, never to standard output, so a
+# screen never lands in a log, a ledger line or a terminal (field notes I2, I4).
+#   0 written, 66 no such session or the terminal is not this session's, 70 the terminal failed.
+ho_session_capture() {
+  local name=${1-} out=${2-} rec handle tag sid lines rc=0
+  [ -n "$name" ] && [ -n "$out" ] || { echo "harness: session capture <name> <out-file>" >&2; return 64; }
+  ho_session_name_ok "$name" || return 65
+  rec="$HO_RUN_DIR/sessions/$name.json"
+  [ -f "$rec" ] || { printf 'harness: no session %s in run %s\n' "$name" "$HO_RUN_ID" >&2; return 66; }
+  [ "$(jq -r 'if type == "object" then (.run // "") else "" end' "$rec" 2>/dev/null || echo "")" = "$HO_RUN_ID" ] \
+    || { printf 'harness: session %s is not recorded under run %s; its screen is not read\n' "$name" "$HO_RUN_ID" >&2; return 66; }
+  handle=$(jq -r '.handle // ""' "$rec")
+  tag=$(jq -r '.term_tag // ""' "$rec")
+  sid=$(jq -r '.session_id // ""' "$rec")
+  [ -n "$handle" ] || { printf 'harness: session %s has no terminal handle; its screen cannot be read\n' "$name" >&2; return 66; }
+  lines=$(ho_cfg_int '.screen.capture_lines' 40)
+  HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec")
+  export HO_TERM_BACKEND
+  ho_term_capture "$handle" "$tag" "$sid" "$lines" > "$out.tmp" 2>/dev/null || rc=$?
+  unset HO_TERM_BACKEND
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$out.tmp"
+    printf 'harness: could not read the screen of session %s (exit %s)\n' "$name" "$rc" >&2
+    return "$rc"
+  fi
+  mv "$out.tmp" "$out" || return 1
+  chmod 600 "$out" 2>/dev/null || true
+}
+
+# ho_session_bind_project: find the project that holds the open run, check it and export it.
+ho_session_bind_project() {
+  local proj
+  proj=$(cd "$HO_RUN_DIR/../../.." && pwd -P)
+  [ -f "$proj/.harness/config.json" ] || { printf 'harness: run %s is not inside a project with .harness/config.json\n' "$HO_RUN_DIR" >&2; return 78; }
+  if [ -n "${HO_PROJECT_DIR:-}" ] && [ "$(cd "$HO_PROJECT_DIR" 2>/dev/null && pwd -P)" != "$proj" ]; then
+    printf 'harness: run %s belongs to project %s, not HO_PROJECT_DIR=%s\n' "$HO_RUN_DIR" "$proj" "$HO_PROJECT_DIR" >&2
+    return 65
+  fi
+  export HO_PROJECT_DIR=$proj
+}
+
 # For a running session, list shows the process that runs now: after a model fallback that is
 # the newer process the launcher reported, and the record is brought up to date.
 ho_session_list() {
@@ -682,15 +753,9 @@ ho_session_list() {
 ho_session_main() {
   [ $# -ge 2 ] || { ho_session_usage; exit 64; }
   ho_run_open "$1"
-  local verb=$2 proj
+  local verb=$2
   shift 2
-  proj=$(cd "$HO_RUN_DIR/../../.." && pwd -P)
-  [ -f "$proj/.harness/config.json" ] || { printf 'harness: run %s is not inside a project with .harness/config.json\n' "$HO_RUN_DIR" >&2; exit 78; }
-  if [ -n "${HO_PROJECT_DIR:-}" ] && [ "$(cd "$HO_PROJECT_DIR" 2>/dev/null && pwd -P)" != "$proj" ]; then
-    printf 'harness: run %s belongs to project %s, not HO_PROJECT_DIR=%s\n' "$HO_RUN_DIR" "$proj" "$HO_PROJECT_DIR" >&2
-    exit 65
-  fi
-  export HO_PROJECT_DIR=$proj
+  ho_session_bind_project || exit $?
   local rc=0
   case $verb in
     launch) ho_session_launch "$@" || rc=$? ;;

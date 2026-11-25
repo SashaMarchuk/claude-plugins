@@ -7,7 +7,8 @@
 # only through its exact process ID; nothing here matches processes by name.
 #
 #   <run>/sessions/<name>.json     the registry record, one per session; its term_tag (new for
-#                                  each launch) is the tag of the session's pane or tab
+#                                  each launch) and its session_id are the tags of the
+#                                  session's pane or tab
 #   <run>/sessions/<name>.pid      "<pid> <run-id> <session-id>", written by the launcher
 #   <run>/sessions/<name>.closing  present while a close is under way (stops model fallback)
 #   <run>/sessions/<name>.failed   written by the launcher when the session could not start
@@ -446,7 +447,7 @@ ho_session_launch() {
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"
 
   local handle rc=0
-  handle=$(ho_term_open "$group" "$title" "$launcher" "$tag") || rc=$?
+  handle=$(ho_term_open "$group" "$title" "$launcher" "$tag" "$sid") || rc=$?
   if [ "$rc" -ne 0 ]; then
     ho_session_set "$rec" '.status = "launch-failed"' || rm -f "$rec"
     ho_ledger_append session-launch-failed name "$name" reason "terminal did not open"
@@ -521,7 +522,7 @@ ho_session_close() {
   fi
   handle=$(jq -r '.handle // ""' "$rec")
   [ -n "$handle" ] || { rm -f "$closing"; printf 'harness: session %s has no terminal handle; left open\n' "$name" >&2; return 70; }
-  # The terminal is reached only through this launch's own tag; the session ID is not enough.
+  # The terminal is reached only through this launch's own tag and the session ID together.
   tag=$(jq -r '.term_tag // ""' "$rec")
   ho_session_uuid_ok "$tag" 2>/dev/null || {
     rm -f "$closing"
@@ -529,6 +530,16 @@ ho_session_close() {
     printf 'harness: the record of session %s has no terminal tag; left open\n' "$name" >&2
     return 70
   }
+  # The process the close waits for must be the one the launcher reported for this session:
+  # the PID file names this run and session ID, the same process ID, and that process's
+  # command line holds the session ID. The pane or tab carries the session ID too, so a record
+  # that names another session's terminal is refused there (review of wave 2, R1).
+  if [ "$(ho_session_pidfile_pid "$(jq -r '.pid_file // ""' "$rec")" "$sid")" != "$pid" ] || ! ho_session_identity "$pid" "$sid"; then
+    rm -f "$closing"
+    ho_ledger_append session-close-failed name "$name" reason "the PID file does not name process $pid of this session; nothing typed"
+    printf 'harness: the PID file of session %s does not name its process %s; left open\n' "$name" "$pid" >&2
+    return 70
+  fi
   profile="$HO_ROOT/runtimes/$(jq -r '.runtime // ""' "$rec").json"
   exitcmd=$(jq -r '.exit_command // ""' "$profile" 2>/dev/null || true)
   [ -n "$exitcmd" ] || { rm -f "$closing"; printf 'harness: no exit command for session %s; left open\n' "$name" >&2; return 78; }
@@ -536,7 +547,7 @@ ho_session_close() {
   HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec")
   ho_ledger_append session-close-request name "$name" session_id "$sid" pid "$pid"
   local rc=0
-  ho_term_send "$handle" "$tag" "$exitcmd" || rc=$?
+  ho_term_send "$handle" "$tag" "$sid" "$exitcmd" || rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -f "$closing"
     if [ "$rc" -eq 66 ]; then
@@ -568,7 +579,7 @@ ho_session_close() {
     return 1
   fi
   rc=0
-  ho_term_close "$handle" "$tag" 2>/dev/null || rc=$?
+  ho_term_close "$handle" "$tag" "$sid" 2>/dev/null || rc=$?
   if [ "$rc" -ne 0 ]; then
     ho_ledger_append session-close-terminal-skipped name "$name" session_id "$sid" handle "$handle" \
       reason "$([ "$rc" -eq 66 ] && echo "the handle is gone or names another session" || echo "terminal call failed (exit $rc)")"

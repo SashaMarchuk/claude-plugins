@@ -76,6 +76,35 @@ assert_contains "Rebuild graceful close: the exit command went through tmux" "$(
 assert_eq "Rebuild graceful close: nothing went to iTerm2" "" "$(calls | grep osascript || true)"
 jq '.terminal.app = "tmux"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 
+# ---- H-103, S8-27 (review of wave 2, R1): a record that carries another session's handle and tag
+# The record of f1 keeps its own session ID, process ID and PID file, but names the handle and
+# the launch tag of f2. The pane or tab of f2 carries the session ID of f2, so close must not
+# type into it. Nor may a record with the handle, tag, session ID and PID of f2 but the PID file
+# of f1: that PID file does not name the session ID of f2.
+setcfg() { jq "$1" "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"; }
+for be in tmux iterm2; do
+  setcfg ".terminal.app = \"$be\""
+  launch "f1$be" >/dev/null
+  launch "f2$be" >/dev/null
+  pf1=$(rec "f1$be" .pid) pf2=$(rec "f2$be" .pid) hf2=$(rec "f2$be" .handle)
+  cp "$run/sessions/f1$be.json" "$base/f1.orig"
+  jq --arg h "$hf2" --arg t "$(rec "f2$be" .term_tag)" '.handle = $h | .term_tag = $t' "$base/f1.orig" > "$run/sessions/f1$be.json"
+  rc=0; "$h" session "$run" close "f1$be" >/dev/null 2>&1 || rc=$?
+  assert_eq "R1 ($be): close of a record with another session's handle and tag is refused (70)" "70" "$rc"
+  assert_eq "R1 ($be): nothing is typed into the other session" "" "$(calls | grep -F "send-text $hf2 " || true)"
+  assert_eq "R1 ($be): both processes stay alive" "yes yes" "$(alive "$pf1" && echo yes || echo no) $(alive "$pf2" && echo yes || echo no)"
+  jq --arg h "$hf2" --arg t "$(rec "f2$be" .term_tag)" --arg s "$(rec "f2$be" .session_id)" --argjson p "$pf2" \
+    '.handle = $h | .term_tag = $t | .session_id = $s | .pid = $p' "$base/f1.orig" > "$run/sessions/f1$be.json"
+  rc=0; "$h" session "$run" close "f1$be" >/dev/null 2>&1 || rc=$?
+  assert_eq "R1 ($be): close of a record whose PID file does not name its session ID is refused (70)" "70" "$rc"
+  assert_eq "R1 ($be): that record types nothing, and both processes stay alive" "yes yes" \
+    "$([ -z "$(calls | grep -F "send-text $hf2 " || true)" ] && alive "$pf2" && echo yes || echo no) $(alive "$pf1" && echo yes || echo no)"
+  cp "$base/f1.orig" "$run/sessions/f1$be.json"
+  rc=0; "$h" session "$run" close "f1$be" >/dev/null 2>&1 || rc=$?
+  assert_eq "R1 ($be): the restored record still closes its own session" "0 closed yes" "$rc $(rec "f1$be" .status) $(alive "$pf2" && echo yes || echo no)"
+done
+setcfg '.terminal.app = "tmux"'
+
 # ---- close refuses a session recorded under another run ID ---------------------------------
 run2=$("$h" run new)
 "$h" session "$run2" launch --role worker --name x1 --cwd "$proj/src" --prompt "$base/prompt.md" >/dev/null

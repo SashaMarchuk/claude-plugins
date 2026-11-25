@@ -9,19 +9,21 @@ shift 2
 # ft_fmt <pane> <format>: expand the few pane formats the backend uses; a missing pane
 # expands to empty values (as real tmux does for if-shell -F).
 ft_fmt() {
-  local h=$1 out=$2 f ses="" pid="" tag=""
+  local h=$1 out=$2 f ses="" pid="" tag="" sid=""
   f=$(ft_file "$h")
   if ft_known "$h"; then
     ses=$(cat "$f.session")
     pid=$(cat "$f.pid")
     tag=$(cat "$f.tag" 2>/dev/null || true)
+    sid=$(cat "$f.sid" 2>/dev/null || true)
   else
     h=""
   fi
   out=${out//'#{pane_id}'/$h}
   out=${out//'#{session_name}'/$ses}
   out=${out//'#{pane_pid}'/$pid}
-  out=${out//'#{@ho_session}'/$tag}
+  out=${out//'#{@ho_tag}'/$tag}
+  out=${out//'#{@ho_session_id}'/$sid}
   printf '%s\n' "$out"
 }
 op=${1:-}
@@ -82,11 +84,13 @@ case $op in
     ft_fmt "$3" "$4"
     ;;
   set-option)
-    [ "${1:-}" = -p ] && [ "${2:-}" = -t ] && [ "${4:-}" = @ho_session ] && [ $# -eq 5 ] || exit 2
+    # set-option -p -t <pane> @ho_tag|@ho_session_id <value>: kept in <h>.tag and <h>.sid.
+    [ "${1:-}" = -p ] && [ "${2:-}" = -t ] && [ $# -eq 5 ] || exit 2
+    case ${4:-} in @ho_tag) ext=tag ;; @ho_session_id) ext=sid ;; *) exit 2 ;; esac
     ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
     [ -z "${HO_FAKE_TMUX_NO_TAG:-}" ] || { echo "invalid option: -p" >&2; exit 1; }
-    ft_log "tmux tag $3 $5"
-    printf '%s\n' "$5" > "$(ft_file "$3").tag"
+    ft_log "tmux tag $3 $4 $5"
+    printf '%s\n' "$5" > "$(ft_file "$3").$ext"
     ;;
   if-shell)
     # if-shell -F -t <pane> '#{==:<format>,<expected>}' <command> <else-command>
@@ -98,9 +102,16 @@ case $op in
     want=${cond##*,}
     have=$(ft_fmt "$h" "${cond%,*}")
     if [ "$have" = "$want" ]; then pick=$5; else pick=$6; fi
-    # The commands come from the backend with checked values; split them like tmux does.
-    eval "set -- $pick"
-    exec "$0" -L ho-harness "$@"
+    # The commands come from the backend with checked values; split them like tmux does,
+    # and run a list separated by " ; " one command after the other, stopping at a failure.
+    rest=$pick
+    while :; do
+      one=${rest%%' ; '*}
+      eval "set -- $one"
+      "$0" -L ho-harness "$@" || exit $?
+      [ "$one" != "$rest" ] || break
+      rest=${rest#*' ; '}
+    done
     ;;
   capture-pane)
     [ "${1:-}" = -p ] && [ "${2:-}" = -t ] || exit 2

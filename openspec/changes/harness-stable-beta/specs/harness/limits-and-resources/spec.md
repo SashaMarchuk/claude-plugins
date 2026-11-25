@@ -200,9 +200,9 @@ Source: interview 2026-11-24 R27.4; D35; owner decision 2026-11-26
 - **WHEN** the build is planned
 - **THEN** the builder plans around the current limits so the banner test can happen
 
-#### Scenario: An approaching limit starts the test
+#### Scenario: An approaching limit may start the test
 - **WHEN** the build account comes close to a real limit while the deferred test task is still open
-- **THEN** the build session starts the banner test itself, and no owner start is needed
+- **THEN** the build session may start the banner test itself, and no owner start is needed
 
 #### Scenario: A session shows the limit banner
 - **WHEN** a session's terminal shows the subscription-limit banner

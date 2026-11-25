@@ -9,6 +9,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 0.3 Run the read-only connections check and list owner-only actions (D36, OPEN-14)
 - [ ] 0.4 Check that a separate config folder keeps its own plugin cache and that two marketplaces cannot share one name
 - [x] 0.5 Build-time ground rules: the build session merges wave PRs into `harness/next` after an independent validator pass, a green `bash tests/run-all.sh` and a clean external review, and merges into `main` stay the owner's; the redacted field notes are on `harness/next`; `main` is protected (pull request only, admins included); a private sandbox repository exists for GitHub intake tests
+  The empty leftover branch check is done: no such branch existed.
 - [ ] 0.6 Owner item, with no agent decision: the per-project worker count and safety rules 3 to 6 stay with the owner or the project
 
 ## 1. Build branch (after the owner merges the requirements PR)
@@ -71,7 +72,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 - [ ] 11.1 Limit-banner recognition against saved fixtures, plus trust-dialog and password handling
 - [ ] 11.2 Verify a session's own prose quoting a banner does not match
-- [ ] 11.3 If no account reaches a limit during the final product check, leave a prepared deferred limit-banner test task; the build session starts it itself when the build account comes close to a real limit (H-113, D35)
+- [ ] 11.3 If no account reaches a limit during the final product check, leave a prepared deferred limit-banner test task; the build session may start it itself when the build account comes close to a real limit (H-113, D35)
 
 ## 12. Intake and tickets
 
@@ -91,7 +92,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 ## 15. Verification
 
-- [ ] 15.1 Verdict gate, test-count rule and Verification block in the PR: verdict in the opening lines, each check named with its result, unfinished checks and exceptions stated, and the same results in the ticket comment (H-053, H-054)
+- [ ] 15.1 Verdict gate, test-count rule and Verification block in the PR: verdict visible at once, each check named with its result, unfinished checks and exceptions stated, and the same results in the ticket comment (H-053, H-054)
 - [ ] 15.2 Remarks handling and external review bots; verify-and-prove skill as an optional flow step
 
 ## 16. Limits and resources

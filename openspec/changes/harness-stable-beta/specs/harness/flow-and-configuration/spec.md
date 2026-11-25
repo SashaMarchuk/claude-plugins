@@ -119,7 +119,7 @@ Decided: design.md D37-FLOW-1
 - **AND** runs tickets by it
 
 #### Scenario: The default is confirmed
-- **WHEN** nothing is configured and the person confirms the default at setup
+- **WHEN** nothing is configured and the person confirms the default in the configuration skill or at the first start
 - **THEN** the harness runs tickets by the GSD flow
 - **AND** the flow's name comes from the shipped default config, not from engine code
 

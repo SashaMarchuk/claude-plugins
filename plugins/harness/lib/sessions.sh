@@ -597,7 +597,8 @@ ho_session_launch_one() {
     sleep 0.2
   done
   if [ "$stable" -lt 2 ]; then
-    # The launcher must not start the session later, after its slot was given back.
+    # The flag comes before the slot decision: from here on the launcher starts no session,
+    # so a session that reads dead now stays dead and its slot can be given back.
     : > "$closing" 2>/dev/null || true
     ho_session_set "$rec" '.status = "boot-failed"' || true
     ho_ledger_append session-boot-failed name "$name" session_id "$sid"

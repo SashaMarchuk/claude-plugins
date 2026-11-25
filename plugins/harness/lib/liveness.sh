@@ -9,7 +9,8 @@
 #
 # Verdicts:
 #   working   the recorded process is alive and its command line holds the session ID
-#   starting  the launch has not finished, or a model fallback is between two attempts
+#   starting  the launch has not finished and no process of it runs yet, or a model fallback
+#             is between two attempts
 #   dead      the process is gone (also after a failed or abandoned launch, once no process
 #             of the session runs); a running record turns "dead" once
 #   closed    the session was closed

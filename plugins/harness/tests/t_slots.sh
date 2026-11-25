@@ -186,10 +186,16 @@ cp "$base/config.orig.json" "$cfg"
 # Its record still says launching. Past the launch window its live session is not dead.
 r=$("$h" run new --workers 1)
 # The launch command itself is killed (not a shell around it), as when a tool call times out.
+# A slow account command keeps the launch in its boot check, so the kill always lands there.
+jq '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: "[ -n \"${HO_SESSION_NAME:-}\" ] && sleep 2; echo FOO=bar"}}}' \
+  "$base/user.orig.json" > "$user/config.json"
 "$h" session "$r" launch --role worker --name k3 --cwd "$proj/src" --prompt "$base/prompt.md" >/dev/null 2>&1 &
 lp=$!
-i=0; while [ ! -s "$r/sessions/k3.pid" ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i + 1)); done
+i=0; while [ "$(jq -r '.handle // ""' "$r/sessions/k3.json" 2>/dev/null)" = "" ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i + 1)); done
 kill -9 "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+cp "$base/user.orig.json" "$user/config.json"
+i=0; while [ ! -s "$r/sessions/k3.pid" ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i + 1)); done
+sleep 0.5
 kp=$(pidof_s "$r" k3)
 assert_eq "test setup: the record says launching and the session runs" "launching yes" "$(jq -r .status "$r/sessions/k3.json") $(alive "$kp" && echo yes || echo no)"
 touch -t "$(date -v-1H '+%Y%m%d%H%M' 2>/dev/null || date -d '-1 hour' '+%Y%m%d%H%M')" "$r/sessions/k3.json"

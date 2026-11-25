@@ -14,14 +14,30 @@ Source: interview 2026-11-24 R1.1, R8.1, R8.3
 - **WHEN** two projects have different autonomy profiles
 - **THEN** each project runs under its own profile
 
-#### Scenario: The committed profile now allows more than the person selected (design.md D37-FLOW-8)
-- **WHEN** a run starts and the selected committed profile raises a permission above the person's local record, for example a human gate became automatic or push became allowed
+#### Scenario: The committed config now allows more than the person selected (design.md D37-FLOW-8)
+- **WHEN** a run starts and the selected committed config raises a recorded field above the person's local record, for example a human gate became automatic, push became allowed or the permission mode moved up
 - **THEN** the run stops at start and names the changed fields
 - **AND** it asks the person to select the profile again with the configuration skill, and no ticket work runs before that
 
 #### Scenario: The committed profile now allows less (design.md D37-FLOW-8)
 - **WHEN** a run starts and every change in the selected committed profile lowers a permission
 - **THEN** the run starts under the lower permissions and the local record is updated
+
+#### Scenario: The local record is missing (design.md D37-FLOW-8)
+- **WHEN** a run starts and the local selection holds no record of the approved profile, as at the first start after an upgrade
+- **THEN** the run stops at start and asks the person to select the profile with the configuration skill
+
+#### Scenario: A change cannot be ranked (design.md D37-FLOW-8)
+- **WHEN** a recorded field changed and the shipped ranking cannot say whether the new value is higher or lower
+- **THEN** the change counts as a raise, and the run stops at start
+
+#### Scenario: An automatic restart or resume meets a raise (design.md D37-FLOW-8)
+- **WHEN** an automatic restart or resume finds a raised permission or a missing record
+- **THEN** it does not wait at the question; it stops and raises an attention notice
+
+#### Scenario: The committed profile changes during a run (design.md D37-FLOW-8)
+- **WHEN** a pull during a run changes the selected committed profile
+- **THEN** the run keeps the values it read at its start, and the change is compared at the next run start
 
 ### Requirement: H-037 Every step can be autonomous or a human gate
 Every step of the flow SHALL be configurable as autonomous or as a human gate. This includes whether a ticket may start without a human. The interview did not discuss whether the engine checks these settings. Per design.md S8-08a (agent decision on an unanswered point, under D37), the engine, not the prompt, MUST check the gate settings before it moves past a gated point.

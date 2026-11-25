@@ -281,9 +281,9 @@ Source: interview 2026-11-24 R6.3, R6.4
 - **AND** the harness follows the configured reaction
 
 #### Scenario: An accepted change adds a target repository (design.md D37-FLOW-8)
-- **WHEN** an accepted change adds a target repository to a ticket in progress
-- **THEN** the harness checks the change author's write access on every resulting target repository before it applies the change
-- **AND** if the author lacks write access on any of them, or the access cannot be read, the change is not applied and the ticket moves to needs-review with one comment naming the repository
+- **WHEN** an accepted change, or a clarifying answer, adds a target repository to a ticket in progress
+- **THEN** the harness checks its author's write access on every resulting target repository before it applies it
+- **AND** if the author lacks write access on any of them, or the access cannot be read, it is not applied and the ticket moves to needs-review with one comment naming the repository
 
 ### Requirement: H-021 A non-writer's change becomes a linked new ticket
 A change from a person without write access SHALL become a new ticket that links to the source comment on the earlier ticket. The new ticket SHALL go through normal intake: a writer validates it, and at pickup it passes the readiness check. If its description is sufficient, it MAY start at once; if not, clarifying questions are asked. Its starting state is an agent decision; see design.md D37-INTAKE-2.

@@ -7,6 +7,8 @@
 #   noise    the transcript grows with unrelated assistant text only; exit 0
 #   other    a user turn that carries another instruction id; exit 0
 #   silent   nothing is written; exit 0
+#   queue    the transcript records the text as queued (an enqueue record); exit 0
+#   dequeue  queued, then removed from the queue without being taken; exit 0
 #   fail     nothing is written; exit 1
 # The transcript is found as $HOME/.claude/projects/*/<session-id>.jsonl.
 set -euo pipefail
@@ -32,6 +34,11 @@ case ${HO_FAKE_MSG_MODE:-deliver} in
     jq -cn '{type: "user", message: {role: "user", content: "ho-00000000: another instruction"} }' >> "$tr"
     ;;
   silent) ;;
+  queue | dequeue)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "queue-operation", operation: "enqueue", content: $c}' >> "$tr"
+    [ "$HO_FAKE_MSG_MODE" = queue ] || jq -cn --arg c "$(cat "$file")" '{type: "queue-operation", operation: "remove", content: $c}' >> "$tr"
+    ;;
   fail) exit 1 ;;
   *) exit 2 ;;
 esac

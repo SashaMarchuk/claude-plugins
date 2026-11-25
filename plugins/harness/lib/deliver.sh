@@ -54,11 +54,20 @@ ho_deliver_new_id() {
   printf 'ho-%s\n' "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 }
 
+# The id is checked as one whole value by case patterns, never line by line: a newline or any
+# other byte outside the set fails (validator B1). The set is spelled out, so no locale can widen
+# a range.
 ho_deliver_id_ok() {
-  printf '%s' "${1-}" | grep -Eq '^[a-z][a-z0-9-]{5,39}$' || {
-    printf 'harness: instruction id %s must be 6-40 characters of a-z 0-9 - and start with a letter\n' "${1-}" >&2
+  local v=${1-}
+  case $v in
+    [abcdefghijklmnopqrstuvwxyz]*) ;;
+    *) v="" ;;
+  esac
+  case $v in *[!abcdefghijklmnopqrstuvwxyz0123456789-]*) v="" ;; esac
+  if [ -z "$v" ] || [ "${#v}" -lt 6 ] || [ "${#v}" -gt 40 ]; then
+    echo "harness: an instruction id must be 6-40 characters of a-z 0-9 - and start with a letter" >&2
     return 65
-  }
+  fi
 }
 
 ho_deliver_bytes() { printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '; }
@@ -92,7 +101,7 @@ ho_deliver_profile() {
 ho_deliver_transcript() {
   local rec=$1 profile=$2 sid cached glob renv root roots acct out f tab
   cached=$(jq -r '.transcript // ""' "$rec")
-  [ -n "$cached" ] && [ -f "$cached" ] && { printf '%s\n' "$cached"; return 0; }
+  [ -n "$cached" ] && [ -f "$cached" ] && [ -r "$cached" ] && { printf '%s\n' "$cached"; return 0; }
   sid=$(jq -r '.session_id // ""' "$rec")
   ho_session_uuid_ok "$sid" 2>/dev/null || return 1
   glob=$(jq -r '.transcript.glob' "$profile")
@@ -117,7 +126,7 @@ $HOME/$(jq -r '.transcript.default_root // ".claude"' "$profile")"
   while IFS= read -r root; do
     [ -n "$root" ] || continue
     for f in "$root"/$glob; do
-      [ -f "$f" ] || continue
+      [ -f "$f" ] && [ -r "$f" ] || continue
       ho_session_set "$rec" '.transcript = $t' --arg t "$f" >/dev/null 2>&1 || true
       printf '%s\n' "$f"
       return 0
@@ -132,9 +141,13 @@ ho_deliver_size() { wc -c < "$1" 2>/dev/null | tr -d ' '; }
 
 # ho_deliver_scan <profile> <transcript> <offset> <id>: what the transcript recorded for the id
 # after byte <offset>: "delivered user-turn", "delivered queued-command", "delivered reply",
-# "queued", or "none". Lines that are not JSON objects are skipped. The id matches only as a
-# whole word: "stop-1" is not found inside "stop-10". Ids use a-z 0-9 - only, so the id is
-# safe inside the pattern.
+# "queued", "dequeued" (it left the queue and was not taken), or "none".
+# The id is matched as a literal string (jq split), never as a pattern built from input
+# (validator B2), and only as a whole word: no letter of either case, digit, "_", "." or "-"
+# may touch it, so "stop-1" is not found in "stop-10" or "stop-1.txt". Not counted: lines that
+# are not JSON objects, tool results, and user records marked isMeta, isCompactSummary or
+# isSidechain (a sidechain record of any type). Each record is judged alone, so one odd record
+# hides no other.
 ho_deliver_scan() {
   local profile=$1 tr=$2 off=$3 id=$4 out
   out=$(tail -c +"$((off + 1))" "$tr" 2>/dev/null | jq -R -r --arg id "$id" --slurpfile p "$profile" '
@@ -142,17 +155,24 @@ ho_deliver_scan() {
     | def texts: if type == "string" then [.]
         elif type == "array" then [.[] | select(type == "object" and .type == "text") | .text | strings]
         else [] end;
-      def has_id: any(.[]; test("(^|[^a-z0-9-])" + $id + "($|[^a-z0-9-])"));
-    fromjson? | select(type == "object")
-    | (.type // "") as $ty
-    | if ($t.user_types // [] | any(. == $ty)) and ((.message.content // "") | texts | has_id) then "delivered user-turn"
-      elif $ty == "attachment" and (((.attachment.type // "") as $a | $t.delivered_attachments // [] | any(. == $a)))
-        and ((.attachment.humanTurn // .humanTurn // false) == true) and ([.attachment | .. | strings] | has_id) then "delivered queued-command"
-      elif ($t.reply_types // [] | any(. == $ty)) and ((.message.content // "") | texts | has_id) then "delivered reply"
-      elif $ty == ($t.queue_type // "") and (.operation // "") == ($t.queue_enqueue // "") and ([.. | strings] | has_id) then "queued"
-      else empty end' 2>/dev/null) || out=""
+      def word($s): ($s | split($id)) as $q
+        | any(range(0; ($q | length) - 1); ($q[.] | test("[A-Za-z0-9_.-]$") | not) and ($q[. + 1] | test("^[A-Za-z0-9_.-]") | not));
+      def has_id: any(.[]; word(.));
+      def content: if (.message | type) == "object" then (.message.content // "") else "" end;
+    fromjson? | select(type == "object") | select((.isSidechain // false) != true)
+    | try (
+      (.type // "") as $ty
+      | if ($t.user_types // [] | any(. == $ty)) and (.isMeta // false) != true and (.isCompactSummary // false) != true
+          and (content | texts | has_id) then "delivered user-turn"
+        elif $ty == "attachment" and (((.attachment.type // "") as $a | $t.delivered_attachments // [] | any(. == $a)))
+          and ((.attachment.humanTurn // .humanTurn // false) == true) and ([.attachment | .. | strings] | has_id) then "delivered queued-command"
+        elif ($t.reply_types // [] | any(. == $ty)) and (content | texts | has_id) then "delivered reply"
+        elif $ty == ($t.queue_type // "") and (.operation // "") == ($t.queue_enqueue // "") and ([.. | strings] | has_id) then "queued"
+        elif $ty == ($t.queue_type // "") and (.operation // "") == ($t.queue_remove // "") and ([.. | strings] | has_id) then "dequeued"
+        else empty end) catch empty' 2>/dev/null) || out=""
   case $out in
     *delivered*) printf '%s\n' "$out" | grep -m 1 '^delivered' ;;
+    *dequeued*) echo dequeued ;;
     *queued*) echo queued ;;
     *) echo none ;;
   esac
@@ -160,11 +180,15 @@ ho_deliver_scan() {
 
 # ho_deliver_screen <record> <profile>: read the session's screen and print one word and a
 # reason: "empty", "draft <text>", "busy <mark>" or "unknown <why>". Only "empty" lets the typed
-# fallback run (D42g). Dim text after the prompt, in the runtime's suggestion style, is
-# suggested text and counts as empty (H-099). A backend that keeps no colours (iTerm2) cannot
-# tell suggested text from typed text, so any text there counts as a draft.
+# fallback run (D42g). A draft is checked before every other state, so a draft always means
+# 0 bytes, --force-send included (validator B3). The input box is the last line that starts
+# with a prompt prefix, right below a rule line, down to the next rule line (a long input
+# wraps onto more lines). Dim text in the runtime's suggestion style is suggested text and
+# counts as empty (H-099). A backend that keeps no colours (iTerm2) cannot tell suggested text
+# from typed text, so any text there counts as a draft. A draft of more than one line reads
+# "draft" with its lines joined; the caller never writes draft text to the ledger.
 ho_deliver_screen() {
-  local rec=$1 profile=$2 cap plain esc rc sgr k i n line prev next raw text mark p pfx="" prefixes marks
+  local rec=$1 profile=$2 cap plain esc rc sgr k kend i j n line raw text part mark p pfx="" prefixes marks
   esc=$(printf '\033')
   cap=$(HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec") ho_term_capture "$(jq -r '.handle // ""' "$rec")" \
     "$(jq -r '.term_tag // ""' "$rec")" "$(jq -r '.session_id // ""' "$rec")" 60 styled 2>/dev/null) || { echo "unknown the screen could not be read"; return 0; }
@@ -174,8 +198,6 @@ ho_deliver_screen() {
   case $sgr in *[!0-9]*) sgr="" ;; esac
   prefixes=$(jq -r '.screen.prompt_prefixes[] | strings' "$profile")
   marks=$(jq -r '.screen.busy_marks[]? | strings' "$profile")
-  # The input line: the last line that starts with a prompt prefix and sits between two rule
-  # lines. Without it the screen shows a dialog, a notice or something unknown.
   local -a P R
   n=0
   while IFS= read -r line; do P[n]=$line; n=$((n + 1)); done <<EOF_P
@@ -185,17 +207,20 @@ EOF_P
   while IFS= read -r line; do R[i]=$line; i=$((i + 1)); done <<EOF_R
 $cap
 EOF_R
-  k=-1
+  k=-1 kend=-1
   i=1
   while [ "$i" -lt $((n - 1)) ]; do
     line=${P[i]}
-    prev=${P[i - 1]}
-    next=${P[i + 1]}
     while IFS= read -r p; do
       [ -n "$p" ] || continue
       case $line in
         "$p"* | "${p% }")
-          if ho_deliver_rule "$prev" "$rc" && ho_deliver_rule "$next" "$rc"; then k=$i; pfx=$p; fi
+          ho_deliver_rule "${P[i - 1]}" "$rc" || continue
+          j=$((i + 1))
+          while [ "$j" -lt "$n" ] && [ "$j" -le $((i + 20)) ]; do
+            if ho_deliver_rule "${P[j]}" "$rc"; then k=$i; kend=$j; pfx=$p; break; fi
+            j=$((j + 1))
+          done
           ;;
       esac
     done <<EOF_PFX
@@ -204,10 +229,37 @@ EOF_PFX
     i=$((i + 1))
   done
   if [ "$k" -lt 0 ]; then
+    # A prompt line with text but no frame is still taken as a draft: nothing may be typed.
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        case ${P[i]} in "$p"?*) echo "draft (no frame)"; return 0 ;; esac
+      done <<EOF_PFX2
+$prefixes
+EOF_PFX2
+      i=$((i + 1))
+    done
     printf 'unknown no idle input line of the runtime is shown (a dialog, a notice or an unknown screen); last lines: %s\n' \
       "$(printf '%s\n' "$plain" | grep -v '^[[:space:]]*$' | tail -n 3 | sed 's/^[[:space:]]*//' | tr '\n' '|' | sed 's/|$//' | cut -c1-200)"
     return 0
   fi
+  text=""
+  i=$k
+  while [ "$i" -lt "$kend" ]; do
+    raw=${R[i]-}
+    [ -z "$sgr" ] || raw=$(printf '%s\n' "$raw" | sed -E "s/$esc\[${sgr}m[^$esc]*($esc\[(0|22)?m|\$)//g")
+    part=$(printf '%s\n' "$raw" | sed "s/$esc\[[0-9;]*m//g")
+    if [ "$i" -eq "$k" ]; then
+      case $part in "$pfx"*) part=${part#"$pfx"} ;; *) part=${part#"${pfx% }"} ;; esac
+    else
+      part=$(printf '%s' "$part" | sed 's/^[[:space:]]*//')
+    fi
+    text="$text$(printf '%s' "$part" | sed 's/[[:space:]]*$//')"
+    i=$((i + 1))
+  done
+  text=$(printf '%s' "$text" | sed 's/^[[:space:]]*//')
+  [ -z "$text" ] || { echo "draft $text"; return 0; }
   i=0
   while [ "$i" -lt "$k" ]; do
     while IFS= read -r mark; do
@@ -218,16 +270,7 @@ $marks
 EOF_BUSY
     i=$((i + 1))
   done
-  raw=${R[k]-}
-  [ -z "$sgr" ] || raw=$(printf '%s\n' "$raw" | sed -E "s/$esc\[${sgr}m[^$esc]*($esc\[(0|22)?m|\$)//g")
-  text=$(printf '%s\n' "$raw" | sed "s/$esc\[[0-9;]*m//g")
-  case $text in "$pfx"*) text=${text#"$pfx"} ;; *) text=${text#"${pfx% }"} ;; esac
-  text=$(printf '%s' "$text" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-  if [ -n "$text" ]; then
-    echo "draft $text"
-  else
-    echo "empty"
-  fi
+  echo "empty"
 }
 
 # ho_deliver_rule <line> <rule-char>: 0 when the line is only rule characters (at least three)
@@ -258,7 +301,11 @@ ho_deliver_chord() {
   bytes=$(jq -r '.force_send.bytes // [] | map(tostring) | join(" ")' "$profile")
   want=$(jq -r '.force_send.min_version // ""' "$profile")
   [ -n "$bytes" ] && [ -n "$want" ] || { ho_ledger_append deliver-force-send id "$id" result skipped reason "the runtime data names no send-now chord"; return 1; }
-  cmd=$(command -v "$(jq -r '.command // ""' "$profile")" 2>/dev/null || true)
+  # The version comes from the runtime the launch checked and recorded, checked again here;
+  # never from a PATH lookup, which a folder the project controls could win (Codex review).
+  cmd=$(jq -r '.runtime_path // ""' "$rec")
+  case $cmd in /*) ;; *) cmd="" ;; esac
+  if [ -n "$cmd" ] && { [ ! -x "$cmd" ] || ! ho_session_runtime_path_ok "$cmd" 2>/dev/null; }; then cmd=""; fi
   have=""
   [ -z "$cmd" ] || have=$("$cmd" --version 2>/dev/null | awk 'NR == 1 { print $1 }')
   case $have in '' | *[!0-9.]*) have="" ;; esac
@@ -341,11 +388,14 @@ ho_deliver_typed_line() {
   return 1
 }
 
+# ho_deliver_not <id> <name> <reason> <detail> [ledger pairs]: the detail (for example what the
+# screen showed) is printed only, never written to the ledger, so screen text such as a draft
+# never reaches it.
 ho_deliver_not() {
-  local id=$1 name=$2 reason=$3
-  shift 3
+  local id=$1 name=$2 reason=$3 detail=$4
+  shift 4
   ho_ledger_append deliver-failed id "$id" name "$name" reason "$reason" "$@"
-  printf 'NOT-DELIVERED id=%s session=%s: %s\n' "$id" "$name" "$reason"
+  printf 'NOT-DELIVERED id=%s session=%s: %s%s\n' "$id" "$name" "$reason" "${detail:+; $detail}"
   return 1
 }
 
@@ -364,26 +414,37 @@ ho_session_deliver() {
   done
   if [ -n "$file" ]; then
     [ "$have_text" -eq 0 ] || { echo "harness: give --text or --file, not both" >&2; return 64; }
+    case $file in -*) echo "harness: a --file name may not start with -" >&2; return 65 ;; esac
     [ -f "$file" ] && [ -r "$file" ] || { printf 'harness: cannot read %s\n' "$file" >&2; return 65; }
-    text=$(cat "$file") || return 65
+    text=$(cat -- "$file") || return 65
   fi
   [ -n "$text" ] || { echo "harness: the instruction text is empty" >&2; return 64; }
   [ "$(ho_deliver_bytes "$text")" -le "$HO_DELIVER_MAX_TEXT" ] || { printf 'harness: the instruction is longer than %s bytes\n' "$HO_DELIVER_MAX_TEXT" >&2; return 65; }
   if [ -n "$id" ]; then ho_deliver_id_ok "$id" || return 65; else id=$(ho_deliver_new_id); fi
-  local rec profile tr off msg st rc pid screen
+  local rec profile tr off msg tmp st rc pid screen
   rec=$(ho_deliver_record "$name") || return $?
   profile=$(ho_deliver_profile "$rec") || return $?
   [ "$(jq -r '.status // ""' "$rec")" = running ] || { printf 'harness: session %s is not running\n' "$name" >&2; return 65; }
   pid=$(ho_session_live_pid "$rec") || return 1
-  [ -n "$pid" ] || ho_deliver_not "$id" "$name" "the session's process is gone" || return 1
+  [ -n "$pid" ] || ho_deliver_not "$id" "$name" "the session's process is gone" "" || return 1
   mkdir -p "$HO_RUN_DIR/messages" "$HO_RUN_DIR/logs"
   msg="$HO_RUN_DIR/messages/$id.txt"
-  # One id, one instruction: an id that was used before is refused, so a proof always points
-  # at exactly one instruction.
-  (set -C; printf '%s: %s\n' "$id" "$text" > "$msg") 2>/dev/null || { printf 'harness: instruction id %s was used before in this run\n' "$id" >&2; return 65; }
+  [ ! -e "$msg" ] || { printf 'harness: instruction id %s was used before in this run\n' "$id" >&2; return 65; }
+  # No readable transcript, nothing sent (H-101): the file must exist, be readable and read.
   tr=$(ho_deliver_transcript "$rec" "$profile") || tr=""
-  [ -n "$tr" ] || ho_deliver_not "$id" "$name" "no transcript of the session to check delivery against; nothing was sent" || return 1
-  off=$(ho_deliver_size "$tr")
+  off=""
+  [ -z "$tr" ] || { head -c 1 "$tr" > /dev/null 2>&1 && off=$(ho_deliver_size "$tr"); }
+  case $off in '' | *[!0-9]*) ho_deliver_not "$id" "$name" "no readable transcript of the session to check delivery against; nothing was sent" "" || return 1 ;; esac
+  # One id, one instruction. The file is written to a temp file in the same folder, mode 600,
+  # then linked into place; the link fails if the id was used before (no clobber).
+  tmp=$(umask 077 && mktemp "$HO_RUN_DIR/messages/.tmp.XXXXXX") || return 1
+  printf '%s: %s\n' "$id" "$text" > "$tmp" || { rm -f "$tmp"; return 1; }
+  if ! ln "$tmp" "$msg" 2>/dev/null; then
+    rm -f "$tmp"
+    printf 'harness: instruction id %s was used before in this run\n' "$id" >&2
+    return 65
+  fi
+  rm -f "$tmp"
   ho_ledger_append deliver-request id "$id" name "$name" bytes "$(ho_deliver_bytes "$text")" force_send "$force"
 
   # ---- 1. the message route ----
@@ -401,6 +462,9 @@ ho_session_deliver() {
           ;;
       esac
       ho_ledger_append deliver-message id "$id" result unconfirmed transcript_grew "$([ "$(ho_deliver_size "$tr")" -gt "$off" ] && echo yes || echo no)" state "$st"
+      # The session already holds this instruction (or held it): typing it again would send
+      # a second copy (Codex review).
+      ho_deliver_pending "$id" "$name" "$st" || return 1
       ;;
     2) ho_ledger_append deliver-message id "$id" result "no message route in the runtime data" ;;
     *) ho_ledger_append deliver-message id "$id" result failed ;;
@@ -410,20 +474,30 @@ ho_session_deliver() {
   screen=$(ho_deliver_screen "$rec" "$profile")
   case $screen in
     empty) ;;
+    draft*) ho_deliver_not "$id" "$name" "the input line holds text typed by the user; nothing was typed" "" screen draft || return 1 ;;
     busy*)
-      [ "$force" -eq 1 ] || ho_deliver_not "$id" "$name" "the session is busy; nothing was typed, the instruction waits" screen "$screen" || return 1
+      [ "$force" -eq 1 ] || ho_deliver_not "$id" "$name" "the session is busy; nothing was typed, the instruction waits" "" screen busy || return 1
       ;;
-    draft*) ho_deliver_not "$id" "$name" "the input line holds text typed by the user; nothing was typed" screen draft || return 1 ;;
-    *) ho_deliver_not "$id" "$name" "nothing was typed; ${screen#unknown }" screen unknown || return 1 ;;
+    *) ho_deliver_not "$id" "$name" "the screen shows no idle input line; nothing was typed" "${screen#unknown }" screen unknown || return 1 ;;
   esac
-  local typed mode line
-  typed=$(ho_deliver_typed_line "$id" "$text" "$msg") || ho_deliver_not "$id" "$name" "the message file path cannot be typed; nothing was typed" || return 1
+  local typed mode line h tag sid backend
+  typed=$(ho_deliver_typed_line "$id" "$text" "$msg") || ho_deliver_not "$id" "$name" "the message file path cannot be typed; nothing was typed" "" || return 1
   mode=${typed%%"$(printf '\t')"*}
   line=${typed#*"$(printf '\t')"}
+  h=$(jq -r '.handle // ""' "$rec") tag=$(jq -r '.term_tag // ""' "$rec") sid=$(jq -r '.session_id' "$rec") backend=$(jq -r '.backend // ""' "$rec")
   rc=0
-  HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec") ho_term_send "$(jq -r '.handle // ""' "$rec")" \
-    "$(jq -r '.term_tag // ""' "$rec")" "$(jq -r '.session_id' "$rec")" "$line" 2>/dev/null || rc=$?
-  [ "$rc" -eq 0 ] || ho_deliver_not "$id" "$name" "the terminal refused the typed line (exit $rc)" || return 1
+  HO_TERM_BACKEND=$backend ho_term_type "$h" "$tag" "$sid" "$line" 2>/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || ho_deliver_not "$id" "$name" "the terminal refused the typed line (exit $rc)" "" || return 1
+  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
+  # Enter goes only when the input line holds exactly the typed text and nothing more: a key
+  # pressed or a dialog opened in between gets no Enter (D42g).
+  screen=$(ho_deliver_screen "$rec" "$profile")
+  if ! ho_deliver_line_is "$screen" "$line"; then
+    ho_deliver_not "$id" "$name" "the input line did not hold exactly the typed text before Enter; no Enter was sent, and the typed text may still sit on the input line" "" screen "${screen%% *}" || return 1
+  fi
+  rc=0
+  HO_TERM_BACKEND=$backend ho_term_key "$h" "$tag" "$sid" enter 2>/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || ho_deliver_not "$id" "$name" "the terminal refused the Enter key (exit $rc)" "" || return 1
   ho_ledger_append deliver-typed id "$id" name "$name" mode "$mode" bytes "$(ho_deliver_bytes "$line")"
   st=$(ho_deliver_wait "$rec" "$profile" "$tr" "$off" "$id" "$force")
   case $st in
@@ -433,9 +507,28 @@ ho_session_deliver() {
       return 0
       ;;
   esac
-  [ "$st" != queued ] || ho_deliver_not "$id" "$name" "the session queued the instruction and has not taken it yet; check again with proof, do not send it again" state "$st" || return 1
-  ho_deliver_not "$id" "$name" "no transcript entry carries the instruction id" state "$st" \
+  ho_deliver_pending "$id" "$name" "$st" || return 1
+  ho_deliver_not "$id" "$name" "no transcript entry carries the instruction id" "" state "$st" \
     transcript_grew "$([ "$(ho_deliver_size "$tr")" -gt "$off" ] && echo yes || echo no)"
+}
+
+# ho_deliver_pending <id> <name> <state>: 1 (and the report) when the transcript shows the
+# instruction queued or taken off the queue without delivery; nothing is sent again then.
+ho_deliver_pending() {
+  case $3 in
+    queued) ho_deliver_not "$1" "$2" "the session queued the instruction and has not taken it yet; check again with proof, do not send it again" "" state queued ;;
+    dequeued) ho_deliver_not "$1" "$2" "the instruction left the session's queue without a proof of delivery; it is not sent again" "" state dequeued ;;
+    *) return 0 ;;
+  esac
+}
+
+# ho_deliver_line_is <screen-state> <line>: 0 when the input line holds exactly <line>. A long
+# line wraps onto more screen lines, where the terminal may drop a space at the wrap, so a
+# match with all spaces removed counts too.
+ho_deliver_line_is() {
+  case $1 in "draft "*) ;; *) return 1 ;; esac
+  [ "${1#draft }" = "$2" ] && return 0
+  [ "$(printf '%s' "${1#draft }" | tr -d ' ')" = "$(printf '%s' "$2" | tr -d ' ')" ]
 }
 
 # proof <name> <id>: the S8-24 check alone, for an instruction the caller sent itself (for

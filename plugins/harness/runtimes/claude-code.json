@@ -59,7 +59,8 @@
       "queued_command"
     ],
     "queue_type": "queue-operation",
-    "queue_enqueue": "enqueue"
+    "queue_enqueue": "enqueue",
+    "queue_remove": "remove"
   },
   "screen": {
     "rule_char": "─",

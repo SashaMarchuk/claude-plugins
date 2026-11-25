@@ -1,0 +1,7 @@
+ Fake runtime 0.0.0
+
+────────────────────────────────────────
+> first line of a draft
+  second line of the draft
+────────────────────────────────────────
+  ? for shortcuts

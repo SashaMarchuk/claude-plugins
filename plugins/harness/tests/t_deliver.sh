@@ -218,3 +218,103 @@ HO_FAKE_CLAUDE_TRANSCRIPT=0 launch n1 >/dev/null
 screen n1 idle-empty
 out=$(deliver n1 --text "run the unit tests" 2>&1) && rc=0 || rc=$?
 assert_eq "H-101: without a transcript to prove delivery nothing is typed (exit 1, 0 bytes)" "1 0" "$rc $(inbytes n1)"
+
+# ==== Fix round 1 of PR #95 (validator B1-B3, M1 and minors; Codex findings) ===============
+jq '.delivery.wait_seconds = 2' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+set_runtime claude-code
+
+# ---- B1: the id is checked as one whole value; a newline cannot carry a path ---------------
+start v1
+screen v1 idle-empty
+rc=0; deliver v1 --id "../../esc
+ho-good1" --text hello >/dev/null 2>&1 || rc=$?
+assert_eq "B1, H-137: an id with a newline and a path is refused (65)" "65" "$rc"
+assert_eq "B1, H-137: no file is written outside the run's messages folder" "" "$(find "$proj/.harness" -name '*esc*' | head -n 1)"
+assert_eq "B1: nothing is typed for a refused id" "0" "$(inbytes v1)"
+
+# ---- B2: the id is matched as a literal, never as a pattern made from input ----------------
+tv=$(trof v1)
+jq -cn '{type: "user", message: {role: "user", content: "something else entirely"} }' >> "$tv"
+rc=0; "$h" session "$run" proof v1 "ho-never1
+|" >/dev/null 2>&1 || rc=$?
+assert_eq "B2, S8-24: an id with a newline and a pattern cannot forge a proof (65)" "65" "$rc"
+
+# ---- B3: a draft always means 0 bytes, --force-send included -------------------------------
+start v2
+screen v2 busy-draft
+: > "$(fbusy v2)"
+out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 deliver v2 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+assert_eq "B3, H-099: a busy session with a draft gets 0 bytes even with --force-send" "1 0" "$rc $(inbytes v2)"
+assert_contains "B3, H-099: the report names the draft" "$out" "input line holds text typed by the user"
+
+# ---- M1: a transcript that exists but cannot be read gets nothing --------------------------
+start v3
+screen v3 idle-empty
+chmod 000 "$(trof v3)"
+out=$(deliver v3 --text "run tests" 2>&1) && rc=0 || rc=$?
+chmod 600 "$(trof v3)"
+assert_eq "M1, H-101: an unreadable transcript: nothing is typed (exit 1, 0 bytes)" "1 0" "$rc $(inbytes v3)"
+
+# ---- H-099, D42g: the input line is read again before Enter --------------------------------
+start v4
+screen v4 idle-empty
+out=$(HO_FAKE_TERM_ECHO_EXTRA=x deliver v4 --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "D42g: when the line holds more than the typed text, no Enter is sent" "" "$(calls | grep -F "key $(rec v4 .handle) Enter" || true)"
+assert_eq "D42g: that instruction is not delivered (exit 1)" "1" "$rc"
+assert_contains "D42g: the report says the line changed before Enter" "$out" "NOT-DELIVERED"
+
+# ---- S8-24: which records count ------------------------------------------------------------
+start v5
+t5=$(trof v5)
+jq -cn '{type: "user", message: {role: "user", content: "ho-meta0001: x"}, isMeta: true}' >> "$t5"
+jq -cn '{type: "user", message: {role: "user", content: "ho-summ0001: x"}, isCompactSummary: true}' >> "$t5"
+jq -cn '{type: "user", message: {role: "user", content: "ho-side0001: x"}, isSidechain: true}' >> "$t5"
+jq -cn '{type: "user", message: {role: "user", content: "ho-good0001: x"} }' >> "$t5"
+jq -cn '{type: "user", message: "a plain string"}' >> "$t5"
+jq -cn '{type: "user", message: {role: "user", content: "ho-word0001_x Xho-word0002 ho-word0003.txt ho-word0004X"} }' >> "$t5"
+p5() { "$h" session "$run" proof v5 "$1" 2>&1 | cut -d' ' -f1-2; }
+assert_eq "S8-24: an isMeta user record does not count" "none id=ho-meta0001" "$(p5 ho-meta0001)"
+assert_eq "S8-24: a compaction summary does not count" "none id=ho-summ0001" "$(p5 ho-summ0001)"
+assert_eq "S8-24: a sidechain record does not count" "none id=ho-side0001" "$(p5 ho-side0001)"
+assert_eq "S8-24: a record whose message is a string does not hide an earlier proof" "delivered user-turn" "$(p5 ho-good0001)"
+assert_eq "S8-24: an underscore after the id blocks the match" "none id=ho-word0001" "$(p5 ho-word0001)"
+assert_eq "S8-24: an upper-case letter before the id blocks the match" "none id=ho-word0002" "$(p5 ho-word0002)"
+assert_eq "S8-24: a dot after the id blocks the match" "none id=ho-word0003" "$(p5 ho-word0003)"
+assert_eq "S8-24: an upper-case letter after the id blocks the match" "none id=ho-word0004" "$(p5 ho-word0004)"
+
+# ---- H-137: the message file ---------------------------------------------------------------
+start v6
+screen v6 idle-empty
+deliver v6 --id ho-mode0001 --text "run tests" >/dev/null 2>&1 || true
+assert_eq "H-137: the message file is readable by the owner only (600)" "600" "$(stat -f %Lp "$run/messages/ho-mode0001.txt" 2>/dev/null || stat -c %a "$run/messages/ho-mode0001.txt")"
+assert_exit "H-137: a --file value that starts with - is refused (65)" 65 "$h" session "$run" deliver v6 --file -n
+screen v6 draft-two-lines
+deliver v6 --text "run tests" >/dev/null 2>&1 || true
+assert_eq "H-099: a two-line draft does not reach the ledger" "" "$(ledger | grep -F "of the draft" || true)"
+
+# ---- Codex P2: a message already queued is not typed again ---------------------------------
+set_runtime claude-msg
+start v7
+screen v7 idle-empty
+out=$(HO_FAKE_MSG_MODE=queue deliver v7 --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "H-101: a queued message is not typed a second time (exit 1, 0 bytes)" "1 0" "$rc $(inbytes v7)"
+assert_contains "H-101: the queued message is reported as queued" "$out" "queued"
+
+# ---- D37-LIFECYCLE-4: no chord once the entry has left the queue ---------------------------
+start v8
+screen v8 busy
+: > "$(fbusy v8)"
+out=$(HO_FAKE_MSG_MODE=dequeue HO_FAKE_CLAUDE_VERSION=2.1.332 deliver v8 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+assert_eq "D37-LIFECYCLE-4: no chord after the entry left the queue" "" "$(calls | grep "byte $(rec v8 .handle) " || true)"
+
+# ---- Codex security P2: the version check runs the launch-checked runtime, not a PATH lookup
+set_runtime claude-code
+start v9
+screen v9 busy
+: > "$(fbusy v9)"
+mkdir -p "$base/evil"
+printf '#!/bin/sh\n: > "%s/evil-ran"\necho 9.9.9\n' "$base" > "$base/evil/claude"
+chmod 700 "$base/evil/claude"
+out=$(PATH="$base/evil:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver v9 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+assert_eq "Codex P2: a claude found first on PATH after launch is never run" "no" "$([ -e "$base/evil-ran" ] && echo yes || echo no)"
+assert_eq "Codex P2: the force-send still works with the launch-checked runtime" "0" "$rc"

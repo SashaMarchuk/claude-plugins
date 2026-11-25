@@ -18,6 +18,8 @@
 #                                         launcher, tag it with run, owner and session ID;
 #                                         print the handle
 #   ho_term_send <handle> <owner> <sid> <text>  type short control text, then a separate Enter
+#   ho_term_type <handle> <owner> <sid> <text>  type short control text, no Enter (the caller
+#                                         reads the input line again before ho_term_key enter)
 #   ho_term_key <handle> <owner> <sid> enter|escape   press one key
 #   ho_term_bytes <handle> <owner> <sid> <code>...    send control bytes (1-31), one call each
 #   ho_term_capture <handle> <owner> <sid> [lines] [styled]  print the tail of the session's
@@ -108,6 +110,14 @@ ho_term_send() {
   ho_term_text_ok "$text" || return 65
   backend=$(ho_term_backend) || return $?
   "ho_term_${backend}_send" "$h" "$owner" "$sid" "$text"
+}
+
+ho_term_type() {
+  local h=${1-} owner=${2-} sid=${3-} text=${4-} backend
+  ho_term_safe "$h" && ho_term_owner_ok "$owner" && ho_term_owner_ok "$sid" || return 65
+  ho_term_text_ok "$text" || return 65
+  backend=$(ho_term_backend) || return $?
+  "ho_term_${backend}_type" "$h" "$owner" "$sid" "$text"
 }
 
 ho_term_key() {
@@ -365,8 +375,12 @@ OSA
   printf '%s\n' "$r"
 }
 
+ho_term_iterm2_type() {
+  ho_term_iterm2_do "$1" "$2" "$3" "write text \"$4\" newline NO" >/dev/null
+}
+
 ho_term_iterm2_send() {
-  ho_term_iterm2_do "$1" "$2" "$3" "write text \"$4\" newline NO" >/dev/null || return $?
+  ho_term_iterm2_type "$1" "$2" "$3" "$4" || return $?
   sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
   ho_term_iterm2_key "$1" "$2" "$3" enter
 }
@@ -443,9 +457,13 @@ ho_term_tmux_open() {
   printf '%s\n' "$h"
 }
 
-ho_term_tmux_send() {
+ho_term_tmux_type() {
   ho_term_tmux_if "$1" "$HO_TMUX_OWNER_FMT" "$1/$(ho_term_tmux_session)/$2/$3" "send-keys -t $1 -l '$4'" >/dev/null \
     || { ho_term_tmux_refused "$1" "$2" "$3"; return 66; }
+}
+
+ho_term_tmux_send() {
+  ho_term_tmux_type "$1" "$2" "$3" "$4" || return $?
   sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
   ho_term_tmux_key "$1" "$2" "$3" enter
 }

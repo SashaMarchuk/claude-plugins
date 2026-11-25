@@ -127,9 +127,9 @@ case $op in
     ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
     ft_log "tmux capture $3${styled:+ styled}"
     if [ -n "$styled" ]; then
-      cat "$(ft_file "$3").out"
+      ft_screen "$3"
     else
-      sed "s/$(printf '\033')\[[0-9;]*m//g" "$(ft_file "$3").out"
+      ft_screen "$3" | sed "s/$(printf '\033')\[[0-9;]*m//g"
     fi
     ;;
   kill-pane)

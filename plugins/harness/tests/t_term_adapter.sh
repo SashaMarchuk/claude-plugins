@@ -52,6 +52,10 @@ for backend in tmux iterm2; do
   assert_eq "$t: a styled capture keeps colour codes where the backend has them" "$want" "$(ho_term_capture "$h1" "$o1" "$s1" 5 styled)"
   assert_eq "$t: a plain capture has no colour codes" "> dim" "$(ho_term_capture "$h1" "$o1" "$s1" 5)"
   : > "$f1.in"
+  ho_term_type "$h1" "$o1" "$s1" "/exit"
+  assert_eq "$t: type types the text and sends no Enter" "/exit" "$(cat "$f1.in")"
+  assert_exit "$t: type to a session tagged with another owner is refused" 66 ho_term_type "$h1" "$o2" "$s1" "/exit"
+  : > "$f1.in"
   # The owner tag: a call for another owner, or with no usable owner, does nothing.
   f2="$HO_FAKE_TERM_DIR/$(printf '%s' "$h2" | tr -c 'A-Za-z0-9-' '_')"
   before=$(wc -l < "$HO_FAKE_TERM_DIR/calls.log")

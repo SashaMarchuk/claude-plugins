@@ -211,7 +211,7 @@ case $script in
         printf '%s' "$text" >> "$f.in"
         ;;
       # iTerm2 contents carry no colour codes.
-      *'return contents'*) ft_log "osascript capture $h"; sed "s/$(printf '\033')\[[0-9;]*m//g" "$f.out"; exit 0 ;;
+      *'return contents'*) ft_log "osascript capture $h"; ft_screen "$h" | sed "s/$(printf '\033')\[[0-9;]*m//g"; exit 0 ;;
       *close*) ft_log "osascript close $h"; : > "$f.closed" ;;
       *) exit 2 ;;
     esac

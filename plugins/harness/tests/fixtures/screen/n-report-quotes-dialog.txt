@@ -1,0 +1,10 @@
+Report for this ticket
+
+  ╭──────────────────────────────────────────────────────────────╮
+  │ Do you trust the files in this folder?                       │
+  │ ❯ 1. Yes, proceed                                          │
+  ╰──────────────────────────────────────────────────────────────╯
+
+  The owner answered the dialog above by hand.
+
+> 

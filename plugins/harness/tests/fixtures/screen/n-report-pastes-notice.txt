@@ -1,0 +1,9 @@
+Report for this ticket
+
+You have hit your session limit
+Your limit resets at 19:00 (server time)
+
+The block above is what the old engine matched inside its own report,
+so this fixture must stay unmatched.
+
+> 

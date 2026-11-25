@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: H-036 Each project selects an autonomy profile during setup
-Each project SHALL select its level of autonomy through a profile. During setup, the harness MUST ask the user what level of autonomy they want and store the answer as the project's profile.
+Each project SHALL select its level of autonomy through a profile. During setup, the configuration skill MUST ask the user what level of autonomy they want and store the answer as the project's profile. On the default path, with no committed config selected, the profile SHALL come from the user config or the shipped safe default, with no question.
 Decided: design.md D37-FLOW-8 (a changed profile never raises autonomy silently)
 Source: interview 2026-11-24 R1.1, R8.1, R8.3
 
@@ -24,15 +24,20 @@ Source: interview 2026-11-24 R1.1, R8.1, R8.3
 - **THEN** the run starts under the lower permissions and the local record is updated
 
 #### Scenario: The local record is missing (design.md D37-FLOW-8)
-- **WHEN** a run starts and the local selection holds no record of the approved profile, as at the first start after an upgrade
+- **WHEN** a run starts, the local selection names a committed config, and it holds no record of the approved profile, as at the first start after an upgrade
 - **THEN** the run stops at start and asks the person to select the profile with the configuration skill
+
+#### Scenario: The default path needs no record (design.md D37-FLOW-4)
+- **WHEN** a run starts on a saved user default or on the confirmed shipped default, and no committed config is selected
+- **THEN** the run starts without a question about the profile
+- **AND** the profile comes from the user config or the shipped safe default, never from the repository
 
 #### Scenario: A change cannot be ranked (design.md D37-FLOW-8)
 - **WHEN** a recorded field changed and the shipped ranking cannot say whether the new value is higher or lower
 - **THEN** the change counts as a raise, and the run stops at start
 
 #### Scenario: An automatic restart or resume meets a raise (design.md D37-FLOW-8)
-- **WHEN** an automatic restart or resume finds a raised permission or a missing record
+- **WHEN** an automatic restart or resume finds a raised permission, or a local selection that names a committed config and holds no record
 - **THEN** it does not wait at the question; it stops and raises an attention notice
 
 #### Scenario: The committed profile changes during a run (design.md D37-FLOW-8)

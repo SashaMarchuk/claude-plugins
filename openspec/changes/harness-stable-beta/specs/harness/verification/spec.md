@@ -1,19 +1,28 @@
 ## ADDED Requirements
 
 ### Requirement: H-053 Verification block in every pull request
-Every pull request that the harness opens MUST contain a Verification block.
+Every pull request that the harness opens MUST contain a Verification block. The block SHALL show the verdict so that the result is visible at once. The ticket's report comments and the block SHALL agree.
 
-Source: interview 2026-11-24 R12.1
+Source: interview 2026-11-24 R12.1; owner answer to interview question X9; owner answer to interview question X11
 Decided: design.md D37-VERIFICATION-4 (block layout)
 
 #### Scenario: Pull request opened by the harness
 - **WHEN** the harness opens a pull request for a ticket
 - **THEN** the pull request body contains a Verification block
 
-### Requirement: H-054 The block records the checks actually done, with or without a predefined list
-The Verification block SHALL keep a record of what happened and of the checks that were actually done, and it SHALL record those checks even when no predefined list of checks exists.
+#### Scenario: The result is visible at once
+- **WHEN** a person opens a pull request that the harness created
+- **THEN** the person sees the verdict of the Verification block at once
+- **AND** the person needs no log or other page to read it
 
-Source: interview 2026-11-24 R12.2, R12.3
+#### Scenario: The ticket comment and the block agree
+- **WHEN** the harness reports a ticket's verification in a ticket comment and in the Verification block
+- **THEN** both show the same checks, results and verdict, because both come from the same recorded results
+
+### Requirement: H-054 The block records the checks actually done, with or without a predefined list
+The Verification block SHALL keep a record of what happened and of the checks that were actually done, and it SHALL record those checks even when no predefined list of checks exists. What was checked SHALL be visible by name, with the result of each check. Unfinished checks and exceptions SHALL be stated explicitly.
+
+Source: interview 2026-11-24 R12.2, R12.3; owner answer to interview question X8; owner answer to interview question X10
 Decided: design.md D37-VERIFICATION-4 (block layout)
 
 #### Scenario: Checks from a predefined list
@@ -24,9 +33,17 @@ Decided: design.md D37-VERIFICATION-4 (block layout)
 - **WHEN** checks are done without a predefined list
 - **THEN** the Verification block records each check that was actually done
 
+#### Scenario: What was checked is visible
+- **WHEN** a person reads the Verification block
+- **THEN** each check that was done is named, with its own result
+
 #### Scenario: A listed check was not done
 - **WHEN** a predefined list names a check and no result was recorded for it
 - **THEN** the Verification block shows that check as not done, with a reason, and does not show it as passed
+
+#### Scenario: An exception is stated
+- **WHEN** verification passed under an exception, for example zero tests allowed by the profile
+- **THEN** the Verification block names that exception in plain words and does not leave it out
 
 ### Requirement: H-055 Merge requires an independent validator pass verdict
 Before it merges, the harness merge step MUST check that the independent validator gave the change a "passed" verdict, and MUST NOT merge without one. "Passed with remarks" alone does not satisfy this gate; H-058 governs it.

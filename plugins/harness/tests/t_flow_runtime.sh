@@ -248,3 +248,35 @@ cp=$(cat "$base/child.pid" 2>/dev/null || echo 0)
 if [ "$cp" != 0 ] && ! ps -o pid= -p "$cp" >/dev/null 2>&1; then ok "H-103: a child of the timed-out login check is stopped too"; else
   bad "H-103: a child of the timed-out login check is stopped too" "pid $cp"; fi
 [ "$cp" = 0 ] || kill -KILL "$cp" 2>/dev/null || true
+
+# ---- unknown keys at the top level and in system are refused (review round 1, minor 6) -------
+mkflow sys "$(printf '%s' "$sys" | jq -c '.system.skils = ["acme-plan"]')"
+rc=0; err=$("$h" flow check sys 2>&1) || rc=$?
+assert_eq "D37-FLOW-2: an unknown key in system is refused (exit 78)" "78" "$rc"
+assert_contains "D37-FLOW-2: the refusal names the key in system" "$err" "unknown key skils in system"
+mkflow sys "$(printf '%s' "$sys" | jq -c '.descripton = "typo"')"
+rc=0; err=$("$h" flow check sys 2>&1) || rc=$?
+assert_eq "H-066: an unknown top-level key is refused (exit 78)" "78" "$rc"
+assert_contains "H-066: the refusal names the top-level key" "$err" "unknown key descripton"
+mkflow sys "$sys"
+assert_exit "H-066: a system flow with only documented keys passes" 0 "$h" flow check sys
+
+# ---- the start check uses the worker account's HOME (review round 1, Codex finding 2) ---------
+mkflow sys "$sys"
+for s in acme-plan acme-review; do
+  mkdir -p "$HOME/.claude/skills/$s" "$HOME/.codex/skills/$s"
+  printf 'x\n' > "$HOME/.claude/skills/$s/SKILL.md"; printf 'x\n' > "$HOME/.codex/skills/$s/SKILL.md"
+done
+mkdir -p "$base/ah"
+jq -n --arg d "$base/ah" '{schemaVersion: 2, accounts: {roles: {worker: "work"},
+  list: {work: {env_command: ("printf \"HOME=" + $d + "\\n\"")}}}}' > "$user/config.json"
+rc=0; out=$(env -u CLAUDE_CONFIG_DIR -u CODEX_HOME "$h" flow preflight sys 2>&1) || rc=$?
+assert_eq "D31: skills are looked up under the HOME the worker account sets (exit 69)" "69" "$rc"
+assert_contains "D31: the missing skill is named in the account HOME's config folder" "$out" "not installed in $base/ah/.claude"
+for s in acme-plan acme-review; do
+  mkdir -p "$base/ah/.claude/skills/$s" "$base/ah/.codex/skills/$s"
+  printf 'x\n' > "$base/ah/.claude/skills/$s/SKILL.md"; printf 'x\n' > "$base/ah/.codex/skills/$s/SKILL.md"
+done
+rc=0; out=$(env -u CLAUDE_CONFIG_DIR -u CODEX_HOME "$h" flow preflight sys 2>&1) || rc=$?
+assert_eq "D31: with the skills under the account HOME the start goes on (exit 0)" "0" "$rc"
+printf '{"schemaVersion": 2}\n' > "$user/config.json"

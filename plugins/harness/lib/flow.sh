@@ -117,6 +117,10 @@ HO_FLOW_AUTONOMY_KEYS='["gates","push","pr","pr_open","merge","post_merge","depl
 # The keys a step may hold. Any other key is refused by name, so a typo such as "enable" never
 # passes as a step that stays on.
 HO_FLOW_STEP_KEYS='["id","title","when","prompt","enabled","runtime","kind","skills","agents"]'
+# The keys of the flow file and of its system object; any other key is refused by name too.
+# copied_from is written by flow copy.
+HO_FLOW_TOP_KEYS='["schemaVersion","name","description","source","system","install","steps","copied_from"]'
+HO_FLOW_SYSTEM_KEYS='["name","link","install","skills","agents","steps"]'
 
 # ho_flow_load <name>: check the whole flow; set HO_FLOW_DIR, HO_FLOW_JSON and HO_FLOW_ORIGIN
 # (project or shipped). Any problem stops with exit 78 and names the flow. It never falls back
@@ -132,7 +136,7 @@ ho_flow_load() {
   f="$dir/flow.json"
   [ ! -L "$f" ] || ho_flow_fail "$name" "flow file is a link: $f"
   # Slurped, so an empty file or two JSON values cannot pass as "nothing wrong" (field note I3).
-  why=$(jq -rs --arg name "$name" --argjson schema "$HO_FLOW_SCHEMA" --argjson akeys "$HO_FLOW_AUTONOMY_KEYS" --argjson skeys "$HO_FLOW_STEP_KEYS" '
+  why=$(jq -rs --arg name "$name" --argjson schema "$HO_FLOW_SCHEMA" --argjson akeys "$HO_FLOW_AUTONOMY_KEYS" --argjson skeys "$HO_FLOW_STEP_KEYS" --argjson tkeys "$HO_FLOW_TOP_KEYS" --argjson sykeys "$HO_FLOW_SYSTEM_KEYS" '
     def bad($m): $m;
     if length != 1 then "the file must hold exactly one JSON object" else .[0] |
     # Text a terminal shows: no control, line separator or bidi character (as for render values).
@@ -146,6 +150,10 @@ ho_flow_load() {
     elif .name != $name then bad("name must be the folder name \($name)")
     elif ([keys[] | select(IN($akeys[]))] | length) > 0 then
       bad("\([keys[] | select(IN($akeys[]))] | join(", ")): gates and permissions belong in the autonomy profile, not the flow config")
+    elif (keys - $tkeys | length) > 0 then
+      bad("unknown key \((keys - $tkeys)[0]) (a flow file may hold only \($tkeys | join(", ")))")
+    elif (.system | type) == "object" and ((.system | keys) - $sykeys | length) > 0 then
+      bad("unknown key \(((.system | keys) - $sykeys)[0]) in system (system may hold only \($sykeys | join(", ")))")
     elif (.source | IN("own", "system") | not) then bad("source must be own or system")
     elif .source == "own" and has("system") then
       bad("the flow names both a chosen system and an own step list; the harness never merges two lists. Use source system with system.steps, or remove system")

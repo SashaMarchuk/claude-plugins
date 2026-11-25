@@ -16,9 +16,11 @@
 # session name and ID that the launcher exports and records the session ID with the verdict.
 # A merge accepts the verdict only when that session ID belongs to this run's registry with the
 # role validator and with no other role (a resumed worker keeps its session ID), and when it is
-# not the session that called ready for the lane. This guards against a worker or a committed
-# file passing as the validator. It does not guard against a same-user process that sets the
-# variables or edits the run folder by hand: D37-FLOW-8a puts that outside the beta's boundary.
+# not the session that called ready for the lane. This guards against a worker that uses its own
+# session identity, and against a file in the repository, passing as the validator. It does not
+# guard against a same-user process, a worker included, that sets the two variables to the
+# validator's values or edits the run folder by hand: D37-FLOW-8a puts that outside the beta's
+# boundary (the owner confirms this reading).
 #
 # Exit codes: 64 usage, 65 refused before any merge, 69 the merge would change nothing, 70 the
 # merge was not confirmed (conflict or a failed git check) or the branch is left for a person,
@@ -60,9 +62,11 @@ ho_loop_integration() {
   local repo="" base="" wt="" f="$HO_RUN_DIR/integration.json" sha branch
   while [ $# -gt 0 ]; do
     case $1 in
-      --repo) repo=${2-}; shift 2 ;;
-      --base) base=${2-}; shift 2 ;;
-      --worktree) wt=${2-}; shift 2 ;;
+      --repo | --base | --worktree)
+        # A flag with no value is a usage error (shift 2 would fail and the loop would never end).
+        [ $# -ge 2 ] && [ -n "$2" ] || { ho_loop_usage; return 64; }
+        case $1 in --repo) repo=$2 ;; --base) base=$2 ;; *) wt=$2 ;; esac
+        shift 2 ;;
       *) ho_loop_usage; return 64 ;;
     esac
   done
@@ -234,21 +238,39 @@ ho_loop_refuse() { # <code> <lane> <reason>
 }
 
 # ho_loop_rollback <worktree> <branch> <old> <merge>: put the checked-out integration branch
-# back to <old>, but only while it is at <old> or at this merge's commit <merge>, so a commit
-# made on it meanwhile is never thrown away. reset --hard inside its own worktree, never
-# update-ref (field note C5). Returns 0 put back, 1 the roll back failed, 2 left alone because
-# the branch moved (HO_LOOP_MOVED_TO says where).
+# back to <old>, but only while it is checked out at <old> or at this merge's commit <merge>, so
+# a commit made on it meanwhile is never thrown away, and only while its tracked files hold
+# exactly the tree of <old> or of <merge>, so an uncommitted edit is never thrown away either.
+# reset --hard inside its own worktree, never update-ref (field note C5). Returns 0 put back,
+# 1 the roll back failed, 2 left alone (HO_LOOP_LEFT_WHY says why).
 ho_loop_rollback() {
-  local wt=$1 branch=$2 old=$3 mc=$4 cur
+  local wt=$1 branch=$2 old=$3 mc=$4 cur head x ok=0
   cur=$(ho_loop_ref "$wt" "refs/heads/$branch") || cur=""
-  HO_LOOP_MOVED_TO=${cur:-an unreadable tip}
-  if { [ "$cur" != "$old" ] && [ "$cur" != "$mc" ]; } \
-      || [ "$(git -C "$wt" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$branch" ]; then
-    ho_loop_ledger merge-rollback-skipped branch "$branch" tip "$HO_LOOP_MOVED_TO" expected "$mc" || true
+  head=$(git -C "$wt" symbolic-ref -q HEAD 2>/dev/null || true)
+  HO_LOOP_LEFT_WHY=""
+  if [ "$head" != "refs/heads/$branch" ]; then
+    HO_LOOP_LEFT_WHY="$wt does not have $branch checked out (HEAD is ${head:-detached}), so nothing is reset"
+  elif [ "$cur" != "$old" ] && [ "$cur" != "$mc" ]; then
+    HO_LOOP_LEFT_WHY="$branch is at ${cur:-an unreadable tip}, not at $old or this merge, so it is not reset"
+  fi
+  if [ -n "$HO_LOOP_LEFT_WHY" ]; then
+    ho_loop_ledger merge-rollback-skipped branch "$branch" tip "${cur:-unknown}" expected "$mc" reason "$HO_LOOP_LEFT_WHY" || true
     return 2
   fi
   if git -C "$wt" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    # The tree was clean before the merge, so aborting it loses nothing.
     git -C "$wt" merge --abort >/dev/null 2>&1 || true
+  fi
+  # Tracked files and the index must hold exactly the old tree or the merge's tree. Anything
+  # else is an edit made outside the merge; reset --hard would throw it away. A git error counts
+  # as an edit.
+  for x in "$old" "$mc"; do
+    if git -C "$wt" diff --quiet "$x" -- 2>/dev/null && git -C "$wt" diff --cached --quiet "$x" -- 2>/dev/null; then ok=1; break; fi
+  done
+  if [ "$ok" -ne 1 ]; then
+    HO_LOOP_LEFT_WHY="$wt holds uncommitted edits that are not part of the merge, so nothing is reset and no edit is lost"
+    ho_loop_ledger merge-rollback-skipped branch "$branch" tip "${cur:-unknown}" expected "$mc" reason "uncommitted edits" || true
+    return 2
   fi
   git -C "$wt" reset -q --hard "$old" >/dev/null 2>&1 || true
   if [ "$(ho_loop_ref "$wt" "refs/heads/$branch")" = "$old" ] && ho_loop_clean "$wt"; then
@@ -266,7 +288,7 @@ ho_loop_undo() {
   case $r in
     0) ho_loop_refuse "$1" "$2" "$3; rolled back to $old" ;;
     1) ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$2" "$3; putting $branch back to $old failed in $iwt, so it is left for a person to fix before the next merge" ;;
-    *) ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$2" "$3; $branch is at $HO_LOOP_MOVED_TO, not at $old or this merge, so it is not reset and is left for a person" ;;
+    *) ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$2" "$3; $HO_LOOP_LEFT_WHY; it is left for a person" ;;
   esac
 }
 
@@ -377,9 +399,10 @@ ho_loop_merge_locked() {
 
   # Ledger line first: if the tip write then fails, the next merge refuses on the tip check.
   # From here on a signal no longer undoes the merge: it is ignored until the tip is written.
+  # The ledger append sets its own signal traps, so it runs in a child subshell; the caller
+  # passes a signal on to this exact process only, so the child never gets it.
   trap '' TERM INT HUP
-  ho_ledger_append merge-confirmed lane "$lane" sha "$lsha" branch "$branch" base "$old" tip "$new"
-  trap '' TERM INT HUP
+  ( ho_ledger_append merge-confirmed lane "$lane" sha "$lsha" branch "$branch" base "$old" tip "$new" ) || return 1
   jq --arg tip "$new" '.tip = $tip' "$ij" | ho_atomic_write "$ij" || return 1
   printf 'merged lane %s (%s) into %s at %s\n' "$lane" "$lsha" "$branch" "$new"
 }

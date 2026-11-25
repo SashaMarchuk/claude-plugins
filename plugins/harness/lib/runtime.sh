@@ -151,8 +151,17 @@ ho_rt_probe() {
   return "$rc"
 }
 
+# ho_rt_home <account-pairs>: the HOME a launched session gets. The launcher keeps the
+# terminal's environment and exports the account's variables on top (lib/sessions.sh), so the
+# account's HOME wins over the caller's.
+ho_rt_home() {
+  local h
+  h=$(printf '%s\n' "$1" | awk -F '\t' '$1 == "HOME" { v = $2 } END { print v }')
+  printf '%s\n' "${h:-${HOME:-}}"
+}
+
 # ho_rt_config_dir <profile> <account-pairs>: the tool's own folder, from the account's
-# variables, then the environment, then the profile default.
+# variables, then the environment, then the profile default under the session's HOME.
 ho_rt_config_dir() {
   local f=$1 pairs=$2 var dir=""
   var=$(jq -r '.config_dir.env // ""' "$f")
@@ -160,7 +169,7 @@ ho_rt_config_dir() {
     dir=$(printf '%s\n' "$pairs" | awk -F '\t' -v k="$var" '$1 == k { v = $2 } END { print v }')
     [ -n "$dir" ] || dir=$(printenv "$var" || true)
   fi
-  [ -n "$dir" ] || dir=$(jq -r --arg home "${HOME:-}" '.config_dir.default | gsub("\\{home\\}"; $home)' "$f")
+  [ -n "$dir" ] || dir=$(jq -r --arg home "$(ho_rt_home "$pairs")" '.config_dir.default | gsub("\\{home\\}"; $home)' "$f")
   printf '%s\n' "$dir"
 }
 
@@ -240,7 +249,7 @@ EOF_ARGV
     skill=${t%%"$(printf '\t')"*}
     rt=${t#*"$(printf '\t')"}
     f=$(ho_rt_file "$rt")
-    home=${HOME:-}
+    home=$(ho_rt_home "$pairs")
     dir=$(ho_rt_config_dir "$f" "$pairs")
     found=0
     while IFS= read -r pattern; do
@@ -284,7 +293,7 @@ EOF_NEED
       [ -n "$pattern" ] || continue
       if compgen -G "$pattern" >/dev/null 2>&1; then found=1; break; fi
     done <<EOF_APAT
-$(jq -r --arg d "$dir" --arg home "${HOME:-}" --arg a "$skill" '.agent_paths[]
+$(jq -r --arg d "$dir" --arg home "$(ho_rt_home "$pairs")" --arg a "$skill" '.agent_paths[]
   | gsub("\\{config_dir\\}"; $d) | gsub("\\{home\\}"; $home) | gsub("\\{agent\\}"; $a)' "$f")
 EOF_APAT
     [ "$found" -eq 1 ] || add "agent $skill for runtime $rt: not installed in $dir. $install"

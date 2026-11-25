@@ -286,7 +286,7 @@ user_gate
 mkdir -p "$PWD/shim"
 cat > "$PWD/shim/git" <<EOS
 #!/bin/bash
-if [ -n "\${HO_T_FAIL_DIFF:-}" ] && [ "\${*: -3:1}" = --quiet ]; then echo "fatal: test shim" >&2; exit 128; fi
+if [ -n "\${HO_T_FAIL_DIFF:-}" ] && [ "\${*: -3:1}" = --quiet ] && [ "\${*: -1}" != -- ]; then echo "fatal: test shim" >&2; exit 128; fi
 exec "$(command -v git)" "\$@"
 EOS
 chmod +x "$PWD/shim/git"
@@ -310,9 +310,12 @@ git -C "$proj" config core.hooksPath "$PWD/hooks"
 lane n n.txt "from n"; verdict n passed
 assert_eq "H-046 confirmation: a merge that git does not confirm is a failure (exit 70)" 70 "$(merge_rc n)"
 assert_contains "H-046 confirmation: the message says git does not confirm it" "$(cat "$PWD/err")" "does not confirm"
-assert_eq "H-046 confirmation: the branch is back at its tip" "$cur" "$(tip)"
-assert_eq "H-046 confirmation: the integration tree is clean" "" "$(git -C "$int" status --porcelain)"
+assert_eq "H-046 confirmation: the branch is at its old tip" "$cur" "$(tip)"
+# The hook moved the branch outside the engine and left the merged files staged; the engine
+# does not reset over them (they are not the tree of a commit it knows), it leaves them.
+assert_contains "H-046 confirmation: what git left is left for a person" "$(cat "$PWD/err")" "left for a person"
 git -C "$proj" config --unset core.hooksPath
+git -C "$int" reset -q --hard "$cur"
 
 # TERM to the caller stops the merge subshell and the gate (concern 6).
 lane p p.txt "from p"; verdict p passed
@@ -351,3 +354,51 @@ assert_eq "Rebuild loop lock: the lock is released after the merge" "no" "$([ -e
 u=$("$h" loop 2>&1 || true)
 assert_contains "Rebuild loop usage: exit 78 is documented" "$u" "78 config error"
 assert_contains "Rebuild loop usage: exit 75 covers a held merge lock" "$u" "lock"
+
+# ---- review round 1 -------------------------------------------------------------------------
+cur=$(tip)
+# A flag with no value is a usage error, never a hang (Codex finding 3).
+for f in --repo --base --worktree; do
+  "$h" loop "$run" integration "$f" >/dev/null 2>&1 & hp=$!
+  n=0; while kill -0 "$hp" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  if kill -0 "$hp" 2>/dev/null; then kill -KILL "$hp" 2>/dev/null || true; wait "$hp" 2>/dev/null || true; rc=hang
+  else rc=0; wait "$hp" || rc=$?; fi
+  assert_eq "Rebuild integration: $f with no value is a usage error (exit 64)" 64 "$rc"
+done
+
+# A roll back never throws away uncommitted edits (Codex finding 1).
+lane t t.txt "from t"; verdict t passed
+setgate "printf 'kept edit\n' >> '$int/shared.txt'; exit 1"
+assert_eq "H-046 roll back: uncommitted edits in the integration worktree are left for a person (exit 70)" 70 "$(merge_rc t)"
+assert_contains "H-046 roll back: the uncommitted edit is kept" "$(cat "$int/shared.txt")" "kept edit"
+assert_contains "H-046 roll back: the message names the uncommitted edits" "$(cat "$PWD/err")" "uncommitted"
+no_rolled_back "H-046 roll back: kept edits never say rolled back"
+git -C "$int" checkout -q -- shared.txt; git -C "$int" reset -q --hard "$cur"
+
+# A detached HEAD is named as the cause (validator minor 5).
+lane u u.txt "from u"; verdict u passed
+setgate "git -C '$int' checkout -q --detach; exit 1"
+assert_eq "H-046 roll back: a detached HEAD is left for a person (exit 70)" 70 "$(merge_rc u)"
+assert_contains "H-046 roll back: the message says the branch is not checked out" "$(cat "$PWD/err")" "does not have"
+git -C "$int" checkout -q "$(jq -r .branch "$run/integration.json")"; git -C "$int" reset -q --hard "$cur"
+
+# A signal during the merge-confirmed ledger line does not cut the merge short (validator minor 2).
+user_gate
+mkdir -p "$PWD/tshim"
+cat > "$PWD/tshim/tail" <<EOS
+#!/bin/bash
+if [ -e "$PWD/stall-armed" ]; then rm -f "$PWD/stall-armed"; touch "$PWD/stalling"; sleep 2; fi
+exec "$(command -v tail)" "\$@"
+EOS
+chmod +x "$PWD/tshim/tail"
+lane v v.txt "from v"; verdict v passed
+rm -f "$PWD/stalling"
+setgate "test -f shared.txt && touch '$PWD/stall-armed'"
+PATH="$PWD/tshim:$PATH" "$h" loop "$run" merge v >/dev/null 2>"$PWD/err" & hp=$!
+n=0; while [ ! -e "$PWD/stalling" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+kill -TERM "$hp"
+rc=0; wait "$hp" || rc=$?
+assert_eq "H-046 signal: TERM during the merge-confirmed line lets the merge finish (exit 0)" 0 "$rc"
+assert_eq "H-046 signal: that merge has its merge-confirmed line" "v" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "v") | .lane' "$run/ledger.jsonl")"
+assert_eq "H-046 signal: the recorded tip follows the branch" "$(tip)" "$(jq -r .tip "$run/integration.json")"
+user_gate

@@ -18,7 +18,8 @@
 # The launch command comes from a runtime data file, runtimes/<runtime.main>.json
 # (D37-RUNTIME-1). Accounts come from the user config only (agent decision, T7).
 # Exit codes: 64 usage, 65 refused, 66 not found or another run's session, 69 the session
-# did not start, 70 terminal failed, 75 the run is stopped, 78 config, 1 close timed out.
+# did not start, 70 terminal failed, 73 no free worker slot, 75 the run is stopped, 78 config,
+# 1 close timed out.
 #
 # Requires lib/files.sh, lib/config.sh, lib/run.sh, lib/term.sh and lib/isolation.sh.
 
@@ -28,8 +29,15 @@ ho_session_usage() {
   cat >&2 <<'USAGE'
 usage: harness session <run-dir> <verb> [args]
   launch --role R --name N --cwd DIR (--prompt FILE | --resume SESSION-ID) [--account A] [--model "a|b"]
+         [--slot-wait SECONDS]   a worker waits this long for a worker slot (default 0); exit 73
+                                 when the worker cap stays reached
   close <name>        ask the session to exit, wait for its exact process to end; never forced
   list                one line per session: name role status pid session-id handle
+  status [name]       liveness facts, one JSON line per session (working, starting, dead,
+                      closed, unknown); a silent session with a live process reads as working
+  read <name> transcript|screen [--lines N]
+                      the tail of the session's transcript or screen, fenced as untrusted;
+                      reads only, never types
 USAGE
 }
 
@@ -380,15 +388,25 @@ EOF_ARGV
   done
 }
 
+# H-105, D26a: a worker launch takes a worker slot before anything is opened, and every failed
+# launch gives it back. The slot is held from then until close, or until the session reads dead.
 ho_session_launch() {
-  local role="" name="" cwd="" prompt="" account="" chain="" resume=""
+  local rc=0
+  HO_SLOT_TAKEN=""
+  ho_session_launch_one "$@" || rc=$?
+  if [ "$rc" -ne 0 ] && [ -n "$HO_SLOT_TAKEN" ]; then ho_slot_give worker "$HO_SLOT_TAKEN"; fi
+  return "$rc"
+}
+
+ho_session_launch_one() {
+  local role="" name="" cwd="" prompt="" account="" chain="" resume="" slot_wait=0
   while [ $# -gt 0 ]; do
     case $1 in
-      --role | --name | --cwd | --prompt | --account | --model | --resume)
+      --role | --name | --cwd | --prompt | --account | --model | --resume | --slot-wait)
         [ $# -ge 2 ] || { ho_session_usage; return 64; }
         case $1 in
           --role) role=$2 ;; --name) name=$2 ;; --cwd) cwd=$2 ;; --prompt) prompt=$2 ;;
-          --account) account=$2 ;; --model) chain=$2 ;; --resume) resume=$2 ;;
+          --account) account=$2 ;; --model) chain=$2 ;; --resume) resume=$2 ;; --slot-wait) slot_wait=$2 ;;
         esac
         shift 2
         ;;
@@ -397,6 +415,7 @@ ho_session_launch() {
   done
   [ -n "$role" ] && [ -n "$name" ] && [ -n "$cwd" ] || { ho_session_usage; return 64; }
   [ -n "$prompt" ] || [ -n "$resume" ] || { echo "harness: launch needs --prompt or --resume" >&2; return 64; }
+  case $slot_wait in '' | *[!0-9]*) echo "harness: --slot-wait must be whole seconds" >&2; return 64 ;; esac
 
   # ---- guards: nothing is written before all of them pass ----
   ho_session_role_ok "$role" || return 65
@@ -455,6 +474,17 @@ ho_session_launch() {
     printf 'harness: session %s is already registered in run %s\n' "$name" "$HO_RUN_ID" >&2
     return 65
   fi
+  # The worker cap: counted and taken under the slot lock, while the name is reserved.
+  if [ "$role" = worker ]; then
+    local src=0
+    ho_slot_take worker "$name" "" "$((10#$slot_wait))" || src=$?
+    if [ "$src" -ne 0 ]; then
+      rm -f "$rec"
+      [ "$src" -eq "$HO_SLOT_NOSLOT" ] && printf 'harness: the worker cap (%s) is reached; %s was not launched and waits for a free slot\n' "$(ho_slot_limit worker)" "$name" >&2
+      return "$src"
+    fi
+    HO_SLOT_TAKEN=$name
+  fi
 
   local sid tag ldir launcher title pidfile closing group attempts
   sid=${resume:-$(ho_session_new_id)}
@@ -507,14 +537,19 @@ ho_session_launch() {
   fi
   chmod 700 "$launcher.tmp" && mv -f "$launcher.tmp" "$launcher" || { rm -f "$rec" "$launcher.tmp"; return 1; }
 
-  local backend
+  local backend troot acct_env=""
   backend=$(ho_term_backend) || { local rc=$?; rm -f "$rec"; return "$rc"; }
+  # H-090: where this session's transcript lives, read later by its session ID (lib/liveness.sh).
+  [ -z "$acct_cmd" ] || acct_env=$(/bin/bash -c "$acct_cmd" 2>/dev/null || true)
+  troot=$(ho_live_transcript_root "$profile" "$acct_env")
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg account "$acct_name" \
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
+    --arg troot "$troot" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
       runtime: $runtime, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
-      launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts}' \
+      launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
+      transcript_root: (if $troot == "" then null else $troot end)}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"
 
@@ -589,6 +624,7 @@ ho_session_close() {
   if [ -z "$pid" ]; then
     ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "process-gone"' --arg ts "$(ho_now)" || return 1
     ho_ledger_append session-close name "$name" session_id "$sid" result process-gone
+    ho_slot_give_all "$name"
     printf 'session %s: process already gone; marked closed\n' "$name"
     return 0
   fi
@@ -658,6 +694,7 @@ ho_session_close() {
   fi
   ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "exited"' --arg ts "$(ho_now)" || return 1
   ho_ledger_append session-close name "$name" session_id "$sid" result exited
+  ho_slot_give_all "$name"
   printf 'session %s closed\n' "$name"
 }
 
@@ -697,6 +734,8 @@ ho_session_main() {
     launch) ho_session_launch "$@" || rc=$? ;;
     close) ho_session_close "$@" || rc=$? ;;
     list) ho_session_list ;;
+    status) ho_live_status "$@" || rc=$? ;;
+    read) ho_live_read "$@" || rc=$? ;;
     *) ho_session_usage; rc=64 ;;
   esac
   exit "$rc"

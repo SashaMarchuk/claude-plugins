@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Shared setup for the session tests (sourced by t_sessions_*.sh; not a test file).
-# A project with a tmux-fake terminal, the fake claude held open until it reads "/exit",
+# A project with a tmux-fake terminal, a worker cap high enough for every session a test starts, the fake claude held open until it reads "/exit",
 # short timeouts, and one stamped run in $run. Every process a test starts is stopped at
 # the end by its exact process ID.
 h="$HO_PLUGIN_ROOT/bin/harness"
@@ -11,7 +11,8 @@ mkdir -p "$proj/.harness" "$proj/src" "$user"
 cat > "$proj/.harness/config.json" <<'JSON'
 {"schemaVersion": 2,
  "terminal": {"app": "tmux", "enter_delay_seconds": 0},
- "session": {"boot_timeout_seconds": 30, "close_timeout_seconds": 5, "boot_grace_seconds": 5, "fatal_hold_seconds": 0}}
+ "session": {"boot_timeout_seconds": 30, "close_timeout_seconds": 5, "boot_grace_seconds": 5, "fatal_hold_seconds": 0},
+ "limits": {"workers": 50}}
 JSON
 cat > "$user/config.json" <<'JSON'
 {"schemaVersion": 2, "runtime": {"main": "claude-code"}}

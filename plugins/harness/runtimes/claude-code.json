@@ -15,5 +15,11 @@
     "acceptEdits": ["--permission-mode", "acceptEdits"],
     "dontAsk": ["--permission-mode", "dontAsk"]
   },
-  "exit_command": "/exit"
+  "exit_command": "/exit",
+  "transcript": {
+    "_comment": "Where a session's transcript is found by its session ID (H-090). root_env names the variable that moves the folder (account environment first, then the launch environment); root_default is used otherwise, with {home} for HOME. glob is relative to the root.",
+    "root_env": "CLAUDE_CONFIG_DIR",
+    "root_default": "{home}/.claude",
+    "glob": "projects/*/{session_id}.jsonl"
+  }
 }

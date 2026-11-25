@@ -1,14 +1,30 @@
 # shellcheck shell=bash
-# Flow profiles (H-064; tasks 7.1, 7.2). A flow profile is data: a folder
-# <flows>/<name>/ with flow.json and one prompt file per step. The engine holds no
-# flow name and has no default flow (D37-FLOW-1). The role prompts in prompts/ are
-# thin and shared by every flow.
+# Flow configs (H-064 to H-068; tasks 7.1, 7.2). A flow config is data: a folder <name>/
+# with flow.json and one prompt file per step. It holds the steps, their order and their
+# runners (S8-15, D37-FLOW-3); gates and permissions belong to the autonomy profile, so a
+# flow.json that sets one is refused. Ready-made flow configs ("flow profiles") ship in
+# <plugin>/flows; a project's own flows live in <project>/.harness/flows. The engine holds no
+# flow name and has no default flow (D37-FLOW-1). The role prompts in prompts/ are thin and
+# shared by every flow.
 #
 #   flow.json  {"schemaVersion": 2, "name": "<folder name>", "description": "...",
 #               "source": "own" | "system",
-#               "steps": [{"id", "title", "when": "always" | "questions", "prompt"}]}
+#               "system": {"name", "link", "install", "skills": [...], "steps": [ids]},
+#               "install": {"<skill>": "<install step>"},
+#               "steps": [{"id", "title", "when": "always" | "questions", "prompt",
+#                          "enabled": false, "runtime": "<label>", "kind": "review",
+#                          "skills": [...]}]}
 #
-# "source" is declared here and checked later (H-066, H-067). Step order is file order.
+# Step order is file order (H-066). "enabled": false switches a step off: it leaves every
+# step list, the numbering and the render. "runtime" names the step's runner, a runtime
+# profile label (lib/runtime.sh); a step without one uses config runtime.main. "kind":
+# "review" marks a review-type step (D37-RUNTIME-2).
+# One source of steps per flow (D17, D37-FLOW-2): "source": "own" is an own step list and
+# carries no "system"; "source": "system" names a chosen system, whose "system.steps" are
+# the ids it owns. Those ids form one block, in that order; harness extra steps go only
+# before or after it. A step inside the block, a system step out of order or switched off,
+# and a flow with both a system and an own list are config errors (exit 78) that name the
+# step and the route: `harness flow copy <flow> <new>` makes an own flow to edit freely.
 #
 # Placeholders are @NAME@ (upper-case letters, digits, underscores). Rendering is one jq
 # pass over the tokens of the template: each value is inserted literally and never scanned
@@ -20,8 +36,8 @@
 # A template token with no value, or an empty one, fails the render and nothing is
 # printed. Values reach jq through files, never as one big argument.
 #
-# Settings: HO_FLOWS_DIR (default <plugin>/flows). Requires lib/common.sh, lib/tickets.sh
-# (the untrusted fence), jq and iconv.
+# Settings: HO_FLOWS_DIR (default <plugin>/flows). Requires lib/common.sh, lib/config.sh,
+# lib/tickets.sh (the untrusted fence), jq and iconv.
 
 HO_EXIT_USAGE=64
 HO_EXIT_DATA=65
@@ -41,6 +57,9 @@ ho_flow_usage() {
 usage: harness flow list
        harness flow check <flow>
        harness flow steps <flow>      one line per step: <n> TAB <id> TAB <when> TAB <title>
+       harness flow plan <flow>       steps plus TAB <runtime> TAB <mode> TAB <owner> TAB <note> TAB <launch>
+       harness flow preflight <flow>  start check: runtimes logged in, skills installed; installs nothing
+       harness flow copy <flow> <new> copy a flow into <project>/.harness/flows/<new> as an own flow
        harness flow render <flow> <role> [--step <id>] [--set NAME VALUE]... [--file NAME PATH]...
 roles: worker (needs --step), validator
 USAGE
@@ -58,24 +77,67 @@ ho_flow_name_ok() {
 # jq: tokens of a template string, in order.
 HO_JQ_TOKENS='[match("@[A-Z0-9_]+@"; "g") | .string[1:-1]]'
 
-# ho_flow_load <name>: check the whole flow profile; set HO_FLOW_DIR and HO_FLOW_JSON.
-# Any problem stops with exit 78 and names the flow. It never falls back to another flow.
+# ho_flow_project_dir: print <project>/.harness/flows when a project is found, else nothing.
+ho_flow_project_dir() {
+  local p
+  p=$(ho_project_root 2>/dev/null) || return 0
+  printf '%s/.harness/flows\n' "$p"
+}
+
+# ho_flow_locate <name>: print the flow folder, from the project or the shipped flows. A name in
+# both places is refused: a project flow never hides a shipped one (exit 78).
+ho_flow_locate() {
+  local name=$1 shipped pdir proj real
+  shipped="$(ho_flows_dir)/$name"
+  pdir=$(ho_flow_project_dir)
+  if [ -n "$pdir" ] && { [ -e "$pdir/$name" ] || [ -L "$pdir/$name" ]; }; then
+    [ ! -e "$shipped/flow.json" ] ||
+      ho_flow_fail "$name" "a project flow has the name of a shipped flow ($pdir/$name and $shipped); rename the project flow"
+    # A project flow folder must stay inside the project, also through links.
+    proj=$(cd -P "$pdir/../.." 2>/dev/null && pwd -P) || ho_flow_fail "$name" "cannot open the project folder"
+    real=$(cd -P "$pdir/$name" 2>/dev/null && pwd -P) || ho_flow_fail "$name" "cannot open the flow folder $pdir/$name"
+    case "$real/" in "$proj"/*) ;; *) ho_flow_fail "$name" "the project flow folder $pdir/$name leads outside the project" ;; esac
+    printf '%s\n' "$pdir/$name"
+    return 0
+  fi
+  printf '%s\n' "$shipped"
+}
+
+# Top-level keys of the autonomy profile (D12, D37-FLOW-8 (b)). A flow config never holds them.
+HO_FLOW_AUTONOMY_KEYS='["gates","push","pr","pr_open","merge","post_merge","deploy_production","remarks","allow_zero_tests","permissions","autonomy"]'
+
+# ho_flow_load <name>: check the whole flow; set HO_FLOW_DIR, HO_FLOW_JSON and HO_FLOW_ORIGIN
+# (project or shipped). Any problem stops with exit 78 and names the flow. It never falls back
+# to another flow.
 ho_flow_load() {
-  local name=$1 dir f why step_tokens allowed t tok real
+  local name=$1 dir f why step_tokens allowed t tok real origin=shipped
   ho_flow_name_ok "$name"
-  dir="$(ho_flows_dir)/$name"
+  dir=$(ho_flow_locate "$name") || exit $?
+  case $dir in "$(ho_flows_dir)"/*) ;; *) origin=project ;; esac
   [ -f "$dir/flow.json" ] || ho_flow_fail "$name" "flow file not found: $dir/flow.json"
   # Work on the physical folder, so a linked folder or file cannot lead outside it.
   dir=$(cd -P "$dir" && pwd -P) || ho_flow_fail "$name" "cannot open the flow folder"
   f="$dir/flow.json"
   [ ! -L "$f" ] || ho_flow_fail "$name" "flow file is a link: $f"
-  why=$(jq -r --arg name "$name" --argjson schema "$HO_FLOW_SCHEMA" '
+  # Slurped, so an empty file or two JSON values cannot pass as "nothing wrong" (field note I3).
+  why=$(jq -rs --arg name "$name" --argjson schema "$HO_FLOW_SCHEMA" --argjson akeys "$HO_FLOW_AUTONOMY_KEYS" '
     def bad($m): $m;
+    if length != 1 then "the file must hold exactly one JSON object" else .[0] |
+    def line: type == "string" and (test("[[:cntrl:]]") | not);
+    def rtname: type == "string" and test("\\A[a-z0-9][a-z0-9-]*\\z");
+    def skill: type == "string" and test("\\A[a-z0-9][a-z0-9-]*(:[a-z0-9][a-z0-9-]*)?\\z");
+    def route: "the chosen system owns its steps. To change them, copy its step list into an own flow: harness flow copy \($name) <new-name>";
     if type != "object" then bad("not a JSON object")
     elif .schemaVersion != $schema then bad("schemaVersion must be \($schema)")
     elif .name != $name then bad("name must be the folder name \($name)")
+    elif ([keys[] | select(IN($akeys[]))] | length) > 0 then
+      bad("\([keys[] | select(IN($akeys[]))] | join(", ")): gates and permissions belong in the autonomy profile, not the flow config")
     elif (.source | IN("own", "system") | not) then bad("source must be own or system")
+    elif .source == "own" and has("system") then
+      bad("the flow names both a chosen system and an own step list; the harness never merges two lists. Use source system with system.steps, or remove system")
     elif (.steps | type) != "array" or (.steps | length) == 0 then bad("steps must be a non-empty list")
+    elif has("install") and ((.install | type) != "object" or (.install | to_entries | any((.key | skill | not) or (.value | line | not)))) then
+      bad("install must map skill names to one-line install steps")
     else
       [ .steps[] | select(type != "object"
           or ((.id | type) != "string") or (.id | test("\\A[a-z0-9][a-z0-9-]*\\z") | not)
@@ -83,11 +145,41 @@ ho_flow_load() {
           or (.when | IN("always", "questions") | not)
           or ((.prompt | type) != "string")
           or (.prompt | test("\\A[A-Za-z0-9_-][A-Za-z0-9_./-]*\\z") | not)
-          or (.prompt | split("/") | any(. == ".." or . == "."))) ] as $bad
+          or (.prompt | split("/") | any(. == ".." or . == "."))
+          or (has("enabled") and ((.enabled | type) != "boolean"))
+          or (has("runtime") and (.runtime | rtname | not))
+          or (has("kind") and .kind != "review")
+          or (has("skills") and ((.skills | type) != "array" or (.skills | any(skill | not))))) ] as $bad
       | if ($bad | length) > 0 then bad("bad step: \($bad[0] | tojson)")
         elif ([.steps[].id] | unique | length) != (.steps | length) then bad("step ids must be unique")
-        else "" end
-    end' "$f" 2>/dev/null) || ho_flow_fail "$name" "flow file is unreadable: $f"
+        elif ([.steps[] | select(.enabled != false)] | length) == 0 then bad("every step is switched off")
+        elif .source == "own" then ""
+        elif (.system | type) != "object" then bad("source system needs a system object")
+        elif (.system.name | line | not) or .system.name == "" then bad("system.name must be one line of text")
+        elif (.system | has("link")) and (.system.link | line | not) then bad("system.link must be one line of text")
+        elif (.system | has("install")) and (.system.install | line | not) then bad("system.install must be one line of text")
+        elif (.system | has("skills")) and ((.system.skills | type) != "array" or (.system.skills | any(skill | not))) then
+          bad("system.skills must be a list of skill names (a-z, 0-9, -, one optional plugin: prefix)")
+        elif (.system.steps | type) != "array" or (.system.steps | length) == 0 or (.system.steps | any(type != "string")) then
+          bad("system.steps must list the ids of the steps the chosen system owns")
+        elif (.system.steps | unique | length) != (.system.steps | length) then
+          bad("system.steps names step \(.system.steps | group_by(.) | map(select(length > 1))[0][0]) twice")
+        else
+          [.steps[].id] as $ids | .system.steps as $own
+          | ([$own[] | select(IN($ids[]) | not)] | first) as $missing
+          | if $missing != null then bad("system.steps names step \($missing), which is not in steps")
+            else
+              ([$ids | to_entries[] | select(.value | IN($own[])) | .key]) as $pos
+              | ([$ids[($pos | min):($pos | max) + 1][] | select(IN($own[]) | not)] | first) as $inside
+              | ([range(0; $own | length) | select($ids[$pos[.]] != $own[.]) | $ids[$pos[.]]] | first) as $moved
+              | ([.steps[] | select(.enabled == false and (.id | IN($own[]))) | .id] | first) as $off
+              | if $inside != null then bad("step \($inside) is placed inside the chosen system'"'"'s steps; harness steps go only before or after them; \(route)")
+                elif $moved != null then bad("step \($moved) is out of the chosen system'"'"'s order (\($own | join(", "))); \(route)")
+                elif $off != null then bad("step \($off) belongs to the chosen system and cannot be switched off here; \(route)")
+                else "" end
+            end
+        end
+    end end' "$f" 2>/dev/null) || ho_flow_fail "$name" "flow file is unreadable: $f"
   [ -z "$why" ] || ho_flow_fail "$name" "$why ($f)"
   allowed=" $HO_FLOW_ENGINE_TOKENS $HO_FLOW_CALLER_TOKENS "
   while IFS= read -r t; do
@@ -106,6 +198,7 @@ $(jq -r '.steps[].prompt' "$f")
 EOF_STEPS
   HO_FLOW_DIR=$dir
   HO_FLOW_JSON=$f
+  HO_FLOW_ORIGIN=$origin
 }
 
 # ho_flow_role_file <role>: the role prompt, checked against the declared tokens.
@@ -122,18 +215,62 @@ ho_flow_role_file() {
 }
 
 ho_flow_list() {
-  local d root
+  local d root pdir
   root=$(ho_flows_dir)
   [ -d "$root" ] || { printf 'harness: flows folder not found: %s\n' "$root" >&2; exit "$HO_EXIT_FLOW"; }
-  for d in "$root"/*/; do
+  pdir=$(ho_flow_project_dir)
+  for d in "$root"/*/ ${pdir:+"$pdir"/*/}; do
     [ -f "$d/flow.json" ] && basename "$d"
-  done
+  done | LC_ALL=C sort -u
   return 0
 }
 
+# jq: the steps that are on, in order (a switched-off step leaves every list).
+HO_JQ_ON='[.steps[] | select(.enabled != false)]'
+
 ho_flow_steps() {
   ho_flow_load "$1"
-  jq -r '.steps | to_entries[] | "\(.key + 1)\t\(.value.id)\t\(.value.when)\t\(.value.title)"' "$HO_FLOW_JSON"
+  jq -r "$HO_JQ_ON"' | to_entries[] | "\(.key + 1)\t\(.value.id)\t\(.value.when)\t\(.value.title)"' "$HO_FLOW_JSON"
+}
+
+# ho_flow_copy <flow> <new>: write <project>/.harness/flows/<new> as an own flow (the route of
+# D37-FLOW-2). The system's skills stay on the steps it owned, with its install step, so the
+# start check still checks them. Writes nothing outside the new folder.
+ho_flow_copy() {
+  local src=${1-} new=${2-} proj pdir tmp t
+  [ -n "$src" ] && [ -n "$new" ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }
+  ho_flow_name_ok "$new"
+  proj=$(ho_project_root 2>/dev/null) || {
+    echo "harness: flow copy needs a project (a folder with .harness/config.json)" >&2; exit "$HO_EXIT_FLOW"; }
+  pdir="$proj/.harness/flows"
+  if [ -e "$(ho_flows_dir)/$new" ]; then
+    printf 'harness: %s is the name of a shipped flow; pick another name\n' "$new" >&2; exit "$HO_EXIT_DATA"
+  fi
+  if [ -e "$pdir/$new" ] || [ -L "$pdir/$new" ]; then
+    printf 'harness: the project flow %s exists; it is never overwritten\n' "$pdir/$new" >&2; exit "$HO_EXIT_DATA"
+  fi
+  ho_flow_load "$src"
+  mkdir -p "$pdir" || ho_die "cannot create $pdir"
+  tmp=$(mktemp -d "$pdir/.copy-$new.XXXXXX") || ho_die "mktemp failed in $pdir"
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    mkdir -p "$tmp/$(dirname "$t")" && cp -- "$HO_FLOW_DIR/$t" "$tmp/$t" || { rm -rf "$tmp"; ho_die "cannot copy $t"; }
+  done <<EOF_PROMPTS
+$(jq -r '.steps[].prompt' "$HO_FLOW_JSON")
+EOF_PROMPTS
+  jq --arg new "$new" --arg src "$src" '
+    (.system // null) as $s
+    | .name = $new | .source = "own" | .copied_from = $src
+    | if $s == null then . else
+        ($s.skills // []) as $sk
+        | .steps |= map(if (.id | IN($s.steps[])) then .skills = ((.skills // []) + [$sk[] as $k | select(((.skills // []) | index($k)) == null) | $k]) else . end)
+        | if ($s.install // "") != "" and ($sk | length) > 0
+          then .install = ((.install // {}) + ([$sk[] | {key: ., value: $s.install}] | from_entries)) else . end
+        | .description = ((.description // "") + " Copied from the flow \($src) as an own flow; \($s.name) no longer owns these steps.")
+        | del(.system)
+      end' "$HO_FLOW_JSON" > "$tmp/flow.json" || { rm -rf "$tmp"; ho_die "cannot write the copied flow file"; }
+  mv "$tmp" "$pdir/$new" || { rm -rf "$tmp"; ho_die "cannot move the copy into place"; }
+  printf 'flow %s copied to %s as an own flow\n' "$src" "$pdir/$new"
 }
 
 # ho_flow_render <flow> <role> [--step <id>] [--set NAME VALUE]... [--file NAME PATH]...
@@ -212,6 +349,10 @@ ho_flow_render() {
   if [ -n "$step" ]; then
     step_prompt=$(jq -r --arg s "$step" '.steps[] | select(.id == $s) | .prompt' "$HO_FLOW_JSON")
     [ -n "$step_prompt" ] || { printf 'harness: flow %s has no step %s\n' "$flow" "$step" >&2; exit "$HO_EXIT_USAGE"; }
+    if [ "$(jq -r --arg s "$step" '.steps[] | select(.id == $s) | .enabled != false' "$HO_FLOW_JSON")" != true ]; then
+      printf 'harness: step %s is switched off in flow %s\n' "$step" "$flow" >&2
+      exit "$HO_EXIT_USAGE"
+    fi
     step_prompt="$HO_FLOW_DIR/$step_prompt"
   fi
   # Each value reaches jq as a file (--rawfile V_<NAME>), so a large value is no argument.
@@ -233,7 +374,7 @@ ho_flow_render() {
     | ($ARGS.named | with_entries(select(.key | startswith("V_")) | .key |= .[2:])) as $vals
     | ($vals + {
         FLOW_NAME: $flow,
-        FLOW_STEP_LIST: ([$c.steps | to_entries[]
+        FLOW_STEP_LIST: ([[$c.steps[] | select(.enabled != false)] | to_entries[]
           | "\(.key + 1). \(.value.title) (\(.value.id))"
             + (if .value.when == "questions" then ", only when classification finds open questions" else "" end)]
           | join("\n"))
@@ -269,6 +410,9 @@ ho_flow_main() {
       printf 'flow %s OK\n' "$1"
       ;;
     steps) [ $# -eq 1 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; ho_flow_steps "$1" ;;
+    plan) [ $# -eq 1 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; ho_flow_plan "$1" ;;
+    preflight) [ $# -eq 1 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; ho_flow_preflight "$1" ;;
+    copy) [ $# -eq 2 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; ho_flow_copy "$1" "$2" ;;
     render) ho_flow_render "$@" ;;
     *) ho_flow_usage; exit "$HO_EXIT_USAGE" ;;
   esac

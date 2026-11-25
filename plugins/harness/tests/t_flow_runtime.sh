@@ -67,6 +67,9 @@ assert_eq "D37-RUNTIME-2: a user may add a runtime profile" "my-rt" "$(col rev p
 printf '{"schemaVersion": 2, "command": "x"}\n' > "$user/runtimes/thin.json"
 mkflow rev "$(redit '.steps[1].runtime = "thin"')"
 assert_exit "D37-RUNTIME-2: a runtime profile without the start-check fields is refused (exit 78)" 78 "$h" flow plan rev
+: > "$user/runtimes/empty.json"
+mkflow rev "$(redit '.steps[1].runtime = "empty"')"
+assert_exit "D37-RUNTIME-2: an empty runtime profile is refused (exit 78) (field note I3)" 78 "$h" flow plan rev
 printf '{"schemaVersion": 2}\n' > "$proj/.harness/config.json"
 mkflow rev "$rev"
 rc=0; err=$("$h" flow plan rev 2>&1) || rc=$?

@@ -128,6 +128,11 @@ check_bad "an engine placeholder in a step" '.' 'printf "@STEP_TEXT@\n" > flows/
 rm -rf flows/t; mk t "$good"; printf 'not json' > flows/t/flow.json
 rc=0; "$h" flow steps t >/dev/null 2>&1 || rc=$?
 assert_eq "H-068: an unreadable flow file stops (exit 78)" "78" "$rc"
+for content in '' '{}{}'; do
+  printf '%s' "$content" > flows/t/flow.json
+  rc=0; "$h" flow check t >/dev/null 2>&1 || rc=$?
+  assert_eq "H-068: a flow file holding [$content] stops (exit 78) (field note I3)" "78" "$rc"
+done
 # Review findings on the first T8 draft, each shown failing on that draft (the large value
 # fails there only where one argument is limited, as on Linux; it guards the temp-file path).
 mkdir -p outside && printf 'SECRET outside the flow\n' > outside/a.md

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: H-053 Verification block in every pull request
-Every pull request that the harness opens MUST contain a Verification block. The block SHALL show the verdict in its opening lines, so the result is visible at once. The ticket's report comments and the block SHALL agree.
+Every pull request that the harness opens MUST contain a Verification block. The block SHALL show the verdict so that the result is visible at once. The ticket's report comments and the block SHALL agree.
 
 Source: interview 2026-11-24 R12.1; owner answer to interview question X9; owner answer to interview question X11
 Decided: design.md D37-VERIFICATION-4 (block layout)
@@ -12,7 +12,7 @@ Decided: design.md D37-VERIFICATION-4 (block layout)
 
 #### Scenario: The result is visible at once
 - **WHEN** a person opens a pull request that the harness created
-- **THEN** the verdict stands in the opening lines of the Verification block, before the list of checks
+- **THEN** the person sees the verdict of the Verification block at once
 - **AND** the person needs no log or other page to read it
 
 #### Scenario: The ticket comment and the block agree

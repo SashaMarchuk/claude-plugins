@@ -15,5 +15,16 @@
     "acceptEdits": ["--permission-mode", "acceptEdits"],
     "dontAsk": ["--permission-mode", "dontAsk"]
   },
-  "exit_command": "/exit"
+  "exit_command": "/exit",
+  "screen_file": "claude-code.screen.json",
+  "trust": {
+    "_comment": "Pre-trust data (reuse list: pre-trust inside the project only). The engine merges these fields under the folder key, and it never answers the dialog on the screen.",
+    "config_dir_env": "CLAUDE_CONFIG_DIR",
+    "config_file": ".claude.json",
+    "projects_key": "projects",
+    "fields": {
+      "hasTrustDialogAccepted": true,
+      "hasCompletedProjectOnboarding": true
+    }
+  }
 }

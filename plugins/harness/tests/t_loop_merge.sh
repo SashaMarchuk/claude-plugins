@@ -253,7 +253,7 @@ assert_eq "Rebuild loop lock: a stale lock with no holder is taken over" 69 "$(m
 # ---- validator concerns on #43: verdict after the gate, roll back, git errors, signals, lock ----
 cur=$(tip)
 gitdir_int=$(git -C "$int" rev-parse --absolute-git-dir)
-setgate() { jq -n --arg c "$1" '{schemaVersion: 2, gate: {use: "t", list: {t: {command: $c}}}}' > "$PWD/user/config.json"; }
+setgate() { jq -n --arg c "$1" '{schemaVersion: 2, gate: {use: "t", list: {t: {command: $c} } } }' > "$PWD/user/config.json"; }
 no_rolled_back() { case $(cat "$PWD/err") in *"rolled back"*) bad "$1" "$(cat "$PWD/err")" ;; *) ok "$1" ;; esac; }
 
 # H-055: the verdict is read again under the merge lock after the gate.

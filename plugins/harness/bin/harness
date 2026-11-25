@@ -34,6 +34,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/slots.sh"
 # shellcheck source=../lib/flow.sh
 . "$HO_ROOT/lib/flow.sh"
+# shellcheck source=../lib/screen.sh
+. "$HO_ROOT/lib/screen.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -50,6 +52,7 @@ verbs:
   session    session <run-dir> launch|close|list|status|read: sessions and their liveness
   slot       slot <run-dir> acquire|release|list|limits|heavy-ops|heavy-add: engine-enforced limits
   flow       flow profiles: list | check <flow> | steps <flow> | render <flow> <role> ...
+  screen     screen text: classify a capture, watch a session, pre-trust a folder, wait
 USAGE
 }
 
@@ -67,6 +70,7 @@ case $verb in
   session)  ho_session_main "$@" ;;
   slot)     ho_slot_main "$@" ;;
   flow)     ho_flow_main "$@" ;;
+  screen)   ho_screen_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

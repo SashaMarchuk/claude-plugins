@@ -12,6 +12,11 @@
 #   fail     nothing is written; exit 1
 #   deliver-fail  the user turn is written, then exit 1
 #   deliver-hang  the user turn is written, then it hangs (the engine's timeout ends it)
+#   slow-fail     exits 1 at once; a background writer adds the user turn 0.7 s later (its
+#                 PID goes to $HO_FAKE_MSG_PIDS, so the test stops it by exact PID)
+#   unreadable-fail  the user turn is written, the transcript is made unreadable, exit 1
+#   queue-fail    an enqueue record is written, then exit 1
+#   term-ignore   it ignores SIGTERM and sleeps 15 s (the engine must use SIGKILL)
 # The transcript is found as $HOME/.claude/projects/*/<session-id>.jsonl.
 set -euo pipefail
 sid=${1:?session id}
@@ -42,6 +47,28 @@ case ${HO_FAKE_MSG_MODE:-deliver} in
     [ "$HO_FAKE_MSG_MODE" = queue ] || jq -cn --arg c "$(cat "$file")" '{type: "queue-operation", operation: "remove", content: $c}' >> "$tr"
     ;;
   fail) exit 1 ;;
+  slow-fail)
+    [ -n "$tr" ] || exit 1
+    ( sleep 0.7; jq -cn --arg c "$(cat "$file")" '{type: "user", message: {role: "user", content: $c} }' >> "$tr" ) > /dev/null 2>&1 < /dev/null &
+    printf '%s\n' "$!" >> "${HO_FAKE_MSG_PIDS:-$HOME/fake-msg.pids}"
+    exit 1
+    ;;
+  unreadable-fail)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "user", message: {role: "user", content: $c} }' >> "$tr"
+    chmod 200 "$tr"
+    exit 1
+    ;;
+  queue-fail)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "queue-operation", operation: "enqueue", content: $c}' >> "$tr"
+    exit 1
+    ;;
+  term-ignore)
+    printf '%s\n' "$$" > "${HO_FAKE_MSG_PIDS:-$HOME/fake-msg.pids}.term"
+    trap '' TERM
+    exec sleep 15
+    ;;
   deliver-fail | deliver-hang)
     [ -n "$tr" ] || exit 1
     jq -cn --arg c "$(cat "$file")" '{type: "user", message: {role: "user", content: $c} }' >> "$tr"

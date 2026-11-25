@@ -71,24 +71,37 @@ export HO_FAKE_MSG_MODE=other
 out=$(deliver m3 --text "carry on with the queue" 2>&1) && rc=0 || rc=$?
 assert_eq "S8-24: a user turn with another instruction's id does not count (exit 1)" "1" "$rc"
 
-# ---- H-101: a failed or unproven message falls back to typing on an idle, empty line ------
+# ---- H-101, at most once: a started message command is never followed by typing -----------
+# (review round 3 of PR #95). The command ran and only unrelated growth followed, or it failed:
+# the result is "unknown, not sent again", one owner-action line, and 0 bytes typed.
 start m4
 screen m4 idle-empty
 export HO_FAKE_MSG_MODE=noise
 out=$(deliver m4 --text "run the unit tests" 2>&1) && rc=0 || rc=$?
-assert_eq "H-101: an unproven message falls back to typing, which is proven (exit 0)" "0" "$rc"
-assert_contains "H-101: the fallback names the typed route" "$out" "route=typed proof=user-turn"
+assert_eq "H-101 at most once: an unproven message is not followed by typing (exit 1, 0 bytes)" "1 0" "$rc $(inbytes m4)"
+assert_contains "H-101 at most once: it is reported as unknown, not sent again" "$out" "unknown, not sent again"
 id4=$(printf '%s' "$out" | sed -n 's/.*id=\(ho-[0-9a-f]*\).*/\1/p')
-assert_eq "S8-24: the typed line carries the instruction id" "$id4: run the unit tests" "$(head -n 1 "$(fin m4)")"
-assert_eq "S8-24: request, message, typed and confirmed ledger lines carry the same id" "deliver-confirmed deliver-message deliver-request deliver-typed" \
-  "$(ledger | grep -F "\"id\":\"$id4\"" | jq -r .kind | sort -u | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "H-101 at most once: one owner-action line names the instruction" "1" "$(ledger | jq -r 'select(.kind == "owner-action") | .title' | grep -c -F "$id4" || true)"
 start m5
 screen m5 idle-empty
 export HO_FAKE_MSG_MODE=fail
 out=$(deliver m5 --text "run the unit tests" 2>&1) && rc=0 || rc=$?
-assert_eq "H-101: a failed message falls back to typing (exit 0)" "0" "$rc"
-assert_contains "H-101: the failed message was followed by the typed route" "$out" "route=typed"
-assert_contains "H-101: the failed message is in the ledger" "$(ledger)" '"result":"failed"'
+assert_eq "H-101 at most once: a failed message command is not followed by typing (exit 1, 0 bytes)" "1 0" "$rc $(inbytes m5)"
+assert_contains "H-101 at most once: the failed message is in the ledger" "$(ledger)" '"result":"failed (non-zero exit)"'
+# The route refused before it starts (its command is missing): typing is the fallback.
+jq '.message.argv = ["/nonexistent/ho-msg", "{session_id}"]' "$plug/runtimes/claude-code.json" > "$plug/runtimes/claude-gone.json"
+set_runtime claude-gone
+start m7
+screen m7 idle-empty
+out=$(deliver m7 --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+assert_eq "H-101: a message route refused before start falls back to typing, which is proven (exit 0)" "0" "$rc"
+assert_contains "H-101: the fallback names the typed route" "$out" "route=typed proof=user-turn"
+id7=$(printf '%s' "$out" | sed -n 's/.*id=\(ho-[0-9a-f]*\).*/\1/p')
+assert_eq "S8-24: the typed line carries the instruction id" "$id7: run the unit tests" "$(head -n 1 "$(fin m7)")"
+assert_eq "S8-24: request, message, typed and confirmed ledger lines carry the same id" "deliver-confirmed deliver-message deliver-request deliver-typed" \
+  "$(ledger | grep -F "\"id\":\"$id7\"" | jq -r .kind | sort -u | tr '\n' ' ' | sed 's/ $//')"
+assert_contains "H-101: the refusal before start is in the ledger" "$(ledger | grep -F "$id7")" "refused before start"
+set_runtime claude-msg
 
 # ---- H-099, D42g: the typed fallback runs only on an idle session with an empty line ------
 set_runtime claude-code
@@ -354,3 +367,50 @@ for bad in '[10]' '[13]' '["10"]' '["13"]' '["\n"]' '["\r"]' '["0x0a"]' '[24, 13
   assert_eq "minor 12: chord data $bad is refused; no byte is sent" "" "$(calls | grep "byte $(rec "$nm" .handle) " || true)"
 done
 set_runtime claude-code
+
+# ==== Fix round 3 of PR #95 (at most once; validator N1-N4; minors 1 and 2) =================
+set_runtime claude-msg
+export HO_FAKE_MSG_PIDS="$base/extra.pids"
+# ---- N1: a slow writer after a failed command: the same bounded wait finds the proof --------
+start z1
+screen z1 idle-empty
+out=$(HO_FAKE_MSG_MODE=slow-fail deliver z1 --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "N1, H-101: a turn written after the command failed is found; nothing is typed (exit 0, 0 bytes)" "0 0" "$rc $(inbytes z1)"
+assert_contains "N1, H-101: it is confirmed on the message route" "$out" "route=message"
+# ---- N2: a transcript unreadable after the command: unknown, not sent again, clean output ---
+start z2
+screen z2 idle-empty
+out=$(HO_FAKE_MSG_MODE=unreadable-fail deliver z2 --text "run tests" 2>&1) && rc=0 || rc=$?
+chmod 600 "$(trof z2)"
+assert_eq "N2, H-101: an unreadable transcript after the command: nothing is typed (exit 1, 0 bytes)" "1 0" "$rc $(inbytes z2)"
+assert_contains "N2, H-101: the result is unknown, not sent again" "$out" "unknown, not sent again"
+assert_eq "N2: no raw shell error reaches the output" "" "$(printf '%s\n' "$out" | grep -E 'Permission denied|integer expression' || true)"
+# ---- N3: the chord follows the transcript state, whatever the command's exit status --------
+start z3
+screen z3 busy
+: > "$(fbusy z3)"
+out=$(HO_FAKE_MSG_MODE=queue-fail HO_FAKE_CLAUDE_VERSION=2.1.332 deliver z3 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+assert_eq "N3, D37-LIFECYCLE-4: a queued stop from a failed command still gets the chord once" "0x18 0x13" \
+  "$(calls | grep "^tmux byte $(rec z3 .handle) " | awk '{ print $4 }' | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "N3: nothing is typed for it (0 bytes besides the chord)" "<0x18><0x13>" "$(cat "$(fin z3)")"
+# ---- N4: a command that ignores SIGTERM: its group gets SIGKILL after the grace -------------
+jq '.delivery.message_timeout_seconds = 2 | .delivery.message_kill_grace_seconds = 1' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+start z4
+screen z4 idle-empty
+t0=$(date +%s)
+out=$(HO_FAKE_MSG_MODE=term-ignore deliver z4 --text "run tests" 2>&1) && rc=0 || rc=$?
+el=$(( $(date +%s) - t0 ))
+assert_eq "N4: deliver returns within the timeout plus the grace and the proof wait (at most 7 s)" "yes" "$([ "$el" -le 7 ] && echo yes || echo "no (${el}s)")"
+tp=$(cat "$base/extra.pids.term" 2>/dev/null || true)
+assert_eq "N4: the command that ignored SIGTERM is gone" "no" "$([ -n "$tp" ] && alive "$tp" && echo yes || echo no)"
+assert_eq "N4: a stopped command is not followed by typing (0 bytes)" "0" "$(inbytes z4)"
+set_runtime claude-code
+# ---- minors 1 and 2: the whole-word check ----------------------------------------------------
+start z5
+jq -cn '{type: "user", message: {role: "user", content: "яho-wide0001: stop"} }' >> "$(trof z5)"
+jq -cn '{type: "user", message: {role: "user", content: "ho-wide0002é stop"} }' >> "$(trof z5)"
+jq -cn '{type: "user", message: {role: "user", content: "ho-glue0001ho-glue0001"} }' >> "$(trof z5)"
+p6() { "$h" session "$run" proof z5 "$1" 2>&1 | cut -d' ' -f1-2; }
+assert_eq "minor 1: a letter outside ASCII before the id blocks the match" "none id=ho-wide0001" "$(p6 ho-wide0001)"
+assert_eq "minor 1: a letter outside ASCII after the id blocks the match" "none id=ho-wide0002" "$(p6 ho-wide0002)"
+assert_eq "minor 2: an id glued to itself is no whole word" "none id=ho-glue0001" "$(p6 ho-glue0001)"

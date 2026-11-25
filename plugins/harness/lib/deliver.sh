@@ -137,14 +137,22 @@ EOF_ROOTS
   return 1
 }
 
-ho_deliver_size() { wc -c < "$1" 2>/dev/null | tr -d ' '; }
+ho_deliver_size() { { wc -c < "$1"; } 2>/dev/null | tr -d ' '; }
+
+# ho_deliver_grew <transcript> <offset>: yes, no, or unreadable.
+ho_deliver_grew() {
+  local n
+  n=$(ho_deliver_size "$1")
+  case $n in '' | *[!0-9]*) echo unreadable ;; *) [ "$n" -gt "$2" ] && echo yes || echo no ;; esac
+}
 
 # ho_deliver_scan <profile> <transcript> <offset> <id>: what the transcript recorded for the id
 # after byte <offset>: "delivered user-turn", "delivered queued-command", "delivered reply",
 # "queued", "dequeued" (it left the queue and was not taken), or "none".
 # The id is matched as a literal string (jq split), never as a pattern built from input
 # (validator B2), and only as a whole word: no letter of either case, digit, "_", "." or "-"
-# may touch it, so "stop-1" is not found in "stop-10" or "stop-1.txt". The character on each
+# may touch it, and no character outside ASCII either (minor 1), so "stop-1" is not found in
+# "stop-10" or "stop-1.txt". An id glued to another copy of itself is no whole word (minor 2). The character on each
 # side is taken out and tested alone, with no line anchor: "$" in a pattern also matches
 # before a final line break, which hid an id at the start of a second line (validator F2). Not counted: lines that
 # are not JSON objects, tool results, and user records marked isMeta, isCompactSummary or
@@ -157,9 +165,11 @@ ho_deliver_scan() {
     | def texts: if type == "string" then [.]
         elif type == "array" then [.[] | select(type == "object" and .type == "text") | .text | strings]
         else [] end;
-      def wordch: length > 0 and test("[A-Za-z0-9_.-]");
-      def word($s): ($s | split($id)) as $q
-        | any(range(0; ($q | length) - 1); ($q[.][-1:] | wordch | not) and ($q[. + 1][0:1] | wordch | not));
+      def wordch: length > 0 and (test("[A-Za-z0-9_.-]") or (explode[0] >= 128));
+      def word($s): ($s | split($id)) as $q | ($q | length) as $n
+        | any(range(0; $n - 1); . as $i
+            | ($q[$i][-1:] | wordch | not) and ($q[$i + 1][0:1] | wordch | not)
+            and ($i == 0 or $q[$i] != "") and ($i + 1 == $n - 1 or $q[$i + 1] != ""));
       def has_id: any(.[]; word(.));
       def content: if (.message | type) == "object" then (.message.content // "") else "" end;
     fromjson? | select(type == "object") | select((.isSidechain // false) != true)
@@ -327,12 +337,18 @@ ho_deliver_chord() {
 }
 
 # ho_deliver_wait <record> <profile> <transcript> <offset> <id> <force>: wait for the proof.
-# Prints the scan result. With force, a queued instruction gets the chord, once per id.
+# Prints the scan result, or "unreadable". With force, a queued instruction gets the chord, once
+# per id, whatever happened to the command that sent it (validator N3).
 ho_deliver_wait() {
   local rec=$1 profile=$2 tr=$3 off=$4 id=$5 force=$6 st deadline chord=0
   deadline=$(( $(date +%s) + $(ho_cfg_int '.delivery.wait_seconds' 30) ))
   while :; do
-    st=$(ho_deliver_scan "$profile" "$tr" "$off" "$id")
+    # A transcript that cannot be read gives no answer at all, never "none" (validator N2).
+    if head -c 1 "$tr" > /dev/null 2>&1; then
+      st=$(ho_deliver_scan "$profile" "$tr" "$off" "$id")
+    else
+      st=unreadable
+    fi
     case $st in delivered*) break ;; esac
     if [ "$st" = queued ] && [ "$force" = 1 ] && [ "$chord" -eq 0 ] && [ ! -e "$HO_RUN_DIR/messages/$id.chord" ]; then
       chord=1
@@ -345,9 +361,13 @@ ho_deliver_wait() {
 }
 
 # ho_deliver_message <profile> <record> <id> <file>: run the runtime's message command, if
-# any. 0 sent, 1 failed, 2 no route.
+# any. 0 exited 0, 1 exited non-zero, 4 timed out, 2 no route, 3 refused before start (the
+# command is missing, not executable, or inside the project). Only 2 and 3 mean "not started".
+# The command runs in its own process group. On timeout the group gets SIGTERM, a grace of
+# delivery.message_kill_grace_seconds (default 2), then SIGKILL, so the call returns within the
+# timeout plus the grace (Codex review, validator N4). Only that exact group is signalled.
 ho_deliver_message() {
-  local profile=$1 rec=$2 id=$3 file=$4 sid el pid deadline rc=0
+  local profile=$1 rec=$2 id=$3 file=$4 sid el pid deadline grace cmd rc=0
   local -a argv
   jq -e '.message.argv | type == "array" and length > 0 and all(type == "string")' "$profile" >/dev/null 2>&1 || return 2
   sid=$(jq -r '.session_id' "$rec")
@@ -360,18 +380,28 @@ ho_deliver_message() {
   done <<EOF_ARGV
 $(jq -r '.message.argv[]' "$profile")
 EOF_ARGV
-  "${argv[@]}" < /dev/null > /dev/null 2>> "$HO_RUN_DIR/logs/deliver.log" &
+  cmd=$(command -v -- "${argv[0]}" 2>/dev/null || true)
+  case $cmd in /*) ;; *) return 3 ;; esac
+  [ -f "$cmd" ] && [ -x "$cmd" ] || return 3
+  ho_session_runtime_path_ok "$cmd" 2>/dev/null || return 3
+  # set -m gives the background job a process group of its own (its ID is the job's PID).
+  set -m
+  "$cmd" "${argv[@]:1}" < /dev/null > /dev/null 2>> "$HO_RUN_DIR/logs/deliver.log" &
   pid=$!
+  set +m
   deadline=$(( $(date +%s) + $(ho_cfg_int '.delivery.message_timeout_seconds' 30) ))
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      kill "$pid" 2>/dev/null || true
+      kill -TERM -- "-$pid" 2>/dev/null || true
+      grace=$(( $(date +%s) + $(ho_cfg_int '.delivery.message_kill_grace_seconds' 2) ))
+      while kill -0 -- "-$pid" 2>/dev/null && [ "$(date +%s)" -lt "$grace" ]; do sleep 0.1; done
+      kill -KILL -- "-$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
-      return 1
+      return 4
     fi
     sleep 0.1
   done
-  wait "$pid" || rc=$?
+  wait "$pid" 2>/dev/null || rc=$?
   [ "$rc" -eq 0 ] || return 1
 }
 
@@ -453,12 +483,21 @@ ho_session_deliver() {
   rm -f "$tmp"
   ho_ledger_append deliver-request id "$id" name "$name" bytes "$(ho_deliver_bytes "$text")" force_send "$force"
 
-  # ---- 1. the message route ----
+  # ---- 1. the message route: at most once ----
+  # Once the message command has started for an id, that id is never typed, whatever the
+  # command's exit status or timeout and whatever the transcript shows. The transcript is
+  # read with the same bounded wait in every case, and the result is reported: delivered,
+  # queued, dequeued, or unknown. Unknown is one owner-action line, never a retry. Typing is
+  # the fallback only when no route is configured or the route is refused before it starts.
   rc=0
   ho_deliver_message "$profile" "$rec" "$id" "$msg" || rc=$?
   case $rc in
-    0)
-      ho_ledger_append deliver-message id "$id" result sent
+    2) ho_ledger_append deliver-message id "$id" result "no message route in the runtime data" ;;
+    3) ho_ledger_append deliver-message id "$id" result "refused before start (command missing, not executable or inside the project)" ;;
+    *)
+      local how=sent
+      case $rc in 1) how="failed (non-zero exit)" ;; 4) how="timed out and stopped" ;; esac
+      ho_ledger_append deliver-message id "$id" result "$how"
       st=$(ho_deliver_wait "$rec" "$profile" "$tr" "$off" "$id" "$force")
       case $st in
         delivered*)
@@ -467,25 +506,13 @@ ho_session_deliver() {
           return 0
           ;;
       esac
-      ho_ledger_append deliver-message id "$id" result unconfirmed transcript_grew "$([ "$(ho_deliver_size "$tr")" -gt "$off" ] && echo yes || echo no)" state "$st"
-      # The session already holds this instruction (or held it): typing it again would send
-      # a second copy (Codex review).
+      ho_ledger_append deliver-message id "$id" result unconfirmed transcript_grew "$(ho_deliver_grew "$tr" "$off")" state "$st"
       ho_deliver_pending "$id" "$name" "$st" || return 1
-      ;;
-    2) ho_ledger_append deliver-message id "$id" result "no message route in the runtime data" ;;
-    *)
-      ho_ledger_append deliver-message id "$id" result failed
-      # A command that fails or times out may still have posted the message: the transcript
-      # decides before any fallback, so a delivered message is never typed again (Codex review).
-      st=$(ho_deliver_scan "$profile" "$tr" "$off" "$id")
-      case $st in
-        delivered*)
-          ho_ledger_append deliver-confirmed id "$id" name "$name" route message proof "${st#delivered }"
-          printf 'DELIVERED id=%s session=%s route=message proof=%s\n' "$id" "$name" "${st#delivered }"
-          return 0
-          ;;
-      esac
-      ho_deliver_pending "$id" "$name" "$st" || return 1
+      ho_ledger_append owner-action title "check instruction $id of session $name" \
+        why "the message command was started ($how) and the transcript shows no record of the instruction; it is not sent again" \
+        command "harness session $HO_RUN_DIR proof $name $id" verify "proof prints delivered, or the owner sends the instruction again by hand"
+      ho_deliver_not "$id" "$name" "unknown, not sent again: the message command was started ($how) but the transcript shows no record of the instruction" "" state "$st"
+      return 1
       ;;
   esac
 
@@ -528,7 +555,7 @@ ho_session_deliver() {
   esac
   ho_deliver_pending "$id" "$name" "$st" || return 1
   ho_deliver_not "$id" "$name" "no transcript entry carries the instruction id" "" state "$st" \
-    transcript_grew "$([ "$(ho_deliver_size "$tr")" -gt "$off" ] && echo yes || echo no)"
+    transcript_grew "$(ho_deliver_grew "$tr" "$off")"
 }
 
 # ho_deliver_pending <id> <name> <state>: 1 (and the report) when the transcript shows the

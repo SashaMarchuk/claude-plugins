@@ -280,3 +280,12 @@ done
 rc=0; out=$(env -u CLAUDE_CONFIG_DIR -u CODEX_HOME "$h" flow preflight sys 2>&1) || rc=$?
 assert_eq "D31: with the skills under the account HOME the start goes on (exit 0)" "0" "$rc"
 printf '{"schemaVersion": 2}\n' > "$user/config.json"
+
+# ---- the start check runs the account's env_command once (review round 2, minor 4) ------------
+mkflow sys "$sys"
+: > "$base/acct-count"
+jq -n --arg c "$base/acct-count" '{schemaVersion: 2, accounts: {roles: {worker: "work"},
+  list: {work: {env_command: ("printf x >> \"" + $c + "\"; printf \"FOO=bar\\n\"")} } } }' > "$user/config.json"
+"$h" flow preflight sys >/dev/null 2>&1 || true
+assert_eq "D31: the start check runs the account's env_command once" "x" "$(cat "$base/acct-count")"
+printf '{"schemaVersion": 2}\n' > "$user/config.json"

@@ -189,18 +189,22 @@ ho_flow_preflight() {
   proj=$(ho_project_root 2>/dev/null) || { echo "harness: the start check needs a project (a folder with .harness/config.json)" >&2; exit "$HO_EXIT_FLOW"; }
   HO_PROJECT_DIR=$proj
   rows=$(ho_flow_plan_rows "$flow") || exit $?
+  tmpd=$(mktemp -d "${TMPDIR:-/tmp}/ho-preflight.XXXXXX") || ho_die "mktemp failed"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmpd'" EXIT
   # The checks run with the account of the worker role, as the steps will (D37-SESSIONS-5).
-  acct=$(ho_session_account worker "") || exit $?
+  # ho_session_account runs the account command once and keeps what it printed; it is not run
+  # again here.
+  HO_SESSION_ACCOUNT_ENV=""
+  ho_session_account worker "" > "$tmpd/acct" || exit $?
+  acct=$(cat "$tmpd/acct")
   if [ -n "$acct" ]; then
-    pairs=$(/bin/bash -c "${acct#*"$(printf '\t')"}" 2>/dev/null | ho_account_env_parse) || {
-      echo "harness: the account command of the worker role failed" >&2; exit "$HO_EXIT_DATA"; }
+    pairs=$(printf '%s\n' "$HO_SESSION_ACCOUNT_ENV" | ho_account_env_parse) || {
+      echo "harness: the account command of the worker role printed no usable KEY=VALUE line" >&2; exit "$HO_EXIT_DATA"; }
     while IFS= read -r t; do [ -n "$t" ] && envs+=("${t%%"$(printf '\t')"*}=${t#*"$(printf '\t')"}"); done <<EOF_ENV
 $pairs
 EOF_ENV
   fi
-  tmpd=$(mktemp -d "${TMPDIR:-/tmp}/ho-preflight.XXXXXX") || ho_die "mktemp failed"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmpd'" EXIT
   add() { missing="$missing- $1
 "; }
   local src_note=""

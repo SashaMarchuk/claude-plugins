@@ -237,43 +237,47 @@ ho_loop_refuse() { # <code> <lane> <reason>
   return "$1"
 }
 
+# ho_loop_pristine <worktree>: prints the first line of `git status` when the worktree holds
+# anything at all: an uncommitted change, an untracked file or an ignored file. Returns 1 then,
+# 2 when git cannot tell, 0 when it is pristine. The engine itself writes no file into the
+# integration worktree (the gate runs in its own throwaway worktree), so nothing is excepted.
+ho_loop_pristine() {
+  local st
+  st=$(git -C "$1" status --porcelain=v1 --untracked-files=all --ignored 2>/dev/null) || { echo "git status failed"; return 2; }
+  [ -z "$st" ] || { printf '%s\n' "$st" | head -n 1; return 1; }
+  ! git -C "$1" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 || { echo "a merge is in progress"; return 1; }
+}
+
 # ho_loop_rollback <worktree> <branch> <old> <merge>: put the checked-out integration branch
-# back to <old>, but only while it is checked out at <old> or at this merge's commit <merge>, so
-# a commit made on it meanwhile is never thrown away, and only while its tracked files hold
-# exactly the tree of <old> or of <merge>, so an uncommitted edit is never thrown away either.
-# reset --hard inside its own worktree, never update-ref (field note C5). Returns 0 put back,
-# 1 the roll back failed, 2 left alone (HO_LOOP_LEFT_WHY says why).
+# back to <old>. It acts only while the branch is checked out at <old> or at this merge's
+# commit <merge> (so no commit made meanwhile is thrown away) and while the worktree is
+# pristine, ignored files included (so no edit, untracked or ignored file is thrown away).
+# Then `git reset --keep`, inside its own worktree, never update-ref (field note C5); --keep
+# itself refuses to overwrite a local change. Returns 0 put back, 1 the reset failed, 2 left
+# alone before any reset (HO_LOOP_LEFT_WHY says why).
 ho_loop_rollback() {
-  local wt=$1 branch=$2 old=$3 mc=$4 cur head x ok=0
+  local wt=$1 branch=$2 old=$3 mc=$4 cur head first
   cur=$(ho_loop_ref "$wt" "refs/heads/$branch") || cur=""
   head=$(git -C "$wt" symbolic-ref -q HEAD 2>/dev/null || true)
   HO_LOOP_LEFT_WHY=""
   if [ "$head" != "refs/heads/$branch" ]; then
     HO_LOOP_LEFT_WHY="$wt does not have $branch checked out (HEAD is ${head:-detached}), so nothing is reset"
   elif [ "$cur" != "$old" ] && [ "$cur" != "$mc" ]; then
-    HO_LOOP_LEFT_WHY="$branch is at ${cur:-an unreadable tip}, not at $old or this merge, so it is not reset"
+    HO_LOOP_LEFT_WHY="$branch is at ${cur:-an unreadable tip}, not at $old or this merge, so nothing is reset"
+  fi
+  if [ -z "$HO_LOOP_LEFT_WHY" ] && git -C "$wt" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    # The worktree was pristine before the merge, so aborting the merge loses nothing.
+    git -C "$wt" merge --abort >/dev/null 2>&1 || true
+  fi
+  if [ -z "$HO_LOOP_LEFT_WHY" ] && ! first=$(ho_loop_pristine "$wt"); then
+    HO_LOOP_LEFT_WHY="$wt is not clean ($first): it holds an uncommitted change, an untracked or an ignored file, so nothing is reset and nothing is lost"
   fi
   if [ -n "$HO_LOOP_LEFT_WHY" ]; then
     ho_loop_ledger merge-rollback-skipped branch "$branch" tip "${cur:-unknown}" expected "$mc" reason "$HO_LOOP_LEFT_WHY" || true
     return 2
   fi
-  if git -C "$wt" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-    # The tree was clean before the merge, so aborting it loses nothing.
-    git -C "$wt" merge --abort >/dev/null 2>&1 || true
-  fi
-  # Tracked files and the index must hold exactly the old tree or the merge's tree. Anything
-  # else is an edit made outside the merge; reset --hard would throw it away. A git error counts
-  # as an edit.
-  for x in "$old" "$mc"; do
-    if git -C "$wt" diff --quiet "$x" -- 2>/dev/null && git -C "$wt" diff --cached --quiet "$x" -- 2>/dev/null; then ok=1; break; fi
-  done
-  if [ "$ok" -ne 1 ]; then
-    HO_LOOP_LEFT_WHY="$wt holds uncommitted edits that are not part of the merge, so nothing is reset and no edit is lost"
-    ho_loop_ledger merge-rollback-skipped branch "$branch" tip "${cur:-unknown}" expected "$mc" reason "uncommitted edits" || true
-    return 2
-  fi
-  git -C "$wt" reset -q --hard "$old" >/dev/null 2>&1 || true
-  if [ "$(ho_loop_ref "$wt" "refs/heads/$branch")" = "$old" ] && ho_loop_clean "$wt"; then
+  git -C "$wt" reset -q --keep "$old" >/dev/null 2>&1 || true
+  if [ "$(ho_loop_ref "$wt" "refs/heads/$branch")" = "$old" ] && ho_loop_pristine "$wt" >/dev/null; then
     return 0
   fi
   ho_loop_ledger merge-rollback-failed branch "$branch" tip "$old" || true
@@ -295,7 +299,7 @@ ho_loop_undo() {
 # ---- merge <lane> ------------------------------------------------------------------------
 ho_loop_merge_locked() {
   local lane=$1 ij="$HO_RUN_DIR/integration.json" lj="$HO_RUN_DIR/lanes/$1.json"
-  local iwt branch old lwt lbranch lsha worker vsnap gate stopped=0 rc=0 new gw log grc=0 gpid
+  local iwt branch old lwt lbranch lsha worker why vsnap gate mc stopped=0 rc=0 new gw log grc=0 gpid
   ho_stopped || stopped=$?
   [ "$stopped" -eq 1 ] || { ho_loop_err "the run is stopped (or its stop state is unknown); no merge"; return 75; }
   [ "$ho_loop_sig" -eq 0 ] || { ho_loop_err "the merge was stopped by a signal before it started"; return 75; }
@@ -327,8 +331,8 @@ ho_loop_merge_locked() {
     || { ho_loop_refuse 65 "$lane" "$iwt does not have $branch checked out"; return; }
   [ "$(ho_loop_ref "$iwt" "refs/heads/$branch")" = "$old" ] \
     || { ho_loop_refuse 65 "$lane" "the tip of $branch is not the last confirmed tip $old; it moved outside the engine or a merge was interrupted"; return; }
-  rc=0; ho_loop_clean "$iwt" || rc=$?
-  [ "$rc" -eq 0 ] || { ho_loop_refuse 65 "$lane" "the integration worktree is not clean (or cannot be read)"; return; }
+  # Pristine, ignored files included: a roll back later needs it, and resets nothing otherwise.
+  why=$(ho_loop_pristine "$iwt") || { ho_loop_refuse 65 "$lane" "the integration worktree is not clean, ignored files included ($why)"; return; }
   ho_loop_ref "$iwt" "$lsha" >/dev/null || { ho_loop_refuse 65 "$lane" "$lsha is not in the integration repository"; return; }
 
   # No-op before merging: the lane is already in the branch. Exit 1 is "no"; any other code is a
@@ -355,7 +359,11 @@ ho_loop_merge_locked() {
       || [ "$(ho_loop_ref "$iwt" "$new^2")" != "$lsha" ] \
       || ! git -C "$iwt" merge-base --is-ancestor "$lsha" "refs/heads/$branch" 2>/dev/null \
       || ! ho_loop_clean "$iwt"; then
-    ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "git does not confirm the merge of $lsha into $branch" "${new:-$old}"; return
+    # Only a commit that is provably this merge (parents old and the lane commit) may be undone;
+    # anything else on the branch is left for a person.
+    mc=$old
+    if [ -n "$new" ] && [ "$(ho_loop_ref "$iwt" "$new^1")" = "$old" ] && [ "$(ho_loop_ref "$iwt" "$new^2")" = "$lsha" ]; then mc=$new; fi
+    ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "git does not confirm the merge of $lsha into $branch" "$mc"; return
   fi
   rc=0; git -C "$iwt" diff --quiet "$old" "$new" 2>/dev/null || rc=$?
   case $rc in
@@ -373,6 +381,12 @@ ho_loop_merge_locked() {
       && git -C "$iwt" worktree add -q --detach "$gw" "$new" >/dev/null 2>&1; }; then
     ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "cannot create a worktree to run the gate on the merged tree" "$new"; return
   fi
+  # A signal that came while the worktree was made is acted on now, before the gate starts.
+  if [ "$ho_loop_sig" -ne 0 ]; then
+    git -C "$iwt" worktree remove --force "$gw" >/dev/null 2>&1 || rm -rf "$gw"
+    git -C "$iwt" worktree prune >/dev/null 2>&1 || true
+    ho_loop_undo 75 "$lane" "the merge was stopped by a signal before the gate started" "$new"; return
+  fi
   ho_group_start /bin/bash -c 'cd "$1" && exec /bin/bash -c "$2"' ho-gate "$gw" "$gate" < /dev/null > "$log" 2>&1
   gpid=$HO_GROUP_PID
   while :; do
@@ -388,7 +402,7 @@ ho_loop_merge_locked() {
     ho_loop_undo "$HO_EXIT_GATE" "$lane" "the gate failed on the merged tree (exit $grc, log $log)" "$new"; return
   fi
   # Tip check after: nothing moved the branch while the gate ran.
-  if [ "$(ho_loop_ref "$iwt" "refs/heads/$branch")" != "$new" ] || ! ho_loop_clean "$iwt"; then
+  if [ "$(ho_loop_ref "$iwt" "refs/heads/$branch")" != "$new" ] || ! ho_loop_pristine "$iwt" >/dev/null; then
     ho_loop_refuse "$HO_EXIT_UNCONFIRMED" "$lane" "$branch moved or got dirty while the gate ran; the merge is not confirmed and the branch is left for a person"; return
   fi
   # H-055 again, under the merge lock after the gate: the verdict is the same one, still passed.
@@ -397,12 +411,17 @@ ho_loop_merge_locked() {
   fi
   [ "$ho_loop_sig" -eq 0 ] || { ho_loop_undo 75 "$lane" "the merge was stopped by a signal" "$new"; return; }
 
-  # Ledger line first: if the tip write then fails, the next merge refuses on the tip check.
-  # From here on a signal no longer undoes the merge: it is ignored until the tip is written.
-  # The ledger append sets its own signal traps, so it runs in a child subshell; the caller
-  # passes a signal on to this exact process only, so the child never gets it.
+  # Confirm and record. Ledger line first: if the tip write then fails, the next merge refuses
+  # on the tip check. From here on a signal no longer undoes the merge: TERM, INT and HUP are
+  # ignored, also when they go to the whole process group (a closed terminal). The ledger line
+  # is written by a fresh shell that starts with them ignored, so the ledger code cannot set
+  # its own traps for them; the tip write runs here with them ignored. The merge is then
+  # complete, so a signal that came meanwhile changes nothing and the result is reported.
   trap '' TERM INT HUP
-  ( ho_ledger_append merge-confirmed lane "$lane" sha "$lsha" branch "$branch" base "$old" tip "$new" ) || return 1
+  /bin/bash -c 'set -euo pipefail; HO_ROOT=$1; export HO_ROOT
+    for l in common files config run; do . "$HO_ROOT/lib/$l.sh"; done
+    ho_run_open "$2"; shift 2; ho_ledger_append "$@"' ho-ledger "$HO_ROOT" "$HO_RUN_DIR" \
+    merge-confirmed lane "$lane" sha "$lsha" branch "$branch" base "$old" tip "$new" || return 1
   jq --arg tip "$new" '.tip = $tip' "$ij" | ho_atomic_write "$ij" || return 1
   printf 'merged lane %s (%s) into %s at %s\n' "$lane" "$lsha" "$branch" "$new"
 }

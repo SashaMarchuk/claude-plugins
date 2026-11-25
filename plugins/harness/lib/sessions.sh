@@ -151,6 +151,8 @@ ho_session_account() {
     printf 'harness: the env_command of account %s must print KEY=VALUE lines only\n' "$mapped" >&2
     return 65
   }
+  # The variables as printed, for a caller that must not run the command a second time.
+  HO_SESSION_ACCOUNT_ENV=$out
   printf '%s\t%s\n' "$mapped" "$cmd"
 }
 
@@ -639,7 +641,8 @@ ho_session_close() {
     printf 'harness: the PID file of session %s does not name its process %s; left open\n' "$name" "$pid" >&2
     return 70
   fi
-  profile="$HO_ROOT/runtimes/$(jq -r '.runtime // ""' "$rec").json"
+  # The same profile lookup as the launch (user folder first, then the plugin).
+  profile=$(ho_rt_file "$(jq -r '.runtime // ""' "$rec")" 2>/dev/null) || profile=""
   exitcmd=$(jq -r '.exit_command // ""' "$profile" 2>/dev/null || true)
   [ -n "$exitcmd" ] || { rm -f "$closing"; printf 'harness: no exit command for session %s; left open\n' "$name" >&2; return 78; }
   # Reach the session through the backend it was launched with.

@@ -402,3 +402,94 @@ assert_eq "H-046 signal: TERM during the merge-confirmed line lets the merge fin
 assert_eq "H-046 signal: that merge has its merge-confirmed line" "v" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "v") | .lane' "$run/ledger.jsonl")"
 assert_eq "H-046 signal: the recorded tip follows the branch" "$(tip)" "$(jq -r .tip "$run/integration.json")"
 user_gate
+
+# ---- review round 2 -------------------------------------------------------------------------
+user_gate
+cur=$(tip)
+# B1: an untracked or ignored file at a path the merge deleted is never overwritten.
+lane w1 gone.txt "gone"; verdict w1 passed
+assert_eq "B1 setup: the integration branch gets gone.txt" 0 "$(merge_rc w1)"
+cur=$(tip)
+dlane() { # <name> [ignore]: a lane from the integration tip that deletes gone.txt
+  local n=$1 w="$PWD/w-$1"
+  git -C "$proj" worktree add -q -b "lane-$n" "$w" "$cur"
+  git -C "$w" rm -q gone.txt
+  printf '%s.txt\n' "$n" > "$w/$n.txt"; git -C "$w" add "$n.txt"
+  if [ -n "${2-}" ]; then printf 'gone.txt\n' > "$w/.gitignore"; git -C "$w" add .gitignore; fi
+  git -C "$w" commit -qm "work $n"; git -C "$w" commit -q --allow-empty -m "finalize($n): done"
+}
+dlane w2; verdict w2 passed
+setgate "printf 'PRECIOUS\n' > '$int/gone.txt'; exit 1"
+assert_eq "B1: an untracked file at a deleted path is left for a person (exit 70)" 70 "$(merge_rc w2)"
+assert_eq "B1: the untracked file is kept" "PRECIOUS" "$(cat "$int/gone.txt" 2>/dev/null)"
+no_rolled_back "B1: a kept untracked file never says rolled back"
+rm -f "$int/gone.txt"; git -C "$int" reset -q --hard "$cur"
+dlane w3 ignore; verdict w3 passed
+assert_eq "B1: an ignored file at a deleted path is left for a person (exit 70)" 70 "$(merge_rc w3)"
+assert_eq "B1: the ignored file is kept" "PRECIOUS" "$(cat "$int/gone.txt" 2>/dev/null)"
+rm -f "$int/gone.txt"; git -C "$int" reset -q --hard "$cur"
+# Minor 1: an unrelated untracked file is refused before any reset, and the message says so.
+lane w4 w4.txt "from w4"; verdict w4 passed
+setgate "printf 'x\n' > '$int/unrelated.txt'; exit 1"
+assert_eq "B1: an unrelated untracked file is left for a person (exit 70)" 70 "$(merge_rc w4)"
+assert_contains "B1: the message says nothing was reset" "$(cat "$PWD/err")" "nothing is reset"
+case $(cat "$PWD/err") in *failed\ in*) bad "B1: the message does not claim a failed roll back" "$(cat "$PWD/err")" ;;
+  *) ok "B1: the message does not claim a failed roll back" ;; esac
+rm -f "$int/unrelated.txt"; git -C "$int" reset -q --hard "$cur"
+
+# B2: TERM or HUP to the whole process group during the merge-confirmed line.
+user_gate
+for sig in TERM HUP; do
+  l=g$(printf %s "$sig" | tr A-Z a-z)
+  lane "$l" "$l.txt" "from $sig" >/dev/null; verdict "$l" passed
+  rm -f "$PWD/stalling"
+  setgate "test -f shared.txt && touch '$PWD/stall-armed'"
+  set -m
+  PATH="$PWD/tshim:$PATH" "$h" loop "$run" merge "$l" >/dev/null 2>"$PWD/err" & hp=$!
+  set +m
+  n=0; while [ ! -e "$PWD/stalling" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+  kill "-$sig" -- "-$hp" 2>/dev/null || true
+  rc=0; wait "$hp" || rc=$?
+  assert_eq "B2: $sig to the whole group during the merge-confirmed line lets the merge finish (exit 0)" 0 "$rc"
+  assert_eq "B2: after $sig to the group the merge has its merge-confirmed line" "$l" \
+    "$(jq -r --arg l "$l" 'select(.kind == "merge-confirmed" and .lane == $l) | .lane' "$run/ledger.jsonl")"
+  assert_eq "B2: after $sig to the group the recorded tip follows the branch" "$(tip)" "$(jq -r .tip "$run/integration.json")"
+  git -C "$int" reset -q --hard "$(jq -r .tip "$run/integration.json")"
+done
+user_gate
+cur=$(tip)
+
+# Codex 4701970612: a signal while the gate's worktree is made stops the merge before the gate.
+cat > "$PWD/shim/git" <<EOS
+#!/bin/bash
+if [ -n "\${HO_T_SLOW_WT:-}" ] && [ "\$3" = worktree ] && [ "\$4" = add ]; then touch "$PWD/wt-adding"; sleep 2; fi
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$PWD/shim/git"
+lane x1 x1.txt "from x1"; verdict x1 passed
+rm -f "$PWD/wt-adding" "$PWD/gate2.pid"
+setgate "echo \$\$ > '$PWD/gate2.pid'; sleep 6"
+t0=$(date +%s)
+HO_T_SLOW_WT=1 PATH="$PWD/shim:$PATH" "$h" loop "$run" merge x1 >/dev/null 2>"$PWD/err" & hp=$!
+n=0; while [ ! -e "$PWD/wt-adding" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+kill -TERM "$hp"
+rc=0; wait "$hp" || rc=$?
+t1=$(date +%s)
+assert_eq "H-046 signal: a signal while the gate worktree is made stops the merge (exit 75)" 75 "$rc"
+assert_eq "H-046 signal: the gate never starts after that signal" "no" "$([ -e "$PWD/gate2.pid" ] && echo yes || echo no)"
+if [ $((t1 - t0)) -lt 5 ]; then ok "H-046 signal: the stop does not wait for the gate"; else bad "H-046 signal: the stop does not wait for the gate" "took $((t1 - t0)) s"; fi
+p=$(cat "$PWD/gate2.pid" 2>/dev/null || echo 0); [ "$p" = 0 ] || kill -KILL "$p" 2>/dev/null || true
+assert_eq "H-046 signal: the branch is back at its tip" "$cur" "$(tip)"
+user_gate
+
+# Minor 3: the git confirmation block, by exit code. A hook adds a commit on top of the merge.
+mkdir -p "$PWD/hooks2"
+printf '#!/bin/sh\ngit update-ref HEAD "$(git commit-tree "HEAD^{tree}" -p HEAD -m "made by a hook")"\n' > "$PWD/hooks2/post-merge"
+chmod +x "$PWD/hooks2/post-merge"
+git -C "$proj" config core.hooksPath "$PWD/hooks2"
+lane y1 y1.txt "from y1"; verdict y1 passed
+assert_eq "H-046 confirmation: a merge with an extra commit on top is not confirmed (exit 70)" 70 "$(merge_rc y1)"
+assert_eq "H-046 confirmation: the commit made by the hook is kept" "made by a hook" "$(git -C "$proj" log -1 --format=%s "$(tip)")"
+assert_eq "H-046 confirmation: no merge-confirmed line for that lane" "" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "y1") | .lane' "$run/ledger.jsonl")"
+git -C "$proj" config --unset core.hooksPath
+git -C "$int" reset -q --hard "$cur"

@@ -135,3 +135,66 @@ assert_exit "H-105: a launching holder takes a slot" 0 "$h" slot "$r" acquire st
 assert_exit "H-105: a fresh launching holder keeps it" 73 "$h" slot "$r" acquire stage:lint --holder k2
 touch -t "$(date -v-1H '+%Y%m%d%H%M' 2>/dev/null || date -d '-1 hour' '+%Y%m%d%H%M')" "$r/sessions/k1.json"
 assert_exit "H-105: a launch stuck past the launch window frees its slot" 0 "$h" slot "$r" acquire stage:lint --holder k2
+
+# ---- H-105: a failed launch whose session process runs keeps its worker slot ----
+# pidof <run> <name>: the PID the launcher reported, kept for cleanup (a failed launch's record
+# has no PID).
+pidof_s() { local p; p=$(cut -d' ' -f1 "$1/sessions/$2.pid" 2>/dev/null || true); [ -z "$p" ] || echo "$p" >> "$base/extra.pids"; printf '%s\n' "$p"; }
+# The terminal starts the launcher, then the open fails (the pane cannot be tagged) after the
+# session is already up.
+r=$("$h" run new --workers 1)
+rc=0; HO_FAKE_TMUX_NO_TAG=1 HO_FAKE_TMUX_NO_TAG_DELAY=3 wl "$r" f1 >/dev/null 2>&1 || rc=$?
+fp=$(pidof_s "$r" f1)
+assert_eq "test setup: the open failed while the session process ran" "70 launch-failed yes" \
+  "$rc $(jq -r .status "$r/sessions/f1.json") $(alive "$fp" && echo yes || echo no)"
+assert_eq "H-105: a failed launch whose session runs keeps its worker slot" yes "$([ -f "$r/slots/worker/f1.json" ] && echo yes || echo no)"
+assert_exit "H-105: the next worker waits for that slot" 73 wl "$r" f2
+assert_eq "H-105: cap 1 never shows two worker sessions after a failed open" 1 "$(working_workers "$r")"
+kill "$fp"; wait_gone "$fp" || bad "test setup: f1 did not end" "$fp"
+assert_exit "H-105: once that session process ends, its slot is free" 0 wl "$r" f2
+
+# A session that boots around the boot timeout (validator finding 1): at every timing, cap 1
+# never shows two workers, and a working late session still holds its slot.
+cp "$user/config.json" "$base/user.orig.json"
+setcfg '.session.boot_timeout_seconds = 2'
+for s in 1.7 2.0 2.3 2.6; do
+  r=$("$h" run new --workers 1)
+  jq --arg s "$s" '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: ("[ -n \"${HO_SESSION_NAME:-}\" ] && sleep " + $s + "; echo FOO=bar")}}}' \
+    "$base/user.orig.json" > "$user/config.json"
+  rc1=0; wl "$r" l1 >/dev/null 2>&1 || rc1=$?
+  sleep 1.5
+  cp "$base/user.orig.json" "$user/config.json"
+  rc2=0; wl "$r" l2 >/dev/null 2>&1 || rc2=$?
+  lp=$(pidof_s "$r" l1); pidof_s "$r" l2 >/dev/null
+  n=$(working_workers "$r")
+  l1v=$("$h" session "$r" status l1 | jq -r .liveness)
+  if [ "$n" -le 1 ]; then ok "H-105: boot at ${s}s with a 2s boot timeout: at most one worker runs (l1 rc $rc1, l2 rc $rc2)"
+  else bad "H-105: boot at ${s}s with a 2s boot timeout: at most one worker runs" "$n working, l1 rc $rc1, l2 rc $rc2"; fi
+  if [ "$l1v" = working ]; then
+    assert_eq "H-105: boot at ${s}s: the late session holds its slot" yes "$([ -f "$r/slots/worker/l1.json" ] && echo yes || echo no)"
+    if [ "$rc1" -ne 0 ]; then
+      assert_contains "H-105: boot at ${s}s: close ends the late session" "$("$h" session "$r" close l1 2>&1)" "closed"
+      assert_eq "H-105: boot at ${s}s: close gives the late session's slot back" no "$([ -f "$r/slots/worker/l1.json" ] && echo yes || echo no)"
+    fi
+  fi
+  [ -z "$lp" ] || kill "$lp" 2>/dev/null || true
+done
+cp "$base/user.orig.json" "$user/config.json"
+cp "$base/config.orig.json" "$cfg"
+
+# ---- H-105 / H-090: a launch command killed after the terminal opened (validator finding 2) ----
+# Its record still says launching. Past the launch window its live session is not dead.
+r=$("$h" run new --workers 1)
+# The launch command itself is killed (not a shell around it), as when a tool call times out.
+"$h" session "$r" launch --role worker --name k3 --cwd "$proj/src" --prompt "$base/prompt.md" >/dev/null 2>&1 &
+lp=$!
+i=0; while [ ! -s "$r/sessions/k3.pid" ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i + 1)); done
+kill -9 "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+kp=$(pidof_s "$r" k3)
+assert_eq "test setup: the record says launching and the session runs" "launching yes" "$(jq -r .status "$r/sessions/k3.json") $(alive "$kp" && echo yes || echo no)"
+touch -t "$(date -v-1H '+%Y%m%d%H%M' 2>/dev/null || date -d '-1 hour' '+%Y%m%d%H%M')" "$r/sessions/k3.json"
+assert_eq "H-090: a launching record past the launch window with a live session reads as working" working "$("$h" session "$r" status k3 | jq -r .liveness)"
+assert_exit "H-105: its worker slot is not freed, so the next worker waits" 73 wl "$r" k4
+kill "$kp"; wait_gone "$kp" || bad "test setup: k3 did not end" "$kp"
+assert_eq "H-090: once its session ends, the old launching record reads as dead" dead "$("$h" session "$r" status k3 | jq -r .liveness)"
+assert_exit "H-105: then the slot is free" 0 wl "$r" k4

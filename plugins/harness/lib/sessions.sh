@@ -340,10 +340,12 @@ ho_session_launcher_text() {
     printf 'HO_PROMPT=$(cat %s) || ho_fatal 65 "cannot read the prompt file"\n' "$(ho_q "$prompt")"
   fi
   # Each attempt writes its own PID, then becomes the session process (exec), so the PID
-  # recorded is exactly the session's process.
+  # recorded is exactly the session's process. Between the two it looks for the close flag
+  # once more: a launch that gave up writes the flag first and reads the PID file after, so
+  # either the launch sees this process, or this process sees the flag and never starts.
   printf 'ho_attempt() {\n'
-  printf '  /bin/sh -c '"'"'printf "%%s %%s %%s\\n" "$$" "$1" "$2" > "$3.tmp" && mv -f "$3.tmp" "$3" || exit 70; shift 3; exec "$@"'"'"' ho-session %s %s %s "$@"\n' \
-    "$(ho_q "$HO_RUN_ID")" "$(ho_q "$sid")" "$(ho_q "$pidfile")"
+  printf '  /bin/sh -c '"'"'printf "%%s %%s %%s\\n" "$$" "$1" "$2" > "$3.tmp" && mv -f "$3.tmp" "$3" || exit 70; [ -e "$4" ] && exit 0; shift 4; exec "$@"'"'"' ho-session %s %s %s %s "$@"\n' \
+    "$(ho_q "$HO_RUN_ID")" "$(ho_q "$sid")" "$(ho_q "$pidfile")" "$(ho_q "$closing")"
   printf '}\n'
   printf '%s\n' "$attempts" | while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -388,13 +390,28 @@ EOF_ARGV
   done
 }
 
-# H-105, D26a: a worker launch takes a worker slot before anything is opened, and every failed
-# launch gives it back. The slot is held from then until close, or until the session reads dead.
+# H-105, D26a: a worker launch takes a worker slot before anything is opened. The slot is held
+# from then until close, or until the session reads dead or closed. A failed launch gives it
+# back only when its session reads dead (or never got a record): a session can come up at the
+# boot timeout, or after a terminal open that failed late, and while its process runs it holds
+# the slot. A failed open and a boot time-out write the close flag before they return, so the
+# launcher starts no session after this check (see ho_attempt in the launcher).
 ho_session_launch() {
-  local rc=0
+  local rc=0 rec v
   HO_SLOT_TAKEN=""
   ho_session_launch_one "$@" || rc=$?
-  if [ "$rc" -ne 0 ] && [ -n "$HO_SLOT_TAKEN" ]; then ho_slot_give worker "$HO_SLOT_TAKEN"; fi
+  if [ "$rc" -ne 0 ] && [ -n "$HO_SLOT_TAKEN" ]; then
+    rec="$HO_RUN_DIR/sessions/$HO_SLOT_TAKEN.json"
+    v=dead
+    [ ! -f "$rec" ] || v=$(ho_live_verdict "$rec")
+    case $v in
+      dead | closed) ho_slot_give worker "$HO_SLOT_TAKEN" ;;
+      *)
+        ho_ledger_append slot-kept kind worker holder "$HO_SLOT_TAKEN" reason "launch failed but the session reads $v"
+        printf 'harness: session %s reads %s after the failed launch; it keeps its worker slot until it is closed or ends\n' "$HO_SLOT_TAKEN" "$v" >&2
+        ;;
+    esac
+  fi
   return "$rc"
 }
 

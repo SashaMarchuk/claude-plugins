@@ -88,7 +88,9 @@ case $op in
     [ "${1:-}" = -p ] && [ "${2:-}" = -t ] && [ $# -eq 5 ] || exit 2
     case ${4:-} in @ho_tag) ext=tag ;; @ho_session_id) ext=sid ;; *) exit 2 ;; esac
     ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
-    [ -z "${HO_FAKE_TMUX_NO_TAG:-}" ] || { echo "invalid option: -p" >&2; exit 1; }
+    # HO_FAKE_TMUX_NO_TAG_DELAY=<seconds>: wait that long before refusing the tag, so the
+    # command in the pane is already running when the open fails.
+    if [ -n "${HO_FAKE_TMUX_NO_TAG:-}" ]; then sleep "${HO_FAKE_TMUX_NO_TAG_DELAY:-0}"; echo "invalid option: -p" >&2; exit 1; fi
     ft_log "tmux tag $3 $4 $5"
     printf '%s\n' "$5" > "$(ft_file "$3").$ext"
     ;;

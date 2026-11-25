@@ -10,7 +10,18 @@ scan() {
   for f in "$root"/bin/* "$root"/lib/*.sh; do
     [ -f "$f" ] || continue
     n=$((n + 1))
-    [ "$(basename "$f")" = term.sh ] && continue
+    if [ "$(basename "$f")" = term.sh ]; then
+      # The adapter itself: typing calls only inside the send and key functions, which the
+      # close path above is the one caller of. Opening, reading and closing type nothing.
+      awk -v file="${f#"$root"/}" '
+        /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/ { fn = $0; sub(/\(\).*/, "", fn) }
+        /^[ \t]*#/ { next }
+        /ho_term_[a-z0-9_]*(send|key)|send-keys|keystroke|write text/ {
+          if (fn ~ /^ho_term_(send|key)$/ || fn ~ /^ho_term_[a-z0-9]+_(send|key)$/) next
+          printf "%s:%d:%s: %s\n", file, NR, fn, $0
+        }' "$f"
+      continue
+    fi
     awk -v file="${f#"$root"/}" '
       /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/ { fn = $0; sub(/\(\).*/, "", fn) }
       /^[ \t]*#/ { next }
@@ -38,3 +49,9 @@ printf 'ho_live_poke() {\n  ho_term_key "$handle" "$tag" "$sid" enter\n}\n' >> p
 assert_contains "H-099: the scan finds a planted wake-up key" "$(scan "$PWD/plant")" "lib/liveness.sh"
 printf 'ho_x() {\n  tmux -L ho-harness send-keys -t x " "\n}\n' > plant/lib/liveness.sh
 assert_contains "H-099: the scan finds a direct terminal call outside the adapter" "$(scan "$PWD/plant")" "ho_x"
+cp "$HO_PLUGIN_ROOT"/lib/liveness.sh plant/lib/liveness.sh
+printf 'ho_term_tmux_poke() {\n  ho_tmux send-keys -t "$1" Enter\n}\n' >> plant/lib/term.sh
+assert_contains "H-099: the scan finds a wake-up key planted inside the terminal adapter" "$(scan "$PWD/plant")" "lib/term.sh"
+cp "$HO_PLUGIN_ROOT"/lib/term.sh plant/lib/term.sh
+printf 'ho_term_tmux_open2() {\n  ho_term_tmux_key "$h" "$owner" "$sid" enter\n}\n' >> plant/lib/term.sh
+assert_contains "H-099: the scan finds a key press planted in a terminal function that is not send or key" "$(scan "$PWD/plant")" "ho_term_tmux_open2"

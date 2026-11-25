@@ -31,6 +31,10 @@ export HO_ROOT
 # shellcheck source=../lib/flow.sh
 . "$HO_ROOT/lib/flow.sh"
 
+# No helper may run from inside the project or its worktrees (D37-FLOW-8): drop those
+# folders from PATH before any verb runs.
+ho_path_scrub
+
 ho_usage() {
   cat <<USAGE
 usage: harness <verb> [args]

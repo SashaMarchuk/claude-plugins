@@ -95,3 +95,12 @@ assert_exit "Rebuild model chain: a model name with shell characters is refused"
 before=$(calls | wc -l)
 assert_exit "Rebuild launcher: a launch during a stop is refused" 75 launch w9
 assert_eq "Rebuild launcher: a refused launch opens no terminal" "$before" "$(calls | wc -l)"
+
+# ---- a model name never becomes a command-line flag (PR #90 review, D37-FLOW-8) --------
+# Checked on the parser itself: by this point the run above is stopped, so a launch would
+# end at the STOP check before it reads the model.
+for bad in "--dangerously-skip-permissions" "-p" "m-good|--permission-mode"; do
+  rc=0; bash -c '. "$1/lib/sessions.sh" 2>/dev/null; ho_model_chain "$2"' _ "$HO_PLUGIN_ROOT" "$bad" >/dev/null 2>&1 || rc=$?
+  assert_eq "Rebuild model chain: a model in [$bad] that starts with - is refused (exit 65)" "65" "$rc"
+done
+assert_eq "Rebuild model chain: a normal chain still parses" "m-a m-b " "$(bash -c '. "$1/lib/sessions.sh" 2>/dev/null; ho_model_chain "m-a|m-b"' _ "$HO_PLUGIN_ROOT" | tr '\n' ' ')"

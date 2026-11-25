@@ -61,6 +61,7 @@ ho_model_chain() {
     [ -n "$m" ] || continue
     case $m in
       *[!A-Za-z0-9._:\[\]-]*) printf 'harness: model %s has characters outside A-Z a-z 0-9 . _ : [ ] -\n' "$m" >&2; return 65 ;;
+      -*) printf 'harness: model %s starts with "-"; a model name may not look like a command-line flag\n' "$m" >&2; return 65 ;;
     esac
     out="$out$m
 "

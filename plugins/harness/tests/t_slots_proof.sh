@@ -68,9 +68,15 @@ assert_eq "H-105: slow account command: cap 1 never shows two worker processes" 
 r=$("$h" run new --workers 1)
 acct '[ -n "${HO_SESSION_NAME:-}" ] && sleep 4; echo FOO=bar'
 wl "$r" k1 >/dev/null 2>&1 &
-lp=$!
+wrap=$!
 i=0; while [ "$(jq -r '.handle // ""' "$r/sessions/k1.json" 2>/dev/null)" = "" ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i + 1)); done
-kill -9 "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
+# The launch command itself, by the PID it recorded ($! is only the shell around it). The
+# launcher sleeps 4 s in its account command, so the kill lands before any session starts.
+lp=$(jq -r .launch_pid "$r/sessions/k1.json")
+assert_eq "test setup: the recorded launch PID is the running launch command" yes \
+  "$(ps -o command= -p "$lp" 2>/dev/null | grep -q -- ' launch ' && echo yes || echo no)"
+kill -9 "$lp" 2>/dev/null || true; wait "$wrap" 2>/dev/null || true
+wait_gone "$lp" || bad "test setup: the launch command did not end" "$lp"
 cp "$base/user.orig.json" "$user/config.json"
 age "$r/sessions/k1.json"
 assert_eq "test setup: the launch command is gone and no session runs yet" "launching no" \
@@ -109,3 +115,87 @@ assert_eq "H-090: an old launching record with no launch process recorded reads 
   "$("$h" session "$r" status o1 | jq -r .liveness)"
 assert_exit "H-105: its slot is kept" 73 wl "$r" o2
 cp "$base/user.orig.json" "$user/config.json"
+
+# ---- review round 1 (PR #99) ----
+mkdir -p "$base/noproc" "$base/selfps"
+printf '#!/bin/sh\nexit 1\n' > "$base/noproc/ps"
+chmod +x "$base/noproc/ps"
+# selfps: a process view that holds only the caller's own process and its parents, as in a
+# sandbox. The caller sees itself, so a probe of its own PID passes.
+cat > "$base/selfps/ps" <<'PS'
+#!/bin/sh
+for t in "$@"; do :; done
+a=$$
+while [ -n "$a" ] && [ "$a" != 0 ] && [ "$a" != 1 ]; do
+  [ "$a" = "$t" ] && exec /bin/ps "$@"
+  a=$(/bin/ps -o ppid= -p "$a" 2>/dev/null | tr -d ' ')
+done
+exit 1
+PS
+chmod +x "$base/selfps/ps"
+
+# Close with no readable process table changes nothing.
+r=$("$h" run new --workers 1)
+wl "$r" n1 >/dev/null
+np=$(pid_of "$r" n1)
+rc=0; PATH="$base/noproc:$PATH" "$h" session "$r" close n1 >/dev/null 2>&1 || rc=$?
+assert_eq "H-105: close with no readable process table refuses: non-zero exit, record running, slot held, process alive" \
+  "refused running held alive" \
+  "$([ "$rc" -ne 0 ] && echo refused || echo "rc=0") $(jq -r .status "$r/sessions/n1.json") $([ -f "$r/slots/worker/n1.json" ] && echo held || echo freed) $(alive "$np" && echo alive || echo gone)"
+assert_exit "H-105: after that close the next worker still waits" 73 wl "$r" n2
+assert_eq "H-105: close with no readable process table: cap 1 never shows two worker processes" 1 "$(live_workers "$r" n1 n2)"
+
+# A process view that sees the caller but not the session is no proof of an end.
+r=$("$h" run new --workers 1)
+wl "$r" v1 >/dev/null
+vp=$(pid_of "$r" v1)
+assert_eq "H-090: a view that cannot see the session reads unknown, never dead" unknown \
+  "$(PATH="$base/selfps:$PATH" "$h" session "$r" status v1 | jq -r .liveness)"
+assert_eq "H-090: that status poll leaves the record running and writes no death" "running 0" \
+  "$(jq -r .status "$r/sessions/v1.json") $(grep -c '"session-dead"' "$r/ledger.jsonl" || true)"
+assert_exit "H-105: a launch under that view finds no free slot" 73 env PATH="$base/selfps:$PATH" "$h" session "$r" launch \
+  --role worker --name v2 --cwd "$proj/src" --prompt "$base/prompt.md"
+assert_eq "H-105: narrow process view: cap 1 never shows two worker processes" 1 "$(live_workers "$r" v1 v2)"
+rc=0; PATH="$base/selfps:$PATH" "$h" session "$r" close v1 >/dev/null 2>&1 || rc=$?
+assert_eq "H-105: close under that view does not mark the live worker closed" "running held" \
+  "$(jq -r .status "$r/sessions/v1.json") $([ -f "$r/slots/worker/v1.json" ] && echo held || echo freed)"
+
+# A stop recorded while a launch waits for a slot ends the wait; no worker starts.
+r=$("$h" run new --workers 1)
+wl "$r" t1 >/dev/null
+tp=$(pid_of "$r" t1)
+(c=0; wl "$r" t2 --slot-wait 20 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-t2") &
+wait_file "$r/sessions/t2.json" || bad "test setup: t2 has no record" ""
+"$h" state "$r" stop "test stop" >/dev/null
+kill "$tp"; wait_gone "$tp" || bad "test setup: t1 did not end" "$tp"
+wait_file "$base/rc-t2" 250 || bad "test setup: t2 did not return" ""
+assert_eq "H-105: a stop during the slot wait ends the launch with exit 75 and starts nothing" "75 no" \
+  "$(cat "$base/rc-t2") $([ -f "$r/sessions/t2.pid" ] && echo yes || echo no)"
+assert_eq "H-105: the waiting launch holds no slot after the stop" 0 "$(ls "$r/slots/worker" | wc -l | tr -d ' ')"
+
+# A slot whose holder reads unknown has an owner's way out, at a terminal only.
+r=$("$h" run new --workers 1)
+mkdir -p "$r/sessions" "$r/slots/worker"
+jq -n --arg run "$(basename "$r")" '{schemaVersion: 2, run: $run, name: "u1", role: "worker", session_id: null, pid: null, status: "launching"}' > "$r/sessions/u1.json"
+jq -n --arg run "$(basename "$r")" '{run: $run, kind: "worker", holder: "u1", op: null, since: "x"}' > "$r/slots/worker/u1.json"
+# notty <cmd...>: run the command in a new session, with no terminal at all.
+notty() { perl -e 'use POSIX; POSIX::setsid(); exec @ARGV or exit 127' "$@"; }
+assert_exit "H-105: a forced worker release with no terminal is refused" 65 notty "$h" slot "$r" release worker --holder u1 --force
+# answer <text> <cmd...>: run the command on a terminal (script) and type the text until it reads it.
+# The exit is the command's own: the typing loop may end by a broken pipe once the command is done.
+answer() {
+  local a=$1 st
+  shift
+  { for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do sleep 0.5; printf '%s\n' "$a" || break; done; } 2>/dev/null \
+    | script -q /dev/null "$@" >/dev/null 2>&1 && st=0 || st=${PIPESTATUS[1]}
+  return "$st"
+}
+rc=0; answer nope "$h" slot "$r" release worker --holder u1 --force || rc=$?
+assert_eq "H-105: a wrong answer at the terminal releases nothing" "65 held" "$rc $([ -f "$r/slots/worker/u1.json" ] && echo held || echo freed)"
+rc=0; answer u1 "$h" slot "$r" release worker --holder u1 --force || rc=$?
+assert_eq "H-105: the owner releases the slot of a holder that reads unknown, with a ledger line" "0 freed 1" \
+  "$rc $([ -f "$r/slots/worker/u1.json" ] && echo held || echo freed) $(grep -c '"slot-force-released"' "$r/ledger.jsonl" || true)"
+assert_eq "H-105: the forced release tells the launch not to start" yes "$([ -f "$r/sessions/u1.closing" ] && echo yes || echo no)"
+wl "$r" u2 >/dev/null
+rc=0; answer u2 "$h" slot "$r" release worker --holder u2 --force || rc=$?
+assert_eq "H-105: a working worker's slot cannot be force-released" "65 held" "$rc $([ -f "$r/slots/worker/u2.json" ] && echo held || echo freed)"

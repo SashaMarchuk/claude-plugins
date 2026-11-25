@@ -22,10 +22,23 @@
 # launcher (<name>.launcher, written by the launcher before anything slow) and the session
 # process. A process is the same one only while its PID has the recorded start time.
 #
+# What counts as "gone" (review of PR #99). The caller's view of the process table may be
+# narrower than the sessions' (a sandbox shows a process its own tree only), so "ps printed
+# nothing" alone proves nothing. A process is gone only on positive proof:
+#   - ps shows that PID with another start time or without the session ID (a reused PID), or
+#   - ps shows nothing and the kernel answers "No such process" to a signal-0 probe (kill -0);
+#     a probe that succeeds or is refused means the process may run, so the answer is unknown;
+#   - or the launcher recorded its own end (.ended after its last attempt, .failed when it gave
+#     up): no session process of this launch runs after that, and the launcher starts none.
+# On Linux a checker in another PID namespace than the launch could get "No such process" for
+# a live process, so a record that names a PID namespace is judged only from that namespace.
+# Anything else is unknown, and unknown never frees a slot or marks a session closed.
+#
 # The transcript is found by the session ID: <root>/<transcript.glob of the runtime file>, where
 # <root> is the record's transcript_root, written at launch from the runtime's
 # transcript.root_env (account environment first, then the launch environment), else
-# transcript.root_default. No runtime name is held here (D37-RUNTIME-1).
+# transcript.root_default under the session's HOME (the account's, when it sets one). No
+# runtime name is held here (D37-RUNTIME-1).
 #
 # Requires lib/sessions.sh (identity and record helpers), lib/run.sh and lib/term.sh.
 
@@ -41,32 +54,98 @@ ho_proc_start() {
   LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'
 }
 
-# ho_proc_same <pid> <start>: 0 when that exact process is alive.
-ho_proc_same() {
-  local s
-  [ -n "${2-}" ] || return 1
-  s=$(ho_proc_start "${1-}")
-  [ -n "$s" ] && [ "$s" = "$2" ]
+# ho_proc_absent <pid>: 0 only when the kernel says no process has that PID (kill -0 fails
+# with "No such process"). A success or a refusal ("not permitted") is not proof.
+ho_proc_absent() {
+  local err
+  case ${1-} in '' | *[!0-9]*) return 1 ;; esac
+  err=$(LC_ALL=C kill -0 "$1" 2>&1) && return 1
+  case $err in *"No such process"*) return 0 ;; esac
+  return 1
 }
 
-# ho_live_launch_cmd_alive <record>: 0 when the launch command that wrote the record is alive.
-ho_live_launch_cmd_alive() {
+# ho_proc_state <pid> <start>: alive, gone or unknown for that exact process (PID and start time).
+ho_proc_state() {
+  local s
+  case ${1-} in '' | *[!0-9]*) echo gone; return 0 ;; esac
+  s=$(ho_proc_start "$1")
+  if [ -n "$s" ]; then
+    if [ -n "${2-}" ] && [ "$s" = "$2" ]; then echo alive; else echo gone; fi
+    return 0
+  fi
+  if ho_proc_absent "$1"; then echo gone; else echo unknown; fi
+}
+
+# ho_proc_same <pid> <start>: 0 when that exact process is seen alive.
+ho_proc_same() { [ -n "${2-}" ] && [ "$(ho_proc_state "${1-}" "$2")" = alive ]; }
+
+# ho_live_sid_state <pid> <session-id>: alive (that process runs and its command line holds the
+# session ID), gone (proven, see the top of this file) or unknown.
+ho_live_sid_state() {
+  local pid=${1-} sid=${2-} cmd
+  case $pid in '' | *[!0-9]*) echo gone; return 0 ;; esac
+  [ -n "$sid" ] || { echo gone; return 0; }
+  cmd=$(ps -o command= -p "$pid" 2>/dev/null) || cmd=""
+  if [ -n "$cmd" ]; then
+    case $cmd in *"$sid"*) echo alive ;; *) echo gone ;; esac
+    return 0
+  fi
+  if ho_proc_absent "$pid"; then echo gone; else echo unknown; fi
+}
+
+# ho_live_merge <state>...: alive if any is alive, else unknown if any is unknown, else gone.
+ho_live_merge() {
+  case " $* " in *" alive "*) echo alive ;; *" unknown "*) echo unknown ;; *) echo gone ;; esac
+}
+
+# ho_live_session_state <record>: the session process (the recorded PID, and the newer PID the
+# launcher reported for this run and session after a model fallback).
+ho_live_session_state() {
+  local rec=$1 sid pid fpid
+  sid=$(jq -r '.session_id // ""' "$rec" 2>/dev/null) || sid=""
+  [ -n "$sid" ] || { echo gone; return 0; }
+  pid=$(jq -r '.pid // "" | tostring' "$rec" 2>/dev/null) || pid=""
+  fpid=$(ho_session_pidfile_pid "$(jq -r '.pid_file // ""' "$rec" 2>/dev/null)" "$sid")
+  ho_live_merge "$(ho_live_sid_state "$pid" "$sid")" "$(ho_live_sid_state "$fpid" "$sid")"
+}
+
+# ho_live_launch_cmd_state <record>: the launch command that wrote the record: alive, gone,
+# unknown, or none when the record names none.
+ho_live_launch_cmd_state() {
   local p s
   p=$(jq -r '.launch_pid // "" | tostring' "$1" 2>/dev/null) || p=""
   s=$(jq -r '.launch_start // ""' "$1" 2>/dev/null) || s=""
-  ho_proc_same "$p" "$s"
+  [ -n "$s" ] || { echo none; return 0; }
+  ho_proc_state "$p" "$s"
 }
 
-# ho_live_launch_alive <record>: 0 when the launch command or the launcher of this launch is
-# alive. Reads only.
+# ho_live_launch_cmd_alive <record>: 0 when the launch command that wrote the record is alive.
+ho_live_launch_cmd_alive() { [ "$(ho_live_launch_cmd_state "$1")" = alive ]; }
+
+# ho_live_launcher_state <record>: the launcher: alive, gone, unknown, or none (it never
+# recorded itself).
+ho_live_launcher_state() {
+  local lf="${1%.json}.launcher" p="" s=""
+  [ -f "$lf" ] || { echo none; return 0; }
+  read -r p s < "$lf" 2>/dev/null || [ -n "$p" ] || { echo unknown; return 0; }
+  ho_proc_state "$p" "$s"
+}
+
+# ho_live_launch_alive <record>: 0 when the launch command or the launcher is seen alive.
 ho_live_launch_alive() {
-  local rec=$1 p s lf
-  ho_live_launch_cmd_alive "$rec" && return 0
-  lf="${rec%.json}.launcher"
-  [ -f "$lf" ] || return 1
-  p="" s=""
-  read -r p s < "$lf" 2>/dev/null || [ -n "$p" ] || return 1
-  ho_proc_same "$p" "$s"
+  ho_live_launch_cmd_alive "$1" || [ "$(ho_live_launcher_state "$1")" = alive ]
+}
+
+# ho_live_ns: this process's PID namespace (Linux), or nothing.
+ho_live_ns() { readlink /proc/self/ns/pid 2>/dev/null || true; }
+
+# ho_live_view_ok <record>: 0 when this caller can judge the record's processes at all: the
+# process table can be read, and the record's PID namespace (when it names one) is ours.
+ho_live_view_ok() {
+  local ns
+  ho_live_ps_ok || return 1
+  ns=$(jq -r '.pid_ns // ""' "$1" 2>/dev/null) || return 1
+  [ -z "$ns" ] || [ "$ns" = "$(ho_live_ns)" ]
 }
 
 # ho_live_mtime <file>: seconds since the epoch, or nothing.
@@ -88,7 +167,14 @@ ho_live_transcript_root() {
     v=$(printf '%s\n' "$envlines" | ho_account_env_parse 2>/dev/null | awk -F '\t' -v k="$var" '$1 == k { v = $2 } END { print v }')
   fi
   if [ -z "$v" ] && [ -n "$var" ]; then v=$(printenv "$var" 2>/dev/null || true); fi
-  if [ -z "$v" ] && [ -n "$def" ]; then v=${def//\{home\}/$HOME}; fi
+  # {home} is the session's HOME: the account's, when its command sets one (Codex review of
+  # PR #99), as the launcher exports it; else the launch environment's.
+  if [ -z "$v" ] && [ -n "$def" ]; then
+    local h=""
+    [ -z "$envlines" ] || h=$(printf '%s\n' "$envlines" | ho_account_env_parse 2>/dev/null | awk -F '\t' '$1 == "HOME" { v = $2 } END { print v }')
+    case $h in /*) ;; *) h=$HOME ;; esac
+    v=${def//\{home\}/$h}
+  fi
   case $v in /*) printf '%s\n' "${v%/}" ;; *) printf '\n' ;; esac
 }
 
@@ -119,38 +205,37 @@ ho_live_transcript() {
 
 # ho_live_verdict <record>: print the verdict (see the top of this file) and nothing else.
 ho_live_verdict() {
-  local rec=$1 status pid
+  local rec=$1 status sess cmd lch ended=0
   status=$(jq -r 'if type == "object" and .run == $run then (.status // "") else "" end' --arg run "$HO_RUN_ID" "$rec" 2>/dev/null) || status=""
   case $status in
     closed) echo closed; return 0 ;;
-    launch-failed | boot-failed | dead)
-      # A failed launch is dead only while no process of the session runs, and only when the
-      # process table can be read.
-      ho_live_ps_ok || { echo unknown; return 0; }
-      if [ -n "$(ho_session_current_pid "$rec" 2>/dev/null)" ]; then echo working; else echo dead; fi
-      return 0
-      ;;
-    launching)
-      # The session process first: a launch command can be killed after its session started.
-      # With no session process, the launch is alive while its launch command or launcher is.
-      # A launching record always names its launch command; one that does not is not proof.
-      ho_live_ps_ok || { echo unknown; return 0; }
-      if [ -n "$(ho_session_current_pid "$rec" 2>/dev/null)" ]; then echo working
-      elif ho_live_launch_alive "$rec"; then echo starting
-      elif [ -z "$(jq -r '.launch_start // ""' "$rec" 2>/dev/null)" ]; then echo unknown
-      else echo dead; fi
-      return 0
-      ;;
-    running) ;;
+    launching | running | launch-failed | boot-failed | dead) ;;
     *) echo unknown; return 0 ;;
   esac
-  ho_live_ps_ok || { echo unknown; return 0; }
-  pid=$(ho_session_current_pid "$rec")
-  [ -n "$pid" ] && { echo working; return 0; }
-  # The session process is gone. While its launcher lives, it may start the next model of the
-  # chain, so the gap is "starting"; a launcher that gave up wrote .failed first.
-  [ -f "${rec%.json}.failed" ] && { echo dead; return 0; }
-  if ho_live_launch_alive "$rec"; then echo starting; else echo dead; fi
+  ho_live_view_ok "$rec" || { echo unknown; return 0; }
+  sess=$(ho_live_session_state "$rec")
+  [ "$sess" = alive ] && { echo working; return 0; }
+  case $status in
+    launch-failed | boot-failed | dead)
+      # The close flag was written before this status, so the launcher starts no session now.
+      if [ "$sess" = gone ]; then echo dead; else echo unknown; fi
+      return 0
+      ;;
+  esac
+  cmd=$(ho_live_launch_cmd_state "$rec")
+  lch=$(ho_live_launcher_state "$rec")
+  { [ -f "${rec%.json}.ended" ] || [ -f "${rec%.json}.failed" ]; } && ended=1
+  # A launch command or launcher seen alive: the launch goes on (a slot wait, an account
+  # command, a model fallback), unless the launcher has recorded its end.
+  if [ "$cmd" = alive ]; then echo starting; return 0; fi
+  if [ "$lch" = alive ] && [ "$ended" -eq 0 ]; then echo starting; return 0; fi
+  # The launcher recorded its end: no session process of this launch runs or will start.
+  [ "$ended" -eq 1 ] && [ "$cmd" != unknown ] && { echo dead; return 0; }
+  # Otherwise every recorded process must be proven gone.
+  if [ "$sess" = unknown ] || [ "$cmd" = unknown ] || [ "$lch" = unknown ]; then echo unknown; return 0; fi
+  # A launching record always names its launch command; one that does not is not proof.
+  if [ "$status" = launching ] && [ "$cmd" = none ]; then echo unknown; return 0; fi
+  echo dead
 }
 
 # ho_live_status_one <record>: one JSON line of facts. A running record whose process is gone

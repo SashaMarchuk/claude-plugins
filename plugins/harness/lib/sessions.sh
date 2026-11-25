@@ -11,6 +11,7 @@
 #                                  session's pane or tab
 #   <run>/sessions/<name>.pid      "<pid> <run-id> <session-id>", written by the launcher
 #   <run>/sessions/<name>.launcher "<pid> <start time>" of the launcher, written by it first
+#   <run>/sessions/<name>.ended    written by the launcher when it ends with no session left
 #   <run>/sessions/<name>.closing  present while a close is under way (stops model fallback)
 #   <run>/sessions/<name>.failed   written by the launcher when the session could not start
 #   <run>/launchers/<name>.sh      the generated launcher
@@ -19,8 +20,8 @@
 # The launch command comes from a runtime data file, runtimes/<runtime.main>.json
 # (D37-RUNTIME-1). Accounts come from the user config only (agent decision, T7).
 # Exit codes: 64 usage, 65 refused, 66 not found or another run's session, 69 the session
-# did not start, 70 terminal failed, 73 no free worker slot, 75 the run is stopped, 78 config,
-# 1 close timed out.
+# did not start, 70 terminal failed, 71 the process facts cannot be read (nothing changed),
+# 73 no free worker slot, 75 the run is stopped, 78 config, 1 close timed out.
 #
 # Requires lib/files.sh, lib/config.sh, lib/run.sh, lib/term.sh and lib/isolation.sh.
 
@@ -336,7 +337,7 @@ ho_session_launcher_text() {
   printf 'ho_self=$(ho_proc_start "$$")\n'
   printf '[ -n "$ho_self" ] && printf '"'"'%%s %%s\\n'"'"' "$$" "$ho_self" > %s && mv -f %s %s || ho_fatal 70 "cannot record the launcher process; the session was not started"\n' \
     "$(ho_q "${pidfile%.pid}.launcher.tmp")" "$(ho_q "${pidfile%.pid}.launcher.tmp")" "$(ho_q "${pidfile%.pid}.launcher")"
-  printf '[ -e %s ] && { ho_note "a close is under way; not starting"; exit 0; }\n' "$(ho_q "$closing")"
+  printf '[ -e %s ] && { ho_note "a close is under way; not starting"; : > %s; exit 0; }\n' "$(ho_q "$closing")" "$(ho_q "${pidfile%.pid}.ended")"
   printf 'cd -- %s || ho_fatal 66 "cannot enter the working folder; the session was not started"\n' "$(ho_q "$cwd")"
   if [ -n "$account" ]; then
     declare -f ho_account_env_parse
@@ -358,12 +359,12 @@ ho_session_launcher_text() {
   printf '}\n'
   printf '%s\n' "$attempts" | while IFS= read -r line; do
     [ -n "$line" ] || continue
-    printf '[ -e %s ] && { ho_note "a close is under way; not starting"; exit 0; }\n' "$(ho_q "$closing")"
+    printf '[ -e %s ] && { ho_note "a close is under way; not starting"; : > %s; exit 0; }\n' "$(ho_q "$closing")" "$(ho_q "${pidfile%.pid}.ended")"
     printf 'ho_t0=$(date +%%s)\n'
     printf 'ho_note %s\n' "$(ho_q "starting session $sid")"
     printf 'ho_attempt %s %s\n' "$(ho_q "$cmdpath")" "$line"
     printf 'ho_rc=$?; ho_dt=$(( $(date +%%s) - ho_t0 ))\n'
-    printf 'if [ "$ho_rc" -eq 0 ] || [ "$ho_dt" -gt %s ] || [ -e %s ]; then ho_note "session ended rc=$ho_rc after ${ho_dt}s"; exit "$ho_rc"; fi\n' "$grace" "$(ho_q "$closing")"
+    printf 'if [ "$ho_rc" -eq 0 ] || [ "$ho_dt" -gt %s ] || [ -e %s ]; then ho_note "session ended rc=$ho_rc after ${ho_dt}s"; : > %s; exit "$ho_rc"; fi\n' "$grace" "$(ho_q "$closing")" "$(ho_q "${pidfile%.pid}.ended")"
     printf 'ho_note "start failed rc=$ho_rc after ${ho_dt}s; trying the next model"\n'
   done
   printf 'ho_fatal 69 "every model in the chain failed to start"\n'
@@ -501,18 +502,19 @@ ho_session_launch_one() {
     return 65
   fi
   # Files of an earlier launch of this name (its record was removed) must not speak for this one.
-  rm -f "$sdir/$name.pid" "$sdir/$name.closing" "$sdir/$name.failed" "$sdir/$name.launcher"
+  rm -f "$sdir/$name.pid" "$sdir/$name.closing" "$sdir/$name.failed" "$sdir/$name.launcher" "$sdir/$name.ended"
   # The reserved record says "launching" and names this launch command (PID and start time)
   # from its first write. It reads dead only once this command, the launcher and the session
   # process are all gone (lib/liveness.sh), never by its age: a launch may wait for a slot or
   # for its account command for as long as it needs.
-  local launch_pid=$$ launch_start
+  local launch_pid=$$ launch_start pid_ns
+  pid_ns=$(ho_live_ns)
   launch_start=$(ho_proc_start "$launch_pid")
   [ -n "$launch_start" ] || { rm -f "$rec"; echo "harness: cannot read the start time of the launch process; nothing was launched" >&2; return 1; }
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg ts "$(ho_now)" \
-    --argjson lp "$launch_pid" --arg ls "$launch_start" \
+    --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, session_id: null, pid: null, status: "launching", created: $ts,
-      launch_pid: $lp, launch_start: $ls}' \
+      launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   # The worker cap: counted and taken under the slot lock, while the name is reserved.
   if [ "$role" = worker ]; then
@@ -524,6 +526,14 @@ ho_session_launch_one() {
       return "$src"
     fi
     HO_SLOT_TAKEN=$name
+    # A stop recorded while this launch waited ends it here: no worker starts in a stopped run.
+    stopped=0
+    ho_stopped || stopped=$?
+    if [ "$stopped" -ne 1 ]; then
+      rm -f "$rec"
+      echo "harness: the run was stopped (or its stop state is unknown) while the launch waited; no session is launched" >&2
+      return 75
+    fi
   fi
 
   local sid tag ldir launcher title pidfile closing group attempts
@@ -537,9 +547,9 @@ ho_session_launch_one() {
   # the other and stops.
   if [ -n "$resume" ]; then
     jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg sid "$sid" --arg pidfile "$sdir/$name.pid" --arg ts "$(ho_now)" \
-      --argjson lp "$launch_pid" --arg ls "$launch_start" \
+      --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" \
       '{schemaVersion: 2, run: $run, name: $name, session_id: $sid, pid: null, pid_file: $pidfile, status: "launching", created: $ts,
-        launch_pid: $lp, launch_start: $ls}' \
+        launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
       | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
     local f other=""
     for f in "$sdir"/*.json; do
@@ -615,11 +625,11 @@ ho_session_launch_one() {
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg account "$acct_name" \
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
-    --arg troot "$troot" --argjson lp "$launch_pid" --arg ls "$launch_start" \
+    --arg troot "$troot" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
       runtime: $runtime, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
-      transcript_root: (if $troot == "" then null else $troot end), launch_pid: $lp, launch_start: $ls}' \
+      transcript_root: (if $troot == "" then null else $troot end), launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"
 
@@ -686,9 +696,15 @@ ho_session_close() {
   fi
   status=$(jq -r '.status // ""' "$rec")
   [ "$status" = closed ] && { printf 'session %s already closed\n' "$name"; return 0; }
+  # Close marks a session closed and frees its slots only on proof (lib/liveness.sh). A caller
+  # that cannot read the process facts of this record changes nothing.
+  if ! ho_live_view_ok "$rec"; then
+    printf 'harness: the process table cannot be read here, so session %s cannot be checked; nothing was closed\n' "$name" >&2
+    return 71
+  fi
   # A launching record may be closed once the launch command that wrote it is gone (its own
   # check, not the record's age). Its session, if one runs, is then closed as any other.
-  if [ "$status" = launching ] && { ho_live_launch_cmd_alive "$rec" || [ -z "$(jq -r '.launch_start // ""' "$rec" 2>/dev/null)" ]; }; then
+  if [ "$status" = launching ] && [ "$(ho_live_launch_cmd_state "$rec")" != gone ]; then
     printf 'harness: session %s is still launching; close it once the launch has finished\n' "$name" >&2
     return 65
   fi
@@ -702,8 +718,16 @@ ho_session_close() {
   local closing="$HO_RUN_DIR/sessions/$name.closing"
   : > "$closing" || return 1
   sleep 0.3
-  pid=$(ho_session_live_pid "$rec") || return 1
-  if [ -z "$pid" ]; then
+  local sstate
+  sstate=$(ho_live_session_state "$rec")
+  if [ "$sstate" = unknown ]; then
+    rm -f "$closing"
+    printf 'harness: the process of session %s can be neither seen nor proven gone from here; nothing was closed\n' "$name" >&2
+    return 71
+  fi
+  pid=""
+  [ "$sstate" = gone ] || pid=$(ho_session_live_pid "$rec") || return 1
+  if [ "$sstate" = gone ]; then
     ho_session_set "$rec" '.status = "closed" | .closed = $ts | .closed_reason = "process-gone"' --arg ts "$(ho_now)" || return 1
     ho_ledger_append session-close name "$name" session_id "$sid" result process-gone
     ho_slot_give_all "$name"
@@ -750,7 +774,7 @@ ho_session_close() {
   fi
   local deadline
   deadline=$(( $(date +%s) + $(ho_cfg_int '.session.close_timeout_seconds' 90) ))
-  while ho_session_identity "$pid" "$sid"; do
+  while [ "$(ho_live_sid_state "$pid" "$sid")" != gone ]; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
       rm -f "$closing"
       ho_ledger_append session-close-timeout name "$name" session_id "$sid" pid "$pid"
@@ -763,7 +787,7 @@ ho_session_close() {
   # terminal is left alone. Otherwise its tab or pane is closed (it may have closed by itself),
   # but only while it still carries this session's tag: its handle may name another session by
   # now (H-103, S8-27). A skipped close is recorded with its reason.
-  if [ -n "$(ho_session_live_pid "$rec")" ]; then
+  if [ "$(ho_live_session_state "$rec")" != gone ]; then
     ho_ledger_append session-close-timeout name "$name" session_id "$sid" reason "a new process of the session is running"
     printf 'harness: session %s started a new process during the close; left open\n' "$name" >&2
     return 1

@@ -96,7 +96,9 @@ assert_eq "H-090: status without a name lists every session" 5 "$(st | wc -l | t
 
 # ---- a launch that gave up while its session came up anyway is not dead ----
 sid6=11111111-2222-4333-8444-777777777777
-bash -c "sleep 600; : $sid6" &
+# exec: the recorded PID is the sleeper itself (its name carries the session ID), so cleanup
+# stops it by that PID and no orphan keeps the runner's output open.
+bash -c "exec -a 'ho-fake-$sid6' sleep 600" &
 p6=$!
 echo "$p6" >> "$base/extra.pids"
 jq -n --arg run "$(basename "$run")" --arg pid "$p6" --arg sid "$sid6" '{schemaVersion: 2, run: $run, name: "w6", role: "worker",
@@ -122,3 +124,15 @@ assert_eq "H-090: a transcript line that names the fence cannot close it (one fe
   "1 ----- END SESSION transcript w1 -----" "$(printf '%s\n' "$out" | grep -c '^----- END SESSION' | tr -d ' ') $(printf '%s\n' "$out" | tail -n 1)"
 assert_contains "H-090: the forged line is kept, marked as session text" "$out" "[session-text] ----- END SESSION transcript w1 -----"
 assert_contains "H-090: a forged line in any case and spacing is marked too" "$out" "[session-text]    -- end  Session screen w1"
+
+# ---- the transcript folder follows the account's HOME (Codex review of PR #99) ----
+cp "$user/config.json" "$base/user.keep.json"
+mkdir -p "$base/acct-home"
+jq --arg c "echo HOME=$base/acct-home" '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: $c}}}' "$base/user.keep.json" > "$user/config.json"
+launch w7 >/dev/null
+sid7=$(rec w7 .session_id)
+assert_eq "H-090: an account that sets HOME moves the recorded transcript folder there" "$base/acct-home/.claude" "$(rec w7 .transcript_root)"
+out=$(st w7)
+assert_eq "H-090: the transcript under the account's HOME is found" present "$(printf '%s' "$out" | jq -r .transcript_state)"
+assert_contains "H-090: it is the session's own transcript" "$(printf '%s' "$out" | jq -r .transcript)" "$base/acct-home/.claude/projects/"
+cp "$base/user.keep.json" "$user/config.json"

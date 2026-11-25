@@ -17,8 +17,11 @@
 #   unreadable-fail  the user turn is written, the transcript is made unreadable, exit 1
 #   queue-fail    an enqueue record is written, then exit 1
 #   term-ignore   it ignores SIGTERM and sleeps 15 s (the engine must use SIGKILL)
+#   signal-exit   writes nothing and ends by its own SIGKILL (exit 137)
 # The transcript is found as $HOME/.claude/projects/*/<session-id>.jsonl.
 set -euo pipefail
+# The engine runs a message command with a fixed system PATH; the tests name where jq is.
+command -v jq > /dev/null 2>&1 || PATH="$PATH:${HO_FAKE_TOOLS_PATH:-}"
 sid=${1:?session id}
 id=${2:?instruction id}
 file=${3:?text file}
@@ -64,6 +67,7 @@ case ${HO_FAKE_MSG_MODE:-deliver} in
     jq -cn --arg c "$(cat "$file")" '{type: "queue-operation", operation: "enqueue", content: $c}' >> "$tr"
     exit 1
     ;;
+  signal-exit) kill -KILL $$ ;;
   term-ignore)
     printf '%s\n' "$$" > "${HO_FAKE_MSG_PIDS:-$HOME/fake-msg.pids}.term"
     trap '' TERM

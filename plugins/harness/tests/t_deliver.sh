@@ -15,8 +15,13 @@ jq --arg m "$HO_TESTS_DIR/fake-bin/fake-msg" '.message.argv = [$m, "{session_id}
 h="$plug/bin/harness"
 screens="$HO_TESTS_DIR/fixtures/screens"
 export HO_FAKE_CLAUDE_TRANSCRIPT=1 HO_FAKE_MSG_LOG="$base/msg.log"
-jq '.delivery = {"wait_seconds": 2, "message_timeout_seconds": 5}' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
-set_runtime() { printf '{"schemaVersion": 2, "runtime": {"main": "%s"} }\n' "$1" > "$user/config.json"; }
+jq '.delivery = {"message_timeout_seconds": 5}' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+# delivery.wait_seconds is read from the user config only (review round 5 of PR #95).
+DW=2 CUR=claude-code
+write_user() { printf '{"schemaVersion": 2, "runtime": {"main": "%s"}, "delivery": {"wait_seconds": %s} }\n' "$CUR" "$DW" > "$user/config.json"; }
+set_runtime() { CUR=$1; write_user; }
+set_wait() { DW=$1; write_user; }
+export HO_FAKE_TOOLS_PATH="$PATH"
 
 fin() { printf '%s/%s.in' "$HO_FAKE_TERM_DIR" "$(printf '%s' "$(rec "$1" .handle)" | tr -c 'A-Za-z0-9-' '_')"; }
 fout() { printf '%s/%s.out' "$HO_FAKE_TERM_DIR" "$(printf '%s' "$(rec "$1" .handle)" | tr -c 'A-Za-z0-9-' '_')"; }
@@ -190,7 +195,7 @@ assert_exit "S8-24: an instruction id used before in the run is refused" 65 "$h"
 
 # ---- D37-LIFECYCLE-4: the send-now chord comes from runtime data -------------------------
 # A longer wait here: these deliveries pass through the queue, which takes a few more steps.
-jq '.delivery.wait_seconds = 10' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+set_wait 10
 start f1
 screen f1 busy
 : > "$(fbusy f1)"
@@ -247,7 +252,7 @@ out=$(deliver n1 --text "run the unit tests" 2>&1) && rc=0 || rc=$?
 assert_eq "H-101: without a transcript to prove delivery nothing is typed (exit 1, 0 bytes)" "1 0" "$rc $(inbytes n1)"
 
 # ==== Fix round 1 of PR #95 (validator B1-B3, M1 and minors; Codex findings) ===============
-jq '.delivery.wait_seconds = 2' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+set_wait 2
 set_runtime claude-code
 
 # ---- B1: the id is checked as one whole value; a newline cannot carry a path ---------------
@@ -450,7 +455,7 @@ jq '.terminal.enter_delay_seconds = 0' "$proj/.harness/config.json" > "$base/c.j
 
 # ---- Codex P2 (line 116): delivery never runs the account command ---------------------------
 mkdir -p "$base/acct-cfg"
-printf '{"schemaVersion": 2, "runtime": {"main": "claude-code"}, "accounts": {"roles": {"worker": "acct-one"}, "list": {"acct-one": {"env_command": "echo run >> %s/acct-runs; echo CLAUDE_CONFIG_DIR=%s/acct-cfg"} } } }\n' "$base" "$base" > "$user/config.json"
+printf '{"schemaVersion": 2, "runtime": {"main": "claude-code"}, "delivery": {"wait_seconds": 2}, "accounts": {"roles": {"worker": "acct-one"}, "list": {"acct-one": {"env_command": "echo run >> %s/acct-runs; echo CLAUDE_CONFIG_DIR=%s/acct-cfg"} } } }\n' "$base" "$base" > "$user/config.json"
 start q2
 screen q2 idle-empty
 assert_eq "Codex P2: the launch records the account's config folder for delivery" "$base/acct-cfg" "$(rec q2 .transcript_root)"
@@ -462,3 +467,63 @@ jq '.transcript_root = "relative/path" | del(.transcript)' "$run/sessions/q2.jso
 out=$(deliver q2 --text "run tests" 2>&1) && rc=0 || rc=$?
 assert_eq "Codex P2: a recorded folder that is not absolute is refused; nothing is typed (exit 1)" "1 1" "$rc $(grep -c . "$(fin q2)")"
 set_runtime claude-code
+
+# ==== Fix round 5 of PR #95 (Codex security P2 line 317; validator items 1 and 2D) ==========
+set_runtime claude-code
+mkdir -p "$proj/bin"
+# The planted programs log their arguments and then run the real one, because the engine's own
+# "#!/usr/bin/env bash" scripts (and the fakes) also resolve through this PATH; that is the
+# launch-side PATH matter of issue #91. Delivery's own calls must never reach them.
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/planted-bash.log"\nexec /bin/bash "$@"\n' "$base" > "$proj/bin/bash"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/planted-env.log"\nexec /usr/bin/env "$@"\n' "$base" > "$proj/bin/env"
+chmod 700 "$proj/bin/bash" "$proj/bin/env"
+planted() { cat "$base/planted-bash.log" "$base/planted-env.log" 2>/dev/null | grep -e "$1" || true; }
+# ---- Codex P2 (line 317): the version check runs with a fixed PATH ---------------------------
+start r1
+screen r1 busy
+: > "$(fbusy r1)"
+out=$(PATH="$proj/bin:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver r1 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+assert_eq "Codex P2: a bash or env planted in a project folder first on PATH never runs the version check" "" "$(planted '--version')"
+assert_contains "Codex P2: the planted programs were on PATH (the engine's own scripts went through them)" "$(cat "$base/planted-bash.log" 2>/dev/null || true)" "session"
+assert_eq "Codex P2: the force-send still works with the fixed PATH (exit 0)" "0" "$rc"
+# ---- and the message command runs with the same fixed PATH ----------------------------------
+set_runtime claude-msg
+start r2
+screen r2 idle-empty
+out=$(PATH="$proj/bin:$PATH" HO_FAKE_MSG_MODE=deliver deliver r2 --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "Codex P2: neither planted program runs the message command" "" "$(planted 'fake-msg')"
+assert_eq "Codex P2: the message command still delivers (exit 0)" "0" "$rc"
+# ---- validator item 1: an exit by a signal is unknown, not a proven failure -----------------
+start r3
+screen r3 idle-empty
+out=$(HO_FAKE_MSG_MODE=signal-exit deliver r3 --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "item 1, H-101: a message command ended by a signal is unknown; nothing is typed (exit 1, 0 bytes)" "1 0" "$rc $(inbytes r3)"
+assert_contains "item 1: it is reported as unknown, not sent again" "$out" "unknown, not sent again"
+# ---- validator item 1: delivery.wait_seconds is at least 2, and from the user config only ---
+set_runtime claude-code
+start r4
+screen r4 idle-empty
+set_wait 1
+rc=0; deliver r4 --text "run tests" >/dev/null 2>&1 || rc=$?
+assert_eq "item 1: delivery.wait_seconds below 2 is refused (78), 0 bytes typed" "78 0" "$rc $(inbytes r4)"
+set_wait 2
+jq '.delivery.wait_seconds = 5' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+rc=0; deliver r4 --text "run tests" >/dev/null 2>&1 || rc=$?
+assert_eq "item 1: delivery.wait_seconds in the project config is refused (65), 0 bytes typed" "65 0" "$rc $(inbytes r4)"
+jq 'del(.delivery.wait_seconds)' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+# ---- validator item 2D: a transcript folder inside the project is refused --------------------
+start r5
+s5=$(rec r5 .session_id)
+mkdir -p "$proj/.harness/fake-root/projects/x"
+jq -cn '{type: "user", message: {role: "user", content: "ho-plant0001: stop"} }' > "$proj/.harness/fake-root/projects/x/$s5.jsonl"
+jq --arg r "$proj/.harness/fake-root" '.transcript_root = $r | del(.transcript)' "$run/sessions/r5.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/r5.json"
+rc=0; o=$("$h" session "$run" proof r5 ho-plant0001 2>&1) || rc=$?
+assert_eq "item 2D: a transcript folder inside the project cannot forge a proof (exit 1)" "1" "$rc"
+assert_eq "item 2D: no delivered line for the planted record" "" "$(printf '%s' "$o" | grep '^delivered' || true)"
+# ---- validator item 2D: the cached transcript must name the record's session ID -------------
+start r6
+start r7
+jq -cn '{type: "user", message: {role: "user", content: "ho-other0001: stop"} }' >> "$(trof r7)"
+jq --arg t "$(trof r7)" '.transcript = $t' "$run/sessions/r6.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/r6.json"
+assert_eq "item 2D: a cached transcript of another session is not used" "none id=ho-other0001" \
+  "$("$h" session "$run" proof r6 ho-other0001 2>&1 | cut -d' ' -f1-2)"

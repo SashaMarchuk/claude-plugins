@@ -76,6 +76,47 @@ ho_deliver_id_ok() {
 
 ho_deliver_bytes() { printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '; }
 
+# ho_deliver_outside_project <folder>: 0 when the folder (resolved) is not the project, its
+# worktrees folder or a worktree, nor inside one. The same identity check the launch uses for
+# the runtime binary.
+ho_deliver_outside_project() {
+  ho_session_runtime_path_ok "$1/ho-probe" 2>/dev/null
+}
+
+# ho_deliver_exec_path <program>: the PATH for a program that delivery runs (the version check
+# and the message command): the fixed system folders and the program's own folder, never a
+# folder of the project or a worktree, and never the caller's PATH. So a "#!/usr/bin/env bash"
+# line cannot pick up an interpreter planted in a project folder (Codex review, PR #95). The
+# launch's own PATH is a separate matter (issue #91).
+ho_deliver_exec_path() {
+  local d p=/usr/bin:/bin:/usr/sbin:/sbin
+  d=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || d=""
+  case $d in '' | *:* | *"
+"*) ;; *) ho_deliver_outside_project "$d" && p="$p:$d" ;; esac
+  printf '%s\n' "$p"
+}
+
+# ho_deliver_wait_setting: delivery.wait_seconds from the user config only, a whole number of
+# at least 2 (default 30). It decides when a failed message command counts as a proven failure,
+# so a project config may not set it (65), as with session.permissions; a value below 2 or not
+# a number exits 78 (validator, PR #95).
+ho_deliver_wait_setting() {
+  local v
+  v=$(jq -r 'if type == "object" then (.delivery.wait_seconds // null) else null end | if . == null then "" else tostring end' \
+    "$HO_PROJECT_DIR/.harness/config.json" 2>/dev/null) || v=""
+  if [ -n "$v" ]; then
+    printf 'harness: the project config sets delivery.wait_seconds; it decides when a message counts as failed, so it belongs in the user config %s\n' "$(ho_user_config)" >&2
+    return 65
+  fi
+  v=$(ho_cfg_user '.delivery.wait_seconds' | jq -r 'if . == null then "30" else tostring end') || return 78
+  case $v in '' | *[!0-9]*) v=x ;; esac
+  if [ "$v" = x ] || [ "${#v}" -gt 4 ] || [ "$((10#$v))" -lt 2 ]; then
+    echo "harness: delivery.wait_seconds must be a whole number of at least 2" >&2
+    return 78
+  fi
+  printf '%s\n' "$((10#$v))"
+}
+
 # ho_deliver_record <name>: the record of a running session of this run, with a live process.
 ho_deliver_record() {
   local name=$1 rec owner
@@ -111,12 +152,21 @@ ho_deliver_transcript() {
   case $root in *"
 "*) return 1 ;; esac
   [ -d "$root" ] || return 1
-  cached=$(jq -r '.transcript // ""' "$rec")
-  case $cached in
-    "$root"/*) [ -f "$cached" ] && [ ! -L "$cached" ] && [ -r "$cached" ] && { printf '%s\n' "$cached"; return 0; } ;;
-  esac
+  # A folder of the project or a worktree is never a transcript folder: a record there could
+  # be planted (validator, PR #95).
+  ho_deliver_outside_project "$root" || return 1
   sid=$(jq -r '.session_id // ""' "$rec")
   ho_session_uuid_ok "$sid" 2>/dev/null || return 1
+  # The cached path counts only inside the root and only when its file name or its folder
+  # names this session's ID, so it cannot point at another session's transcript.
+  cached=$(jq -r '.transcript // ""' "$rec")
+  case $cached in
+    "$root"/*)
+      case "$(basename "$cached")/$(basename "$(dirname "$cached")")" in
+        *"$sid"*) [ -f "$cached" ] && [ ! -L "$cached" ] && [ -r "$cached" ] && { printf '%s\n' "$cached"; return 0; } ;;
+      esac
+      ;;
+  esac
   glob=$(jq -r '.transcript.glob' "$profile")
   glob=${glob//\{session_id\}/$sid}
   for f in "$root"/$glob; do
@@ -314,7 +364,7 @@ ho_deliver_chord() {
   case $cmd in /*) ;; *) cmd="" ;; esac
   if [ -n "$cmd" ] && { [ ! -x "$cmd" ] || ! ho_session_runtime_path_ok "$cmd" 2>/dev/null; }; then cmd=""; fi
   have=""
-  [ -z "$cmd" ] || have=$("$cmd" --version 2>/dev/null | awk 'NR == 1 { print $1 }')
+  [ -z "$cmd" ] || have=$(PATH=$(ho_deliver_exec_path "$cmd") "$cmd" --version 2>/dev/null < /dev/null | awk 'NR == 1 { print $1 }')
   case $have in '' | *[!0-9.]*) have="" ;; esac
   if [ -z "$have" ] || ! ho_deliver_version_ge "$have" "$want"; then
     ho_ledger_append deliver-force-send id "$id" result skipped reason "runtime version ${have:-unknown} is below $want"
@@ -332,7 +382,7 @@ ho_deliver_chord() {
 # per id, whatever happened to the command that sent it (validator N3).
 ho_deliver_wait() {
   local rec=$1 profile=$2 tr=$3 off=$4 id=$5 force=$6 st deadline chord=0
-  deadline=$(( $(date +%s) + $(ho_cfg_int '.delivery.wait_seconds' 30) ))
+  deadline=$(( $(date +%s) + ${HO_DELIVER_WAIT:-30} ))
   while :; do
     # A transcript that cannot be read gives no answer at all, never "none" (validator N2).
     if head -c 1 "$tr" > /dev/null 2>&1; then
@@ -352,7 +402,8 @@ ho_deliver_wait() {
 }
 
 # ho_deliver_message <profile> <record> <id> <file>: run the runtime's message command, if
-# any. 0 exited 0, 1 exited non-zero, 4 timed out, 2 no route, 3 refused before start (the
+# any. 0 exited 0, 1 exited non-zero, 4 timed out, 5 ended by a signal, 2 no route, 3 refused
+# before start (the
 # command is missing, not executable, inside the project, or names a "#!" interpreter that is
 # missing). Only 2 and 3 mean "not started": no process ever ran.
 # The command runs in its own process group. On timeout, and also after a non-zero exit (for
@@ -391,7 +442,7 @@ EOF_ARGV
   esac
   # set -m gives the background job a process group of its own (its ID is the job's PID).
   set -m
-  "$cmd" "${argv[@]:1}" < /dev/null > /dev/null 2>> "$HO_RUN_DIR/logs/deliver.log" &
+  PATH=$(ho_deliver_exec_path "$cmd") "$cmd" "${argv[@]:1}" < /dev/null > /dev/null 2>> "$HO_RUN_DIR/logs/deliver.log" &
   pid=$!
   set +m
   deadline=$(( $(date +%s) + $(ho_cfg_int '.delivery.message_timeout_seconds' 30) ))
@@ -408,6 +459,8 @@ EOF_ARGV
   # A failed command may have left processes in its group: they are stopped before the
   # transcript is judged, so nothing of it can write later.
   ho_deliver_stop_group "$pid"
+  # An exit by a signal (128+N) says nothing about whether the hand-off happened: unknown.
+  [ "$rc" -gt 128 ] && return 5
   return 1
 }
 
@@ -476,6 +529,7 @@ ho_session_deliver() {
   if [ -n "$id" ]; then ho_deliver_id_ok "$id" || return 65; else id=$(ho_deliver_new_id); fi
   local delay
   delay=$(ho_term_enter_delay) || return 78
+  HO_DELIVER_WAIT=$(ho_deliver_wait_setting) || return $?
   local rec profile tr off msg tmp st rc pid screen
   rec=$(ho_deliver_record "$name") || return $?
   profile=$(ho_deliver_profile "$rec") || return $?
@@ -509,7 +563,8 @@ ho_session_deliver() {
   #   - known failure, so the typed route runs with all its checks: the command could not
   #     start (no process ran), or it exited non-zero, its group is gone, and the transcript is
   #     readable and holds no record of the id;
-  #   - unknown (a timeout, exit 0 with no proof, or an unreadable transcript): one
+  #   - unknown (a timeout, an exit by a signal, exit 0 with no proof, or an unreadable
+#     transcript): one
   #     owner-action line, nothing typed, no retry.
   rc=0
   ho_deliver_message "$profile" "$rec" "$id" "$msg" || rc=$?
@@ -518,7 +573,7 @@ ho_session_deliver() {
     3) ho_ledger_append deliver-message id "$id" result "refused before start (command missing, not executable, inside the project, or its interpreter is missing)" ;;
     *)
       local how=sent
-      case $rc in 1) how="failed (non-zero exit)" ;; 4) how="timed out and stopped" ;; esac
+      case $rc in 1) how="failed (non-zero exit)" ;; 4) how="timed out and stopped" ;; 5) how="ended by a signal" ;; esac
       ho_ledger_append deliver-message id "$id" result "$how"
       st=$(ho_deliver_wait "$rec" "$profile" "$tr" "$off" "$id" "$force")
       case $st in

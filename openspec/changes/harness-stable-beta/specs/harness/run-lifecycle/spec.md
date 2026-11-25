@@ -146,7 +146,7 @@ Source: interview 2026-11-24 R20.7, R20.8; D25; S8-20b; S8-27; CTX-exact-pid
 
 ### Requirement: H-088 Automatic recovery after sleep, failure or reboot; asking first is a setting
 After the laptop sleeps, a failure occurs, or the machine reboots, the harness SHALL resume the last run's sessions and continue where it stopped. By default it SHALL do this without asking. A setting SHALL let the owner require permission first. After a reboot, recovery begins at the next harness start (agent decision, design.md D32).
-Decided: design.md D37-LIFECYCLE-1, D37-LIFECYCLE-2
+Decided: design.md D37-LIFECYCLE-1, D37-LIFECYCLE-2, D42h, D42i
 Source: interview 2026-11-24 R20.10 (confirmed restatement), R20.11; D32
 
 #### Scenario: Wake after sleep, default setting
@@ -164,3 +164,39 @@ Source: interview 2026-11-24 R20.10 (confirmed restatement), R20.11; D32
 #### Scenario: A session of the last run is dead (design.md D37-LIFECYCLE-1)
 - **WHEN** recovery finds a session of the last run that is no longer alive
 - **THEN** the harness resumes that session by its ID once if the design.md D14 conditions hold, and otherwise starts a new session with the context pack
+
+#### Scenario: The terminal app was quit or restarted during a run (design.md D42h)
+- **WHEN** the terminal app was quit or restarted during a run and some of the run's sessions are no longer alive
+- **THEN** the harness reads the session registry, leaves every session whose process is alive, and resumes each other session by its recorded ID under its recorded account label (H-139)
+- **AND** each resumed session has a live process within 60 seconds
+
+#### Scenario: A live session stopped on an error after sleep (design.md D42i)
+- **WHEN** the machine wakes, a session of the run is alive, and its last turn ended with an API error
+- **THEN** the harness sends that session a continue instruction with an id, through the delivery of H-101, first within 3 minutes of the wake and at most 3 times, 2 minutes apart
+- **AND** if no hook event follows, the session is handled as a hung session (H-091), so no session with work left stays idle for more than 10 minutes after the wake
+
+### Requirement: H-138 The machine stays awake during a run and while an attended controlling session lives
+While a run is active, the harness SHALL hold one wake assertion for the whole run, not a chain of short ones. It SHALL also hold one for an attended session that controls the harness, for as long as that session lives. Each assertion SHALL end with its process. A setting SHALL switch each one off. See design.md D42j.
+
+Source: owner message 2026-11-25 (iTerm2 incident); D42j
+
+#### Scenario: A long run with no input
+- **WHEN** a run lasts 12 hours on mains power and nobody touches the machine
+- **THEN** the machine does not go into idle sleep during the run
+- **AND** one wake assertion, bound to the watch process, holds for the whole time
+
+#### Scenario: The run ends
+- **WHEN** the run ends or is stopped
+- **THEN** the run's wake assertion ends with the watch process and nothing is left behind
+
+#### Scenario: An attended controlling session between runs
+- **WHEN** the owner controls the harness from an attended session, no run is active, and that session waits for a long reply
+- **THEN** the machine does not go into idle sleep while that session's process lives
+
+#### Scenario: The controlling session closes
+- **WHEN** the attended controlling session ends
+- **THEN** its wake assertion ends with it
+
+#### Scenario: The machine sleeps anyway
+- **WHEN** the machine sleeps for a reason a wake assertion cannot prevent, such as a closed lid
+- **THEN** the recovery of H-088 applies after the wake

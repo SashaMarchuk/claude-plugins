@@ -128,3 +128,10 @@ assert_eq "D26a: ten races for one slot each gave it to exactly one taker" 0 "$r
 # A holder that is gone frees its slots.
 rm -f "$r/sessions/h2.json"
 assert_exit "H-107: the heavy slot of a session with no record is freed" 0 "$h" slot "$r" acquire heavy --holder h3 --op browser-e2e
+
+# A launch that died while its record still says launching frees its slot after the launch window.
+holder "$r" k1; holder "$r" k2
+assert_exit "H-105: a launching holder takes a slot" 0 "$h" slot "$r" acquire stage:lint --holder k1
+assert_exit "H-105: a fresh launching holder keeps it" 73 "$h" slot "$r" acquire stage:lint --holder k2
+touch -t "$(date -v-1H '+%Y%m%d%H%M' 2>/dev/null || date -d '-1 hour' '+%Y%m%d%H%M')" "$r/sessions/k1.json"
+assert_exit "H-105: a launch stuck past the launch window frees its slot" 0 "$h" slot "$r" acquire stage:lint --holder k2

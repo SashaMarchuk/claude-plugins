@@ -48,8 +48,8 @@ ho_live_transcript_root() {
   case $v in /*) printf '%s\n' "${v%/}" ;; *) printf '\n' ;; esac
 }
 
-# ho_live_transcript <record>: the transcript path of the session, or nothing. Exactly one file
-# must match; the session ID is a UUID, so a match is that session's own transcript.
+# ho_live_transcript <record>: the transcript path of the session, or nothing. A file
+# must match the session ID (a UUID), so a match is that session's own transcript.
 ho_live_transcript() {
   local rec=$1 sid root profile glob f found="" n=0
   sid=$(jq -r '.session_id // ""' "$rec" 2>/dev/null)
@@ -60,12 +60,16 @@ ho_live_transcript() {
   [ -n "$root" ] && [ -n "$glob" ] && [ -d "$root" ] || return 0
   case $glob in *..* | /*) return 0 ;; esac
   glob=${glob//\{session_id\}/$sid}
+  # A session resumed in another folder has a file in each; the newest one is the live one.
+  local t best=-1
   for f in "$root"/$glob; do
     [ -f "$f" ] || continue
-    found=$f
+    t=$(ho_live_mtime "$f")
+    [ -n "$t" ] || t=0
+    if [ "$t" -gt "$best" ]; then best=$t; found=$f; fi
     n=$((n + 1))
   done
-  [ "$n" -eq 1 ] && printf '%s\n' "$found"
+  [ "$n" -ge 1 ] && printf '%s\n' "$found"
   return 0
 }
 
@@ -75,10 +79,19 @@ ho_live_verdict() {
   status=$(jq -r 'if type == "object" and .run == $run then (.status // "") else "" end' --arg run "$HO_RUN_ID" "$rec" 2>/dev/null) || status=""
   case $status in
     closed) echo closed; return 0 ;;
-    launch-failed | boot-failed | dead) echo dead; return 0 ;;
+    launch-failed | boot-failed | dead)
+      # A failed launch is dead only while no process of the session runs.
+      if ho_live_ps_ok && [ -n "$(ho_session_current_pid "$rec" 2>/dev/null)" ]; then echo working; else echo dead; fi
+      return 0
+      ;;
     launching)
-      # close uses the same 10 minutes: a launch rewrites its record well within that time.
-      if [ -n "$(find "$rec" -mmin +10 2>/dev/null)" ]; then echo dead; else echo starting; fi
+      # A launch rewrites its record within the boot timeout. Past it (and at least 10 minutes,
+      # as close counts) the launch died.
+      local born window
+      born=$(ho_live_mtime "$rec")
+      window=$(( $(ho_cfg_int '.session.boot_timeout_seconds' 120) + 120 ))
+      [ "$window" -ge 600 ] || window=600
+      if [ -n "$born" ] && [ $(( $(date +%s) - born )) -gt "$window" ]; then echo dead; else echo starting; fi
       return 0
       ;;
     running) ;;
@@ -104,7 +117,8 @@ ho_live_status_one() {
   verdict=$(ho_live_verdict "$rec")
   if [ "$verdict" = working ]; then pid=$(ho_session_live_pid "$rec" 2>/dev/null || true); fi
   if [ "$verdict" = dead ] && [ "$(jq -r '.status // ""' "$rec" 2>/dev/null)" = running ]; then
-    if ho_session_set "$rec" '.status = "dead" | .dead_at = $ts' --arg ts "$(ho_now)"; then
+    if ho_session_set "$rec" 'if .status == "running" then .status = "dead" | .dead_at = $ts else . end' --arg ts "$(ho_now)" \
+      && [ "$(jq -r '.status // ""' "$rec" 2>/dev/null)" = dead ]; then
       ho_ledger_append session-dead name "$(jq -r '.name // ""' "$rec")" session_id "$(jq -r '.session_id // ""' "$rec")" \
         pid "$(jq -r '.pid // ""' "$rec")" reason "process gone"
     fi

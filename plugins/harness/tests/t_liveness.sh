@@ -82,3 +82,15 @@ assert_eq "H-090: the unknown check does not change the record" running "$(rec w
 
 # ---- status of every session: one JSON line each ----
 assert_eq "H-090: status without a name lists every session" 5 "$(st | wc -l | tr -d ' ')"
+
+# ---- a launch that gave up while its session came up anyway is not dead ----
+sid6=11111111-2222-4333-8444-777777777777
+bash -c "sleep 600; : $sid6" &
+p6=$!
+echo "$p6" >> "$base/extra.pids"
+jq -n --arg run "$(basename "$run")" --arg pid "$p6" --arg sid "$sid6" '{schemaVersion: 2, run: $run, name: "w6", role: "worker",
+  session_id: $sid, pid: ($pid | tonumber), pid_file: "/nonexistent/w6.pid", status: "boot-failed", runtime: "claude-code"}' > "$run/sessions/w6.json"
+assert_eq "H-090: a boot-failed record whose session process runs reads as working" working "$(st w6 | jq -r .liveness)"
+kill "$p6"
+wait_gone "$p6" || true
+assert_eq "H-090: a boot-failed record with no process reads as dead" dead "$(st w6 | jq -r .liveness)"

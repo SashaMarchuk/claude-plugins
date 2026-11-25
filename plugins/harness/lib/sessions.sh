@@ -474,6 +474,11 @@ ho_session_launch_one() {
     printf 'harness: session %s is already registered in run %s\n' "$name" "$HO_RUN_ID" >&2
     return 65
   fi
+  # The reserved record says "launching" from the start, so a launch killed before its full
+  # record is written still reads dead after the launch window and frees its slot (lib/slots.sh).
+  jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg ts "$(ho_now)" \
+    '{schemaVersion: 2, run: $run, name: $name, role: $role, session_id: null, pid: null, status: "launching", created: $ts}' \
+    | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   # The worker cap: counted and taken under the slot lock, while the name is reserved.
   if [ "$role" = worker ]; then
     local src=0
@@ -556,6 +561,7 @@ ho_session_launch_one() {
   local handle rc=0
   handle=$(ho_term_open "$group" "$title" "$launcher" "$tag" "$sid") || rc=$?
   if [ "$rc" -ne 0 ]; then
+    : > "$closing" 2>/dev/null || true
     ho_session_set "$rec" '.status = "launch-failed"' || rm -f "$rec"
     ho_ledger_append session-launch-failed name "$name" reason "terminal did not open"
     return "$rc"
@@ -574,6 +580,8 @@ ho_session_launch_one() {
     sleep 0.2
   done
   if [ "$stable" -lt 2 ]; then
+    # The launcher must not start the session later, after its slot was given back.
+    : > "$closing" 2>/dev/null || true
     ho_session_set "$rec" '.status = "boot-failed"' || true
     ho_ledger_append session-boot-failed name "$name" session_id "$sid"
     printf 'harness: session %s did not start; see %s\n' "$name" "$HO_RUN_DIR/logs/launcher.log" >&2

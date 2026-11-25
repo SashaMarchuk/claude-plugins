@@ -86,6 +86,7 @@ assert_eq "S8-27: after list the registry holds the process that runs now" "$now
 jq '.session.boot_timeout_seconds = 3' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 assert_exit "Rebuild model chain: a launch where every model fails to start reports it" 69 env HO_FAKE_CLAUDE_FAIL_MODEL=m-only "$h" session "$run" launch --role worker --name w10 --cwd "$proj/src" --prompt "$base/prompt.md" --model m-only
 assert_eq "Rebuild model chain: the failed launch is recorded as boot-failed" "boot-failed" "$(rec w10 .status)"
+assert_eq "H-105: a boot-failed launch stops its launcher from starting the session later" yes "$([ -f "$run/sessions/w10.closing" ] && echo yes)"
 assert_contains "Rebuild model chain: the launcher leaves a start-failed note that list shows" "$("$h" session "$run" list)" "start failed"
 assert_exit "Rebuild model chain: an empty chain is refused" 65 launch w7 --model ' | '
 assert_exit "Rebuild model chain: a model name with shell characters is refused" 65 launch w8 --model 'a;b'

@@ -12,12 +12,14 @@
 #
 # Placeholders are @NAME@ (upper-case letters, digits, underscores). Rendering is one jq
 # pass over the tokens of the template: each value is inserted literally and never scanned
-# again, so a value may hold any UTF-8 text, placeholders included (field note D3). A value
-# that is not valid UTF-8 is refused (exit 65), never changed. A template token with no
-# value fails the render and nothing is printed. Values reach jq through files, never as
-# one big argument.
+# again, so a value may quote placeholders (field note D3). A value that is not valid UTF-8
+# is refused (exit 65), never changed. Only the names in HO_FLOW_MULTILINE_TOKENS may hold
+# line breaks; any other value with a byte below 0x20 other than tab is refused (exit 65).
+# A template token with no value, or an empty one, fails the render and nothing is
+# printed. Values reach jq through files, never as one big argument.
 #
-# Settings: HO_FLOWS_DIR (default <plugin>/flows). Requires lib/common.sh, jq and iconv.
+# Settings: HO_FLOWS_DIR (default <plugin>/flows). Requires lib/common.sh, lib/tickets.sh
+# (the untrusted fence), jq and iconv.
 
 HO_EXIT_USAGE=64
 HO_EXIT_DATA=65
@@ -27,6 +29,8 @@ HO_FLOW_ROLES="worker validator"
 # Every placeholder a template may use. The engine fills the first five itself.
 HO_FLOW_ENGINE_TOKENS="FLOW_NAME FLOW_STEP_LIST STEP_ID STEP_TITLE STEP_TEXT"
 HO_FLOW_CALLER_TOKENS="RUN_ID TICKET_ID TICKET_TEXT BRANCH BASE WORKDIR STEP_RESULT_FILE VERDICT_FILE"
+# The caller values that may span lines. Every other caller value is one line of text.
+HO_FLOW_MULTILINE_TOKENS="TICKET_TEXT"
 
 ho_flows_dir() { printf '%s\n' "${HO_FLOWS_DIR:-$HO_ROOT/flows}"; }
 
@@ -116,8 +120,10 @@ ho_flow_role_file() {
 }
 
 ho_flow_list() {
-  local d
-  for d in "$(ho_flows_dir)"/*/; do
+  local d root
+  root=$(ho_flows_dir)
+  [ -d "$root" ] || { printf 'harness: flows folder not found: %s\n' "$root" >&2; exit "$HO_EXIT_FLOW"; }
+  for d in "$root"/*/; do
     [ -f "$d/flow.json" ] && basename "$d"
   done
   return 0
@@ -160,21 +166,33 @@ ho_flow_render() {
           printf 'harness: the value of %s is not valid UTF-8 text\n' "$name" >&2
           exit "$HO_EXIT_DATA"
         fi
+        case " $HO_FLOW_MULTILINE_TOKENS " in
+          *" $name "*) ;;
+          *) # One line: no line break, CR or other byte below 0x20; tab is allowed.
+            if [ "$(LC_ALL=C tr -d '\011\040-\377' < "$tmpd/$name" | wc -c)" -ne 0 ]; then
+              printf 'harness: the value of %s must be one line, with no control characters\n' "$name" >&2
+              exit "$HO_EXIT_DATA"
+            fi ;;
+        esac
         shift 3
         ;;
       *) ho_flow_usage; exit "$HO_EXIT_USAGE" ;;
     esac
   done
-  # H-018: ticket text reaches a session only inside the untrusted fence of this ticket,
-  # as `harness tickets show` or `harness tickets fence <id>` prints it.
+  # H-018: ticket text reaches a session only inside the untrusted fence of this ticket.
+  # The value must be byte for byte what `harness tickets fence <TICKET_ID>` prints. To
+  # check this, take the inner lines, undo the prefix the fence puts on marker lines, fence
+  # them again and compare. Any other marker line, a CR or a missing last newline differs.
   if [ -f "$tmpd/TICKET_TEXT" ]; then
-    local tid="" first last
+    local tid=""
     [ -f "$tmpd/TICKET_ID" ] && tid=$(cat "$tmpd/TICKET_ID")
-    first=$(head -n 1 "$tmpd/TICKET_TEXT")
-    last=$(sed -e '/^$/d' "$tmpd/TICKET_TEXT" | tail -n 1)
-    case $first in "----- BEGIN TICKET DATA [id $tid] "*) ;; *) first="" ;; esac
-    if [ -z "$tid" ] || [ -z "$first" ] || [ "$last" != "----- END TICKET DATA [id $tid] -----" ]; then
-      printf 'harness: TICKET_TEXT must be the fenced text of ticket TICKET_ID (from harness tickets show or fence)\n' >&2
+    if [ -z "$tid" ] ||
+      ! LC_ALL=C sed -e '1d' -e '$d' "$tmpd/TICKET_TEXT" |
+        LC_ALL=C awk -v mark="$HO_TK_FENCE_MARK" '
+          tolower($0) ~ mark && substr($0, 1, 14) == "[ticket-text] " { print substr($0, 15); next }
+          { print }' | ho_tk_fence "$tid" > "$tmpd/.fenced" ||
+      ! cmp -s "$tmpd/TICKET_TEXT" "$tmpd/.fenced"; then
+      printf 'harness: TICKET_TEXT must be exactly the output of harness tickets fence TICKET_ID\n' >&2
       exit "$HO_EXIT_DATA"
     fi
   fi
@@ -188,8 +206,9 @@ ho_flow_render() {
     step_prompt="$HO_FLOW_DIR/$step_prompt"
   fi
   # Each value reaches jq as a file (--rawfile V_<NAME>), so a large value is no argument.
+  # An empty value counts as no value, so a template that uses it fails the render.
   for name in $HO_FLOW_CALLER_TOKENS; do
-    [ -f "$tmpd/$name" ] && valargs+=(--rawfile "V_$name" "$tmpd/$name")
+    [ -s "$tmpd/$name" ] && valargs+=(--rawfile "V_$name" "$tmpd/$name")
   done
   jq -nj --arg flow "$flow" --arg step "$step" ${valargs[@]+"${valargs[@]}"} \
     --slurpfile cfg "$HO_FLOW_JSON" --rawfile role "$role_file" --rawfile steptpl "$step_prompt" '
@@ -214,11 +233,11 @@ ho_flow_render() {
        else ($c.steps[] | select(.id == $step)) as $s
          | ($base + {STEP_ID: $s.id, STEP_TITLE: $s.title}) as $sb
          | ($steptpl | render($sb)) as $st
-         | if ($st.missing | length) > 0 then error("missing values: \($st.missing | unique | join(" "))")
+         | if ($st.missing | length) > 0 then error("missing or empty values: \($st.missing | unique | join(" "))")
            else $sb + {STEP_TEXT: $st.out} end
        end) as $all
     | ($role | render($all)) as $r
-    | if ($r.missing | length) > 0 then error("missing values: \($r.missing | unique | join(" "))")
+    | if ($r.missing | length) > 0 then error("missing or empty values: \($r.missing | unique | join(" "))")
       else $r.out end
   ' 2>"$tmpd/.err" || rc=$?
   if [ "$rc" -ne 0 ]; then

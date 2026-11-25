@@ -120,8 +120,10 @@ ho_tk_fence_open() {
 ho_tk_fence_close() { printf -- '----- END TICKET DATA [id %s] -----\n' "$1"; }
 # LC_ALL=C: under a UTF-8 locale tr and awk stop at an invalid byte, and the fence would
 # never close. Byte by byte, every line still gets through.
+# HO_TK_FENCE_MARK is the one definition of a line that names the sentinel (lower case).
+HO_TK_FENCE_MARK='(begin|end)[^a-z]*ticket[^a-z]*data'
 ho_tk_fence_filter() { # stdin -> stdout
-  LC_ALL=C tr -d '\r' | LC_ALL=C awk '{ l = tolower($0) } l ~ /(begin|end)[^a-z]*ticket[^a-z]*data/ { print "[ticket-text] " $0; next } { print }'
+  LC_ALL=C tr -d '\r' | LC_ALL=C awk -v mark="$HO_TK_FENCE_MARK" '{ l = tolower($0) } l ~ mark { print "[ticket-text] " $0; next } { print }'
 }
 ho_tk_fence() { # <label>; text on stdin
   ho_tk_fence_open "$1"

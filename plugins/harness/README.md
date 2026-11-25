@@ -5,7 +5,7 @@ This branch holds the stable-beta rebuild of the harness plugin. The 0.6.0 engin
 ## Engine entry point
 
 The engine has one entry script: `bin/harness <verb> [args]`.
-Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state`, `tickets`, `session` and `flow`.
+Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state`, `tickets`, `session`, `flow` and `loop`.
 Run `bin/harness help` for the list.
 
 ## Ticket queue
@@ -53,6 +53,17 @@ A flow profile is a ready-made flow data file. Two ship: `gsd` and `basic`. Each
 - Placeholders have the form `@NAME@`. The engine fills `FLOW_NAME`, `FLOW_STEP_LIST`, `STEP_ID`, `STEP_TITLE` and `STEP_TEXT`. The caller sets `RUN_ID`, `TICKET_ID`, `TICKET_TEXT`, `BRANCH`, `BASE`, `WORKDIR`, `STEP_RESULT_FILE` and `VERDICT_FILE`. `TICKET_TEXT` must be exactly what `harness tickets fence <id>` prints for ticket `TICKET_ID`; anything else is refused (exit 65). `TICKET_TEXT` is the only value that may span lines. Any other value that holds a line break, a CR, another byte below 0x20 except tab, DEL, a Unicode line or paragraph separator (U+0085, U+2028, U+2029) or a bidi control (U+202A to U+202E, U+2066 to U+2069) is refused (exit 65). `TICKET_ID` must be a number of at most 9 digits (exit 65 otherwise). A placeholder with no value or an empty value fails the render (exit 65), and nothing is printed. Values must be UTF-8 text (anything else is refused with exit 65, never changed; `render` uses `iconv` to check this). They are inserted as they are and never scanned again, so ticket text that quotes a placeholder is safe. Each value reaches jq through a temp file, so a large ticket is no problem.
 - There is no default flow. A missing or broken flow stops with exit 78 and names the flow. Engine code (`bin/`, `lib/`, `prompts/`) names no flow system; such names live only in flow data.
 - Selecting a flow, editing its steps and naming a step's runner come later (H-065 to H-068). `HO_FLOWS_DIR` points at another flows folder.
+
+## Run loop and merge
+
+`bin/harness loop <run-dir> <verb>` takes one ticket's lane to a local merge that the engine checks (H-055, H-046). It merges only into the run's local integration branch and never pushes.
+
+- **Integration branch.** `integration --repo R --base B --worktree W` creates the branch `ho/<run-id>` at base `B` and checks it out in the new worktree `W`. Each run has one. `<run>/integration.json` keeps the last confirmed tip.
+- **Completion signal.** `ready <lane> --worktree W` accepts a lane only when the tip of its branch is a `finalize(<lane>):` commit and its tree is clean. Nothing else counts as done. It records that commit and prints the verdict file path, `<run>/verdicts/<lane>/<commit>.md`. So a verdict covers one exact commit.
+- **Merge.** `merge <lane>` merges only when all of these hold. The first line of the verdict file is exactly `passed`. "passed with remarks" and "failed" never merge, and a link is not a verdict. The lane tip is still the validated commit. Both trees are clean, untracked files included. The integration branch is checked out and is at its last confirmed tip. The run is not stopped. Then the engine runs `git merge --no-ff` of that commit and confirms it from the branch ref: the new tip has the old tip and the lane commit as parents, and its tree differs from the old tip. The gate then runs on the merged tree in a throwaway worktree. A merge counts only with its `merge-confirmed` ledger line.
+- **Failures.** Exit 65 means the merge was refused and nothing changed. 69 means the merge would change nothing (a no-op is a failure). 70 means a conflict or a git check failed. 72 means the gate failed on the merged tree. 75 means the run is stopped. On 69, 70 and 72 the branch is put back to its old tip with `git reset --hard` inside its own worktree, never by moving the ref. A tip that moved outside the engine, for example after an interrupted merge, refuses every merge until a person puts it back.
+- **Gate.** The engine runs the gate command itself, so the command comes only from the user config (D37-FLOW-8): `gate.list.<label>.command`. The project or user config selects the label with `gate.use`. With no gate, the merge is refused. A project config that holds a gate command is refused, and the message says where to move it.
+- `status` prints the integration tip and the confirmed merges. Setting the ticket state after a merge, the remote PR merge and the "passed with remarks" flow come later (#59, #60).
 
 ## Tests
 

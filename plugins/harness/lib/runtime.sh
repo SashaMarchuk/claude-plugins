@@ -64,7 +64,8 @@ ho_rt_check() {
     elif ([.skill_call, .session_log, .limits, .install] | any(line | not)) then
       "skill_call, session_log, limits and install must be one line of text each"
     elif (.capabilities | type) != "object" then "capabilities must be an object"
-    elif (.config_dir.default | line | not) or ((.config_dir | has("env")) and (.config_dir.env | type != "string" or test("\\A[A-Z_][A-Z0-9_]*\\z") | not)) then
+    elif (.config_dir.default | line | not)
+      or ((.config_dir | has("env")) and (.config_dir.env | (type != "string") or (test("\\A[A-Z_][A-Z0-9_]*\\z") | not))) then
       "config_dir needs a default and, if set, an env variable name"
     elif (.check.argv | strs | not) or ((.check | has("expect")) and (.check.expect | line | not))
       or ((.check | has("timeout_seconds")) and ((.check.timeout_seconds | type) != "number" or .check.timeout_seconds < 1)) then
@@ -98,15 +99,18 @@ ho_flow_plan_rows() {
          else [$p.command] + $p.noninteractive.argv
            + (if .kind == "review" then ($p.sandbox["read-only"] // null) else [] end)
            + $p.noninteractive.prompt end) as $launch
-      | if $launch | any(. == null) then error("review step \(.id) cannot run read-only on runtime \($rt): its profile has no sandbox.read-only")
+      | if $mode == "noninteractive" and .kind == "review" and (($p.sandbox["read-only"] | type) != "array") then
+          error("review step \(.id) runs without a terminal on runtime \($rt), so it must run read-only, and the profile has no sandbox.read-only")
         else {n: ($n | tonumber), id, when, title, runtime: $rt, file: $f, mode: $mode, owner, kind: (.kind // ""),
               skills: (.skills // []),
               note: (if $mode == "noninteractive" and .kind != "review" then "experimental" else "-" end),
-              launch: ($launch | join(" "))} end' 2>/dev/null || {
-      printf 'harness: flow %s: step %s: review steps without a terminal run read-only, and runtime %s has no sandbox.read-only\n' \
-        "$HO_FLOW_NAME" "$(printf '%s' "$row" | jq -r .id)" "$rt" >&2
+              launch: ($launch | join(" "))} end' 2>"${TMPDIR:-/tmp}/ho-plan-err.$$" || {
+      printf 'harness: flow %s: cannot plan step %s: %s\n' "$HO_FLOW_NAME" "$(printf '%s' "$row" | jq -r .id)" \
+        "$(sed -e 's/^jq: error (at <stdin>:[0-9]*): //' "${TMPDIR:-/tmp}/ho-plan-err.$$")" >&2
+      rm -f "${TMPDIR:-/tmp}/ho-plan-err.$$"
       exit "$HO_EXIT_FLOW"
     }
+    rm -f "${TMPDIR:-/tmp}/ho-plan-err.$$"
   done <<EOF_ROWS
 $(jq -c '(.system.steps // []) as $own | .steps[] | select(.enabled != false)
   | . + {owner: (if (.id | IN($own[])) then "system" else "harness" end)}' "$HO_FLOW_JSON")
@@ -132,7 +136,11 @@ ho_rt_probe() {
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$i" -ge $((t * 10)) ]; then
+      # TERM first, then KILL after 2 s; always this exact process ID, never a name.
       kill "$pid" 2>/dev/null || true
+      i=0
+      while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
+      kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null || true
       return 124
     fi
@@ -180,7 +188,8 @@ EOF_ENV
     f=$(ho_rt_file "$rt")
     cmd=$(jq -r .command "$f")
     t=$(jq -r '.install' "$f")
-    cmdpath=$(command -v "$cmd" 2>/dev/null || true)
+    # Look the command up on the same clean PATH a launched session gets.
+    cmdpath=$(PATH=$(ho_session_clean_path) command -v "$cmd" 2>/dev/null || true)
     case $cmdpath in
       /*) ;;
       *) add "runtime $rt: command $cmd not found. Install step: $t"; continue ;;
@@ -195,7 +204,7 @@ $(jq -r '.check.argv[]' "$f")
 EOF_ARGV
     rc=0
     ho_rt_probe "$(jq -r '.check.timeout_seconds // 20' "$f")" "$tmpd/check.out" \
-      env ${envs[@]+"${envs[@]}"} "$cmdpath" ${argv[@]+"${argv[@]}"} || rc=$?
+      /usr/bin/env PATH="$(ho_session_clean_path)" ${envs[@]+"${envs[@]}"} "$cmdpath" ${argv[@]+"${argv[@]}"} || rc=$?
     expect=$(jq -r '.check.expect // ""' "$f")
     if [ "$rc" -eq 124 ]; then
       add "runtime $rt: the login check did not answer within $(jq -r '.check.timeout_seconds // 20' "$f") s. Install step: $t"

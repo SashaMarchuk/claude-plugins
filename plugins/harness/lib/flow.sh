@@ -84,6 +84,15 @@ ho_flow_project_dir() {
   printf '%s/.harness/flows\n' "$p"
 }
 
+# ho_flow_inside_project <path>: 0 when the physical path lies inside the physical project folder.
+ho_flow_inside_project() {
+  local proj real
+  proj=$(ho_project_root 2>/dev/null) && proj=$(cd -P "$proj" 2>/dev/null && pwd -P) || return 1
+  real=$(cd -P "$1" 2>/dev/null && pwd -P) || return 1
+  case "$real/" in "$proj"/*) return 0 ;; esac
+  return 1
+}
+
 # ho_flow_locate <name>: print the flow folder, from the project or the shipped flows. A name in
 # both places is refused: a project flow never hides a shipped one (exit 78).
 ho_flow_locate() {
@@ -93,10 +102,9 @@ ho_flow_locate() {
   if [ -n "$pdir" ] && { [ -e "$pdir/$name" ] || [ -L "$pdir/$name" ]; }; then
     [ ! -e "$shipped/flow.json" ] ||
       ho_flow_fail "$name" "a project flow has the name of a shipped flow ($pdir/$name and $shipped); rename the project flow"
-    # A project flow folder must stay inside the project, also through links.
-    proj=$(cd -P "$pdir/../.." 2>/dev/null && pwd -P) || ho_flow_fail "$name" "cannot open the project folder"
-    real=$(cd -P "$pdir/$name" 2>/dev/null && pwd -P) || ho_flow_fail "$name" "cannot open the flow folder $pdir/$name"
-    case "$real/" in "$proj"/*) ;; *) ho_flow_fail "$name" "the project flow folder $pdir/$name leads outside the project" ;; esac
+    # A project flow folder must stay inside the project, also through links (of the flow
+    # folder, of .harness/flows or of .harness).
+    ho_flow_inside_project "$pdir/$name" || ho_flow_fail "$name" "the project flow folder $pdir/$name leads outside the project"
     printf '%s\n' "$pdir/$name"
     return 0
   fi
@@ -123,7 +131,8 @@ ho_flow_load() {
   why=$(jq -rs --arg name "$name" --argjson schema "$HO_FLOW_SCHEMA" --argjson akeys "$HO_FLOW_AUTONOMY_KEYS" '
     def bad($m): $m;
     if length != 1 then "the file must hold exactly one JSON object" else .[0] |
-    def line: type == "string" and (test("[[:cntrl:]]") | not);
+    # Text a terminal shows: no control, line separator or bidi character (as for render values).
+    def line: type == "string" and (test("[[:cntrl:]\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069]") | not);
     def rtname: type == "string" and test("\\A[a-z0-9][a-z0-9-]*\\z");
     def skill: type == "string" and test("\\A[a-z0-9][a-z0-9-]*(:[a-z0-9][a-z0-9-]*)?\\z");
     def route: "the chosen system owns its steps. To change them, copy its step list into an own flow: harness flow copy \($name) <new-name>";
@@ -141,7 +150,7 @@ ho_flow_load() {
     else
       [ .steps[] | select(type != "object"
           or ((.id | type) != "string") or (.id | test("\\A[a-z0-9][a-z0-9-]*\\z") | not)
-          or ((.title | type) != "string") or .title == "" or (.title | test("[[:cntrl:]]"))
+          or (.title | line | not) or .title == ""
           or (.when | IN("always", "questions") | not)
           or ((.prompt | type) != "string")
           or (.prompt | test("\\A[A-Za-z0-9_-][A-Za-z0-9_./-]*\\z") | not)
@@ -220,7 +229,7 @@ ho_flow_list() {
   [ -d "$root" ] || { printf 'harness: flows folder not found: %s\n' "$root" >&2; exit "$HO_EXIT_FLOW"; }
   pdir=$(ho_flow_project_dir)
   for d in "$root"/*/ ${pdir:+"$pdir"/*/}; do
-    [ -f "$d/flow.json" ] && basename "$d"
+    if [ -f "$d/flow.json" ]; then basename "$d"; fi
   done | LC_ALL=C sort -u
   return 0
 }
@@ -251,6 +260,8 @@ ho_flow_copy() {
   fi
   ho_flow_load "$src"
   mkdir -p "$pdir" || ho_die "cannot create $pdir"
+  ho_flow_inside_project "$pdir" || {
+    printf 'harness: %s leads outside the project; nothing is written there\n' "$pdir" >&2; exit "$HO_EXIT_FLOW"; }
   tmp=$(mktemp -d "$pdir/.copy-$new.XXXXXX") || ho_die "mktemp failed in $pdir"
   while IFS= read -r t; do
     [ -n "$t" ] || continue

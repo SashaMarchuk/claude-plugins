@@ -45,6 +45,9 @@ wrender() { # wrender <flow> <step>: the worker prompt of one step
     --set WORKDIR /w --set STEP_RESULT_FILE /s --file TICKET_TEXT "$base/ticket.txt" 2>&1
 }
 
+rc=0; out=$("$h" flow list 2>&1) || rc=$?
+assert_eq "H-068: flow list in a project with no own flows exits 0" "0" "$rc"
+assert_eq "H-068: flow list in a project with no own flows shows the shipped ones" "basic gsd" "$(printf '%s\n' "$out" | tr '\n' ' ' | sed 's/ $//')"
 mkflow mine "$own"
 assert_eq "H-068: an own project flow is found by its name" "flow mine OK" "$("$h" flow check mine 2>&1)"
 assert_eq "H-068: flow list shows shipped and project flows" "basic gsd mine" "$("$h" flow list | tr '\n' ' ' | sed 's/ $//')"
@@ -85,7 +88,10 @@ mkflow mine "$(edit '.steps[1].enabled = "no"')"
 assert_exit "H-066: enabled must be true or false (exit 78)" 78 "$h" flow check mine
 mkflow mine "$(edit '.steps[] |= . + {enabled: false}')"
 assert_exit "H-066: a flow with every step switched off is refused (exit 78)" 78 "$h" flow check mine
-# Code review before the PR: shipping (which opens the PR) is placed after review.
+# Code review before the PR: shipping (which opens the PR) after review, or the other way round;
+# the order is the config's, not the engine's.
+mkflow mine "$(edit '.steps |= [.[0], .[1], .[2], .[4], .[3]]')"
+assert_eq "H-066: a config may place shipping before code review" "ship code-review" "$(ids mine | awk '{print $4, $5}')"
 mkflow mine "$own"
 assert_eq "H-066: code review before the PR is an allowed order" "code-review ship" "$(ids mine | awk '{print $4, $5}')"
 
@@ -141,6 +147,11 @@ assert_eq "H-067: a system step may still name its runner" "flow sys OK" "$("$h"
 assert_eq "H-067: the shipped gsd flow keeps its system steps in one block" "flow gsd OK" "$("$h" flow check gsd 2>&1)"
 assert_eq "H-067: gsd marks the steps its system owns" "grill plan execute code-review verify ui-check" \
   "$(jq -r '.system.steps | join(" ")' "$HO_PLUGIN_ROOT/flows/gsd/flow.json")"
+for bad in '.system.install = "run \u202ehs.lave"' '.system.link = "x\u2028y"' '.steps[0].title = "A\u2029B"' \
+  '.system.name = "A\u0085B"'; do
+  mkflow sys "$(sedit "$bad")"
+  assert_exit "H-073: printed flow text [$bad] with a line separator or bidi control is refused (exit 78)" 78 "$h" flow check sys
+done
 for bad in '.system.name = "A\u001b[31m"' '.system.install = "line one\nline two"' '.system.link = "x\u0007"' \
   '.system.skills = ["../etc"]' '.system.skills = ["a b"]'; do
   mkflow sys "$(sedit "$bad")"
@@ -186,3 +197,14 @@ printf '%s\n' "$(edit '.name = "ext"')" > "$base/outside/ext/flow.json"
 for s in classify plan execute code-review ship; do printf 'x @TICKET_ID@\n' > "$base/outside/ext/steps/$s.md"; done
 ln -s "$base/outside/ext" "$fl/ext"
 assert_exit "H-068: a project flow folder that links out of the project is refused (exit 78)" 78 "$h" flow check ext
+rm -f "$fl/ext"
+# The flows folder itself linked out of the project: no flow is read from there, none written.
+mv "$fl" "$base/outside/a-flows"
+mkdir -p "$base/outside/a-flows/ext2/steps"
+cp "$base/outside/ext/flow.json" "$base/outside/a-flows/ext2/flow.json"; cp "$base/outside/ext/steps/"* "$base/outside/a-flows/ext2/steps/"
+jq '.name = "ext2"' "$base/outside/a-flows/ext2/flow.json" > "$base/x.json" && mv "$base/x.json" "$base/outside/a-flows/ext2/flow.json"
+ln -s "$base/outside/a-flows" "$fl"
+assert_exit "H-068: a flow in a linked-out flows folder is refused (exit 78)" 78 "$h" flow check ext2
+rc=0; "$h" flow copy basic newone >/dev/null 2>&1 || rc=$?
+assert_eq "D37-FLOW-2: flow copy refuses a linked-out flows folder (exit 78)" "78" "$rc"
+assert_eq "D37-FLOW-2: flow copy wrote nothing outside the project" "no" "$([ -e "$base/outside/a-flows/newone" ] && echo yes || echo no)"

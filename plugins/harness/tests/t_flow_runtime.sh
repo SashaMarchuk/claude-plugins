@@ -52,6 +52,15 @@ assert_eq "H-075: UI review can run on codex" "codex noninteractive" "$(col rev 
 assert_eq "H-075 (D37-RUNTIME-2): execution on codex is marked experimental" "experimental" "$(col rev execute 8)"
 assert_eq "H-075: execution on codex runs only where the config names it" "claude-code" "$(col rev plan 5)"
 
+# A shipped flow's code review edits and commits, so it is no review-type step: on codex it runs
+# without the read-only sandbox and is marked experimental (D37-RUNTIME-2, decision of T39).
+"$h" flow copy basic b2 >/dev/null 2>&1 || true
+jq '(.steps[] | select(.id == "code-review")) += {runtime: "codex"}' "$fl/b2/flow.json" > "$fl/b2/f" && mv "$fl/b2/f" "$fl/b2/flow.json"
+assert_eq "H-075: code review of the shipped basic flow runs on codex when the config names it" "codex noninteractive experimental" \
+  "$(col b2 code-review 5) $(col b2 code-review 6) $(col b2 code-review 8)"
+case $(col b2 code-review 9) in *read-only*) bad "D37-RUNTIME-2: a step that edits is not run read-only" "$(col b2 code-review 9)" ;;
+  *) ok "D37-RUNTIME-2: a step that edits is not run read-only" ;; esac
+
 # ---- runtime profiles: data files from the plugin or the user folder, never the project ---------
 mkflow rev "$(redit '.steps[1].runtime = "no-such-rt"')"
 rc=0; err=$("$h" flow plan rev 2>&1) || rc=$?
@@ -64,6 +73,14 @@ assert_exit "D37-FLOW-8: a runtime profile in the project is never read (exit 78
 jq '.command = "codex"' "$HO_PLUGIN_ROOT/runtimes/codex.json" > "$user/runtimes/my-rt.json"
 mkflow rev "$(redit '.steps[1].runtime = "my-rt"')"
 assert_eq "D37-RUNTIME-2: a user may add a runtime profile" "my-rt" "$(col rev plan 5)"
+jq 'del(.sandbox)' "$HO_PLUGIN_ROOT/runtimes/codex.json" > "$user/runtimes/nosb.json"
+mkflow rev "$(redit '(.steps[] | select(.id == "code-review")) += {runtime: "nosb"}')"
+rc=0; err=$("$h" flow plan rev 2>&1) || rc=$?
+assert_eq "D37-RUNTIME-2: a review step on a runtime with no read-only sandbox stops (exit 78)" "78" "$rc"
+assert_contains "D37-RUNTIME-2: that stop names the missing sandbox" "$err" "sandbox.read-only"
+jq '.config_dir.env = 5' "$HO_PLUGIN_ROOT/runtimes/codex.json" > "$user/runtimes/badenv.json"
+mkflow rev "$(redit '.steps[1].runtime = "badenv"')"
+assert_exit "D37-RUNTIME-2: a config_dir.env that is no variable name is refused (exit 78)" 78 "$h" flow plan rev
 printf '{"schemaVersion": 2, "command": "x"}\n' > "$user/runtimes/thin.json"
 mkflow rev "$(redit '.steps[1].runtime = "thin"')"
 assert_exit "D37-RUNTIME-2: a runtime profile without the start-check fields is refused (exit 78)" 78 "$h" flow plan rev
@@ -129,6 +146,15 @@ t1=$(date +%s)
 assert_eq "I1: a login check that does not answer stops the start (exit 69)" "69" "$rc"
 assert_contains "I1: the stop says the check did not answer" "$out" "did not answer"
 if [ $((t1 - t0)) -lt 15 ]; then ok "I1: the time limit holds (under 15 s)"; else bad "I1: the time limit holds (under 15 s)" "took $((t1 - t0)) s"; fi
+# A check that ignores TERM is still stopped (by its exact PID) and the limit still holds.
+t0=$(date +%s)
+rc=0; out=$(HO_FAKE_CODEX_SLEEP=30 HO_FAKE_CODEX_TRAP_TERM=1 HO_FAKE_CODEX_PIDFILE="$base/slow.pid" "$h" flow preflight sys 2>&1) || rc=$?
+t1=$(date +%s)
+assert_eq "I1: a login check that ignores TERM stops the start (exit 69)" "69" "$rc"
+if [ $((t1 - t0)) -lt 15 ]; then ok "I1: the time limit holds when TERM is ignored"; else bad "I1: the time limit holds when TERM is ignored" "took $((t1 - t0)) s"; fi
+p=$(cat "$base/slow.pid" 2>/dev/null || echo 0)
+if [ "$p" != 0 ] && ! ps -o pid= -p "$p" >/dev/null 2>&1; then ok "I1: the timed-out check process is gone"; else
+  bad "I1: the timed-out check process is gone" "pid $p"; kill -KILL "$p" 2>/dev/null || true; fi
 # A runtime command that is not installed is named with its install step.
 jq '.command = "ho-no-such-runtime"' "$HO_PLUGIN_ROOT/runtimes/codex.json" > "$user/runtimes/ghost.json"
 mkflow sys "$(printf '%s' "$sys" | jq -c '.steps[2].runtime = "ghost"')"

@@ -10,7 +10,13 @@ for a in "$@"; do
   if [ -z "$line" ]; then line=$a; else line="$line	$a"; fi
 done
 printf '%s\n' "$line" >> "$log"
-[ -z "${HO_FAKE_CODEX_SLEEP:-}" ] || sleep "$HO_FAKE_CODEX_SLEEP"
+# HO_FAKE_CODEX_PIDFILE=<f>: write its PID there. HO_FAKE_CODEX_TRAP_TERM=1: ignore TERM.
+[ -z "${HO_FAKE_CODEX_PIDFILE:-}" ] || echo $$ > "$HO_FAKE_CODEX_PIDFILE"
+[ "${HO_FAKE_CODEX_TRAP_TERM:-}" != 1 ] || trap '' TERM
+if [ -n "${HO_FAKE_CODEX_SLEEP:-}" ]; then
+  end=$(( $(date +%s) + HO_FAKE_CODEX_SLEEP ))
+  while [ "$(date +%s)" -lt "$end" ]; do sleep 0.2; done
+fi
 if [ "${1:-}" = login ] && [ "${2:-}" = status ]; then
   if [ "${HO_FAKE_CODEX_LOGGED_OUT:-}" = 1 ]; then echo "Not logged in"; exit 1; fi
   echo "Logged in using a test account"

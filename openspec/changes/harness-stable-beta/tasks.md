@@ -8,6 +8,8 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 0.2 Open the requirements PR for this change, and verify `openspec validate --all --strict` passes
 - [ ] 0.3 Run the read-only connections check and list owner-only actions (D36, OPEN-14)
 - [ ] 0.4 Check that a separate config folder keeps its own plugin cache and that two marketplaces cannot share one name
+- [x] 0.5 Build-time ground rules: the build session merges wave PRs into `harness/next` after an independent validator pass, a green `bash tests/run-all.sh` and a clean external review, and merges into `main` stay the owner's; the redacted field notes are on `harness/next`; `main` is protected (pull request only, admins included); a private sandbox repository exists for GitHub intake tests
+- [ ] 0.6 Owner item, with no agent decision: the per-project worker count and safety rules 3 to 6 stay with the owner or the project
 
 ## 1. Build branch (after the owner merges the requirements PR)
 
@@ -26,6 +28,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 - [ ] 3.1 Port config lookup and safe-file helpers with behaviour tests; `schemaVersion: 2`
 - [ ] 3.2 Add the append-only run ledger and run IDs in every marker; verify a 0.6.0 run is refused and left byte-identical
+- [ ] 3.3 Shipped default config (GSD flow, OpenSpec), the confirmed default in the user config, the one confirmation in the configuration skill or at the first start, and the stop of an unattended start with no confirmation (H-001, H-068, H-072, H-076; D37-FLOW-4, D37-FLOW-7)
 
 ## 4. Ticket queue (wave 1)
 
@@ -68,7 +71,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 - [ ] 11.1 Limit-banner recognition against saved fixtures, plus trust-dialog and password handling
 - [ ] 11.2 Verify a session's own prose quoting a banner does not match
-- [ ] 11.3 If no account reaches a limit during the final product check, leave a prepared deferred limit-banner test task; only the owner starts it (H-113, D35, OPEN-LIMITS-3)
+- [ ] 11.3 If no account reaches a limit during the final product check, leave a prepared deferred limit-banner test task; the build session starts it itself when the build account comes close to a real limit (H-113, D35)
 
 ## 12. Intake and tickets
 
@@ -78,7 +81,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 ## 13. Tracker comments
 
-- [ ] 13.1 Comment format with the hidden machine line, questions to humans, and answer attribution
+- [ ] 13.1 Comment format with the hidden machine line, questions to humans, and answer attribution; every session reads the ticket's current comments and labels before it starts work (H-144)
 - [ ] 13.2 Unblock command and label cleanup, with careful dedicated tests (R10.3)
 
 ## 14. Autonomy and git
@@ -88,12 +91,12 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 ## 15. Verification
 
-- [ ] 15.1 Verdict gate, test-count rule and Verification block in the PR
+- [ ] 15.1 Verdict gate, test-count rule and Verification block in the PR: verdict in the opening lines, each check named with its result, unfinished checks and exceptions stated, and the same results in the ticket comment (H-053, H-054)
 - [ ] 15.2 Remarks handling and external review bots; verify-and-prove skill as an optional flow step
 
 ## 16. Limits and resources
 
-- [ ] 16.1 Limits per account from status line data, with configurable thresholds and actions
+- [ ] 16.1 Limits per account from status line data, in every window present, with optional per-window thresholds and actions; setup offers 90% for every window (H-109, H-110, H-112; D28, D28a, D29)
 - [ ] 16.2 Enforced worker cap, out-of-memory lowering and the heavy-work slot
 - [ ] 16.3 Record the terminal app's CPU use and the count of listing lines for its own API socket in the usage history, with one notice at the threshold (H-108; D42m; issue #66)
 
@@ -121,6 +124,8 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 20.1 `/harness:config` and `/harness:ai-ready`; `onboard` and `init` are one-release aliases for `/harness:config`, and `/harness:ai-ready` has no alias (D33a)
 - [ ] 20.2 Blind naming test for the two skill names (D33; result in D33a)
 - [ ] 20.3 Short install guide, "tested with" list, newcomer section and config-folder README
+- [ ] 20.4 `/harness:feedback`: an issue without labels in the plugin's own repository, with technical context and no private data, shown in full and sent only after a yes; verify a no sends nothing (H-140; D43)
+- [ ] 20.5 Release checklist file in the plugin repository: automated tests, real terminals and the main success flow (H-141, H-142, H-143)
 
 ## 21. Evaluation programme
 
@@ -132,11 +137,12 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 21.6 Every notification flow, end to end (R28.10)
 - [ ] 21.7 Comparison runs across flows, including review steps on Codex (R29.8, D31)
 - [ ] 21.8 Fix failures at once without over-engineering, escalate big changes, and re-test shorter, up to 4 cycles (R27.11)
-- [ ] 21.9 Verify the main success flow works end to end (R30.5, R27.17)
-- [ ] 21.10 Real-terminal acceptance before release: run the iTerm2 backend once on the real app, from launch to close, together with the two trials of 17.2, and log the result; until then the backend counts as tested against fakes only (D42n; issue #78)
+- [ ] 21.9 Verify the main success flow works end to end, as the release checklist states it (H-143; R30.5, R27.17)
+- [ ] 21.10 Real-terminal acceptance before release: run the iTerm2 backend once on the real app, from launch to close, together with the two trials of 17.2, and log the result; until then the backend counts as tested against fakes only (H-142; D42n; issue #78)
+- [ ] 21.11 Run the release checklist in full and record the results for the release PR (H-141)
 
 ## 22. Release
 
-- [ ] 22.1 Owner answers OPEN-13 items 5 and 6 (version string, rollback tag)
-- [ ] 22.2 Release PR `harness/next` → `main` with version, display name, "Upgrading from 0.6.0" and the migration note; the owner merges it
+- [ ] 22.1 Push the rollback tag `harness--v0.6.0` on the 0.6.0 commit before the release PR; there is no 0.6.1
+- [ ] 22.2 Release PR `harness/next` → `main` with version `1.0.0-beta.1`, display name, "Upgrading from 0.6.0" and the migration note; the owner merges it
 - [ ] 22.3 Archive with openspec archive harness-stable-beta --yes after the release PR merges

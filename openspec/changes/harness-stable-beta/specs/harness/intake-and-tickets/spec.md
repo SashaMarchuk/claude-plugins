@@ -76,10 +76,9 @@ Source: interview 2026-11-24 R1.7, R1.8 (fallback); R4.3, R4.4 and D1 (the trigg
 - **AND** the harness moves the ticket to the needs-review state
 
 ### Requirement: H-008 Write access or higher required for the ready trigger
-Before taking a ticket, the harness SHALL check the access level of whoever set the ready label or status, and take it only if that person has write access or higher to the repository and the ticket is ready. A bot or automation SHALL be able to queue a ticket only through write access: its own, or that of the person it acts for.
+Before taking a ticket, the harness SHALL check the access level of whoever set the ready label or status, and take it only if that person has write access or higher to the repository and the ticket is ready. A bot or automation SHALL be able to queue a ticket only through write access: its own, with no allow-list, or that of the person it acts for.
 
-Source: interview 2026-11-24 R4.1, R4.2, R4.6 (confirmed restatement covers both cases); every target repository: D37-INTAKE-9
-OPEN: see design.md OPEN-INTAKE-1
+Source: interview 2026-11-24 R4.1, R4.2, R4.6; every target repository: D37-INTAKE-9; owner decision 2026-11-26
 
 #### Scenario: A writer sets the label
 - **WHEN** a person with write access sets the ready label
@@ -97,7 +96,7 @@ OPEN: see design.md OPEN-INTAKE-1
 #### Scenario: A bot account with its own write access sets the label
 - **WHEN** a bot account that itself has write access to the repository sets the ready label
 - **THEN** the harness judges the trigger by the bot account's own access
-- **AND** it may take the ticket into work
+- **AND** it may take the ticket into work, and no allow-list is checked
 
 
 #### Scenario: The ticket targets a repository where the person has no write access

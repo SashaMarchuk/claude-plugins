@@ -95,7 +95,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 - [ ] 16.1 Limits per account from status line data, with configurable thresholds and actions
 - [ ] 16.2 Enforced worker cap, out-of-memory lowering and the heavy-work slot
-- [ ] 16.3 Record the terminal app's CPU use and open-socket count in the usage history, with one notice at the threshold (H-108; D42m; issue #66)
+- [ ] 16.3 Record the terminal app's CPU use and the count of listing lines for its own API socket in the usage history, with one notice at the threshold (H-108; D42m; issue #66)
 
 ## 17. Run lifecycle and recovery
 

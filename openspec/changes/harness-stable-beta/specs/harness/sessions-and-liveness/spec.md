@@ -243,6 +243,8 @@ Source: interview 2026-11-24 R24.1; D30
 ### Requirement: H-101 Instructions go as messages first, with terminal typing as the fallback
 In terminal mode, the harness SHALL send instructions to a session as a message between sessions first. If that fails, it SHALL type the instruction directly into the terminal (on a Mac, through osascript). The message mechanism, the delivery proof and the action when both fail are an agent decision; see design.md S8-24.
 
+Decided: design.md D42b, D42g (typed route)
+
 Source: interview 2026-11-24 R24.2; S8-24
 
 #### Scenario: Message delivered
@@ -252,6 +254,11 @@ Source: interview 2026-11-24 R24.2; S8-24
 #### Scenario: Message fails
 - **WHEN** the message between sessions fails
 - **THEN** the harness types the instruction directly into that session's terminal
+
+#### Scenario: The session runs in the session host (design.md D42b, D42g)
+- **WHEN** the message between sessions fails and the session runs in the session host
+- **THEN** the harness types the instruction through the session host, not through the terminal app, and only under the conditions of H-099
+- **AND** typing through the terminal app is used only for a session that runs directly in it
 
 #### Scenario: Busy worker, unrelated output
 - **WHEN** an instruction is sent to a worker that keeps producing output, but no transcript entry carries that instruction or its id
@@ -358,7 +365,7 @@ The harness MUST NOT quit or restart the terminal app. It MUST NOT close a windo
 Source: owner message 2026-11-25 (iTerm2 incident); D42d
 
 #### Scenario: A close would end a busy session
-- **WHEN** a harness command would close a window or a tab, and a session that would end with it is busy
+- **WHEN** a harness command would close a window or a tab, and a session that would end with it is busy, which means its turn is running or one of its tool calls is open
 - **THEN** the command exits with a non-zero code, lists the busy sessions and closes nothing
 
 #### Scenario: Only the view closes

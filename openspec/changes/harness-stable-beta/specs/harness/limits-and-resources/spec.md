@@ -87,7 +87,7 @@ Source: interview 2026-11-24 R21.6; D26b; context rejected entry 4; owner messag
 
 #### Scenario: The terminal app's load is recorded (design.md D42m)
 - **WHEN** a run is active
-- **THEN** every 5 minutes the harness records the terminal app's CPU use and its count of open sockets in the usage history
+- **THEN** every 5 minutes the harness records the terminal app's CPU use and the count of listing lines for the app's own API socket in the usage history
 - **AND** when that count reaches 1,000, the harness raises one attention notice and does not quit or restart the app (H-135)
 
 #### Scenario: Configuration with history available (agent decision D26b)

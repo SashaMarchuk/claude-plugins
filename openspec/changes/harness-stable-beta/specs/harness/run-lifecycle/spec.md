@@ -172,8 +172,13 @@ Source: interview 2026-11-24 R20.10 (confirmed restatement), R20.11; D32
 
 #### Scenario: A live session stopped on an error after sleep (design.md D42i)
 - **WHEN** the machine wakes, a session of the run is alive, and its last turn ended with an API error
-- **THEN** the harness sends that session a continue instruction with an id, through the delivery of H-101, first within 3 minutes of the wake and at most 3 times, 2 minutes apart
-- **AND** if no hook event follows, the session is handled as a hung session (H-091), so no session with work left stays idle for more than 10 minutes after the wake
+- **THEN** that session gets a continue instruction with an id, through the delivery of H-101: the orchestrator sends it to a worker, and the watch script sends it to the orchestrator
+- **AND** with the service reachable and the machine awake, the first goes out within 3 minutes of the wake, and it is sent at most 3 times, 2 minutes apart
+- **AND** if no hook event follows, the session is handled as a hung session (H-091)
+
+#### Scenario: The service is down or the machine sleeps again (design.md D42i)
+- **WHEN** a continue instruction is due and the service is down, or the machine sleeps again before it is sent
+- **THEN** nothing is sent (H-095), the count does not advance, and the instruction is due again after the next wake or when the service is back
 
 ### Requirement: H-138 The machine stays awake during a run and while an attended controlling session lives
 While a run is active, the harness SHALL hold one wake assertion for the whole run, not a chain of short ones. It SHALL also hold one for an attended session that controls the harness, for as long as that session lives. Each assertion SHALL end with its process. A setting SHALL switch each one off. See design.md D42j.

@@ -30,7 +30,7 @@ Source: interview 2026-11-24 R21.2; D26a. S8-21 only rules out a free-memory che
 
 ### Requirement: H-106 A confirmed out-of-memory stop lowers the cap by one
 When a container stops because the machine ran out of memory, and that cause is confirmed, the harness SHALL lower the worker cap by one automatically. When the cap is already 1, the harness SHALL keep the cap at 1 and restart the task. The harness MUST NOT lower the cap for a stop whose cause is not confirmed as lack of memory.
-Decided: design.md D37-LIMITS-1, D37-LIMITS-2, D37-LIMITS-4, D37-LIMITS-6
+Decided: design.md D37-LIMITS-1, D37-LIMITS-2, D37-LIMITS-4, D37-LIMITS-6, D37-FLOW-8
 Source: interview 2026-11-24 R21.3
 
 #### Scenario: Confirmed out-of-memory stop with a cap above one
@@ -57,6 +57,11 @@ Source: interview 2026-11-24 R21.3
 - **WHEN** the worker cap is 3, three workers run, and one ticket's container stops with a confirmed lack of memory
 - **THEN** the cap becomes 2, the other two workers continue, and the stopped task restarts when a slot is free under the cap of 2
 
+#### Scenario: The project config holds a check command (design.md D37-FLOW-8)
+- **WHEN** the selected project config holds a non-empty command for the out-of-memory check
+- **THEN** the harness refuses to start and runs no command from that config
+- **AND** the message tells the person to move the command to the user config and to keep only its label in the project config
+
 ### Requirement: H-107 Per-stage and heavy-operation limits
 The harness SHALL support limits per stage, such as a browser or UI check, next to the overall worker cap, and one shared limit for heavy operations. The owner left the choice of heavy operations to the orchestrator or a recommended list; as an agent decision, a default list is fixed and stage and heavy limits default to 1 (design.md D26). The orchestrator MAY extend the list but MUST NOT raise a limit.
 Source: interview 2026-11-24 R21.4, R21.5; D26
@@ -79,11 +84,16 @@ Source: interview 2026-11-24 R21.4, R21.5; D26
 
 ### Requirement: H-108 Resource usage is logged as history to recommend concurrency
 The harness SHALL log CPU, memory and process usage during runs, and keep these records as history. From that history the harness MAY recommend values during configuration: the total number of parallel tickets and the number per stage. How a recommendation is shown is an agent decision (design.md D26b).
-Source: interview 2026-11-24 R21.6; D26b; context rejected entry 4
+Source: interview 2026-11-24 R21.6; D26b; context rejected entry 4; owner message 2026-11-25 (iTerm2 incident)
 
 #### Scenario: Usage is recorded during a run
 - **WHEN** a run is in progress
 - **THEN** the harness writes CPU, memory and process usage readings to its history
+
+#### Scenario: The terminal app's load is recorded (design.md D42m)
+- **WHEN** a run is active
+- **THEN** every 5 minutes the harness records the terminal app's CPU use and the count of listing lines for the app's own API socket in the usage history
+- **AND** when that count reaches 1,000, the harness raises one attention notice and does not quit or restart the app (H-135)
 
 #### Scenario: Configuration with history available (agent decision D26b)
 - **WHEN** the owner configures concurrency for a project that has usage history

@@ -18,7 +18,7 @@ The owner's interview of 2026-11-24 fixed the features of a stable beta. The goa
 - **Limits and resources:** the user sets the worker cap (default 1), and the engine enforces it. A confirmed out-of-memory stop lowers it by one. Heavy work has its own limit. Subscription limits are read for every added account. Thresholds and actions are configurable. An unreadable limit does not stop work.
 - **Notifications:** Gmail, Telegram and Slack are optional channels that mirror the tracker. They have a user-set priority and fall back in that order. Answers are written back to the tracker with their author. The tracker stays the source of truth.
 - **Distribution and setup:** the plugin id stays `harness` and the display name is "Harness Orchestrator". It ships a short install guide and two setup skills: one configures the harness, one prepares a project for AI development. It also has a "tested with" list and a note for newcomers who join a project that uses it.
-- Requirement IDs run from H-002 to H-131 and continue after H-001. They are never reused.
+- Requirement IDs run from H-002 to H-139 and continue after H-001. They are never reused.
 
 ## Capabilities
 

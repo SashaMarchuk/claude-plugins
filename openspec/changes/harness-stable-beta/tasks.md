@@ -14,6 +14,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 1.1 Cut and push `harness/next` from `origin/main`, in a clean clone with harness folders excluded locally
 - [ ] 1.2 Configure the frozen 0.6.0 as builder (lanes from `harness/next`, GSD, two workers, never push), and create labels
 - [ ] 1.3 Run `/gsd-new-milestone` from this change and open one issue per phase; verify `/harness:status` reads the queue
+- [ ] 1.4 Hold one wake assertion for the attended build session for as long as it lives, not only during builder runs (D42j)
 
 ## 2. Skeleton (attended)
 
@@ -39,6 +40,9 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 - [ ] 6.1 Launcher, registry and graceful close against a fake `claude`; identity is process ID plus session ID
 - [ ] 6.2 Verify a mismatched launcher cannot be produced and close refuses another run's session
+- [ ] 6.3 Terminal adapter: a time limit on every call to the terminal app, sessions in a session host, a run that starts without the app, no quit and no close under a busy session, and a check that a stopped process is gone (H-132, H-133, H-134, H-135, H-103; D42a to D42d; issue #40, follow-ups in issue #89)
+- [ ] 6.4 Clean launch environment with the check after launch; the registry record with account label, folder and status; the account kept at every resume (H-136, H-139, H-090; D42e, D42h, D42k; issue #40, follow-ups in issue #89)
+- [ ] 6.5 Verify against a stub terminal app that sleeps 60 seconds: "not answering" within 6 seconds, the run starts in the session host within 15 seconds, and a busy worker keeps its process ID through a force-quit of the app
 
 ## 7. Flow profiles (wave 2)
 
@@ -58,6 +62,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 - [ ] 10.1 Liveness from hooks, transcript activity and process ID, with no typing
 - [ ] 10.2 Verify a long silent job reads as working and a dead process as dead
+- [ ] 10.3 Hook time bounds, and the start check that names other hooks with no time limit (H-089; D42l; issue #46)
 
 ## 11. Screen-text handling (attended, outside the builder)
 
@@ -90,6 +95,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 - [ ] 16.1 Limits per account from status line data, with configurable thresholds and actions
 - [ ] 16.2 Enforced worker cap, out-of-memory lowering and the heavy-work slot
+- [ ] 16.3 Record the terminal app's CPU use and the count of listing lines for its own API socket in the usage history, with one notice at the threshold (H-108; D42m; issue #66)
 
 ## 17. Run lifecycle and recovery
 
@@ -97,6 +103,9 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 17.2 Test force-send of a queued stop message from a script before relying on `hard:message` (D37-LIFECYCLE-4): tmux proven (issue #62); two iTerm2 trials before release
 - [ ] 17.3 Standby, end of run, automatic recovery after sleep or a crash
 - [ ] 17.4 Outage monitor and dead-orchestrator restart in the watch script
+- [ ] 17.5 Typed text: the byte limit, longer text through a file, the check after a launch line, and the conditions for the typed fallback (H-137, H-099; D42f, D42g; issue #64)
+- [ ] 17.6 Reopen from the registry after the terminal app was quit or restarted, and the continue instruction for a live session that stopped on an error after sleep (H-088; D42h, D42i; issue #69, message path in issue #70)
+- [ ] 17.7 One wake assertion for the whole run, bound to the watch process, and one for an attended controlling session (H-138; D42j; issue #70)
 
 ## 18. Notifications
 
@@ -124,6 +133,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 21.7 Comparison runs across flows, including review steps on Codex (R29.8, D31)
 - [ ] 21.8 Fix failures at once without over-engineering, escalate big changes, and re-test shorter, up to 4 cycles (R27.11)
 - [ ] 21.9 Verify the main success flow works end to end (R30.5, R27.17)
+- [ ] 21.10 Real-terminal acceptance before release: run the iTerm2 backend once on the real app, from launch to close, together with the two trials of 17.2, and log the result; until then the backend counts as tested against fakes only (D42n; issue #78)
 
 ## 22. Release
 

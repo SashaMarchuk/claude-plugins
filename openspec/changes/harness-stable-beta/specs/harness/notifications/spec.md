@@ -15,6 +15,11 @@ Source: interview 2026-11-24 R28.1, R28.2, R28.3; delegated decision D36
 - **THEN** the harness works through the configured tracker only
 - **AND** all questions and answers stay in the tracker
 
+#### Scenario: The project config holds a channel command (design.md D37-FLOW-8)
+- **WHEN** the selected project config wires a channel through a non-empty command
+- **THEN** the harness refuses to start and runs no command from that config
+- **AND** the message tells the person to move the command to the user config and to keep only the channel's label in the project config
+
 ### Requirement: H-116 Questions mirrored exactly to one, several or all channels
 When the harness asks a question in the configured tracker, it SHALL send the exact same question to the channels the user selected. The user MAY select one channel, several channels or all channels. A channel MUST NOT carry a question that is not in the tracker, and MUST NOT reword it.
 

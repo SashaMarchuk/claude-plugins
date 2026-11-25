@@ -9,12 +9,18 @@
 #
 # Verdicts:
 #   working   the recorded process is alive and its command line holds the session ID
-#   starting  the launch has not finished and no process of it runs yet, or a model fallback
-#             is between two attempts
-#   dead      the process is gone (also after a failed or abandoned launch, once no process
-#             of the session runs); a running record turns "dead" once
+#   starting  no session process runs, but the launch command or the launcher of this launch
+#             is alive (a launch waiting for a slot, an account command, a model fallback)
+#   dead      every recorded process of the session is gone (also after a failed or
+#             abandoned launch); a running record turns "dead" once
 #   closed    the session was closed
-#   unknown   the facts cannot be read (no process table, an unreadable record); never "dead"
+#   unknown   the facts cannot be read (no process table, an unreadable record, a launching
+#             record with no launch process recorded); never "dead"
+#
+# H-105: a verdict never rests on the age of a file. "dead" needs proof that each recorded
+# process is gone: the launch command (launch_pid and launch_start in the record), the
+# launcher (<name>.launcher, written by the launcher before anything slow) and the session
+# process. A process is the same one only while its PID has the recorded start time.
 #
 # The transcript is found by the session ID: <root>/<transcript.glob of the runtime file>, where
 # <root> is the record's transcript_root, written at launch from the runtime's
@@ -26,6 +32,36 @@
 # ho_live_ps_ok: 0 when the process table can be read at all (field note I1: "cannot read" is
 # not "read and found nothing").
 ho_live_ps_ok() { ps -o pid= -p "$$" >/dev/null 2>&1; }
+
+# ho_proc_start <pid>: the start time of that process, or nothing. Fixed locale and time zone,
+# so the launcher and the engine print the same text for one process. The generated launcher
+# carries this same function.
+ho_proc_start() {
+  case ${1-} in '' | *[!0-9]*) return 0 ;; esac
+  LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'
+}
+
+# ho_proc_same <pid> <start>: 0 when that exact process is alive.
+ho_proc_same() {
+  local s
+  [ -n "${2-}" ] || return 1
+  s=$(ho_proc_start "${1-}")
+  [ -n "$s" ] && [ "$s" = "$2" ]
+}
+
+# ho_live_launch_alive <record>: 0 when the launch command or the launcher of this launch is
+# alive. Reads only.
+ho_live_launch_alive() {
+  local rec=$1 p s lf
+  p=$(jq -r '.launch_pid // "" | tostring' "$rec" 2>/dev/null) || p=""
+  s=$(jq -r '.launch_start // ""' "$rec" 2>/dev/null) || s=""
+  ho_proc_same "$p" "$s" && return 0
+  lf="${rec%.json}.launcher"
+  [ -f "$lf" ] || return 1
+  p="" s=""
+  read -r p s < "$lf" 2>/dev/null || [ -n "$p" ] || return 1
+  ho_proc_same "$p" "$s"
+}
 
 # ho_live_mtime <file>: seconds since the epoch, or nothing.
 ho_live_mtime() {
@@ -77,7 +113,7 @@ ho_live_transcript() {
 
 # ho_live_verdict <record>: print the verdict (see the top of this file) and nothing else.
 ho_live_verdict() {
-  local rec=$1 status pid pidfile t grace
+  local rec=$1 status pid
   status=$(jq -r 'if type == "object" and .run == $run then (.status // "") else "" end' --arg run "$HO_RUN_ID" "$rec" 2>/dev/null) || status=""
   case $status in
     closed) echo closed; return 0 ;;
@@ -89,22 +125,14 @@ ho_live_verdict() {
       return 0
       ;;
     launching)
-      # The process first: a launch command can be killed (a caller's time-out) after its
-      # session started, and that session is alive. With no process, a launch rewrites its
-      # record within the boot timeout; past it (and at least 10 minutes, as close counts)
-      # the launch died.
-      local born window old=0
-      born=$(ho_live_mtime "$rec")
-      window=$(( $(ho_cfg_int '.session.boot_timeout_seconds' 120) + 120 ))
-      [ "$window" -ge 600 ] || window=600
-      if [ -n "$born" ] && [ $(( $(date +%s) - born )) -gt "$window" ]; then old=1; fi
-      if ! ho_live_ps_ok; then
-        if [ "$old" -eq 1 ]; then echo unknown; else echo starting; fi
-        return 0
-      fi
+      # The session process first: a launch command can be killed after its session started.
+      # With no session process, the launch is alive while its launch command or launcher is.
+      # A launching record always names its launch command; one that does not is not proof.
+      ho_live_ps_ok || { echo unknown; return 0; }
       if [ -n "$(ho_session_current_pid "$rec" 2>/dev/null)" ]; then echo working
-      elif [ "$old" -eq 1 ]; then echo dead
-      else echo starting; fi
+      elif ho_live_launch_alive "$rec"; then echo starting
+      elif [ -z "$(jq -r '.launch_start // ""' "$rec" 2>/dev/null)" ]; then echo unknown
+      else echo dead; fi
       return 0
       ;;
     running) ;;
@@ -113,14 +141,10 @@ ho_live_verdict() {
   ho_live_ps_ok || { echo unknown; return 0; }
   pid=$(ho_session_current_pid "$rec")
   [ -n "$pid" ] && { echo working; return 0; }
-  # The process is gone. A model fallback starts the next attempt within the boot grace of the
-  # last PID file; until the launcher gives up (it writes .failed) that gap is "starting".
+  # The session process is gone. While its launcher lives, it may start the next model of the
+  # chain, so the gap is "starting"; a launcher that gave up wrote .failed first.
   [ -f "${rec%.json}.failed" ] && { echo dead; return 0; }
-  pidfile=$(jq -r '.pid_file // ""' "$rec")
-  t=$(ho_live_mtime "$pidfile")
-  grace=$(ho_cfg_int '.session.boot_grace_seconds' 45)
-  if [ -n "$t" ] && [ $(( $(date +%s) - t )) -le $(( grace + 5 )) ]; then echo starting; return 0; fi
-  echo dead
+  if ho_live_launch_alive "$rec"; then echo starting; else echo dead; fi
 }
 
 # ho_live_status_one <record>: one JSON line of facts. A running record whose process is gone

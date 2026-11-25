@@ -8,11 +8,19 @@ setcfg() { jq "$1" "$base/config.orig.json" > "$cfg"; }
 limit() { "$h" slot "$1" limits | jq -r "$2"; }
 # wl <run> <name> [args]: launch a worker in another run.
 wl() { local r=$1 n=$2; shift 2; "$h" session "$r" launch --role worker --name "$n" --cwd "$proj/src" --prompt "$base/prompt.md" "$@"; }
-# holder <run> <name>: a session record that is still launching (a live holder).
+# holder <run> <name> [owner-pid]: a session record that is still launching; its launch process
+# is the given one, by default a process that lives for the whole test (a live holder).
+# bg_proc: start a long sleep outside this shell's jobs (a bare "wait" below must not wait for
+# it) and print its PID; cleanup stops it by that PID.
+bg_proc() { local p; p=$( (sleep 3000 > /dev/null 2>&1 & echo $!) ); echo "$p" >> "$base/extra.pids"; printf '%s\n' "$p"; }
+owner=$(bg_proc)
+pstart() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" | sed 's/^ *//; s/ *$//'; }
 holder() {
+  local p=${3:-$owner}
   mkdir -p "$1/sessions"
-  jq -n --arg run "$(basename "$1")" --arg n "$2" '{schemaVersion: 2, run: $run, name: $n, role: "worker",
-    session_id: "11111111-2222-4333-8444-555555555555", pid: null, pid_file: "/nonexistent", status: "launching"}' > "$1/sessions/$2.json"
+  jq -n --arg run "$(basename "$1")" --arg n "$2" --argjson p "$p" --arg ps "$(pstart "$p")" '{schemaVersion: 2, run: $run, name: $n, role: "worker",
+    session_id: "11111111-2222-4333-8444-555555555555", pid: null, pid_file: "/nonexistent", status: "launching",
+    launch_pid: $p, launch_start: $ps}' > "$1/sessions/$2.json"
 }
 working_workers() { "$h" session "$1" status | jq -r 'select(.role == "worker" and .liveness == "working") | .name' | wc -l | tr -d ' '; }
 
@@ -68,7 +76,8 @@ assert_eq "H-105: still one worker at a time" 1 "$(working_workers "$r")"
 p=$(jq -r .pid "$r/sessions/c2.json")
 kill "$p"
 wait_gone "$p" || bad "test setup: c2 did not end" "$p"
-sleep 7 # past the model-fallback gap (boot_grace_seconds 5 + 5)
+# The launcher may still try the next model; it ends (or gives up) at once, as no model is left.
+i=0; while [ "$("$h" session "$r" status c2 | jq -r .liveness)" = starting ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
 assert_exit "H-105: a worker whose process died frees its slot" 0 wl "$r" c3
 assert_contains "H-105: the freed slot is in the ledger" "$(grep slot-freed "$r/ledger.jsonl")" '"holder":"c2"'
 
@@ -129,12 +138,15 @@ assert_eq "D26a: ten races for one slot each gave it to exactly one taker" 0 "$r
 rm -f "$r/sessions/h2.json"
 assert_exit "H-107: the heavy slot of a session with no record is freed" 0 "$h" slot "$r" acquire heavy --holder h3 --op browser-e2e
 
-# A launch that died while its record still says launching frees its slot after the launch window.
-holder "$r" k1; holder "$r" k2
+# A launch that died while its record still says launching frees its slot once its launch process
+# is gone, and not before, however old the record is.
+k1p=$(bg_proc)
+holder "$r" k1 "$k1p"; holder "$r" k2
 assert_exit "H-105: a launching holder takes a slot" 0 "$h" slot "$r" acquire stage:lint --holder k1
-assert_exit "H-105: a fresh launching holder keeps it" 73 "$h" slot "$r" acquire stage:lint --holder k2
 touch -t "$(date -v-1H '+%Y%m%d%H%M' 2>/dev/null || date -d '-1 hour' '+%Y%m%d%H%M')" "$r/sessions/k1.json"
-assert_exit "H-105: a launch stuck past the launch window frees its slot" 0 "$h" slot "$r" acquire stage:lint --holder k2
+assert_exit "H-105: a launching holder whose launch process lives keeps it, however old its record" 73 "$h" slot "$r" acquire stage:lint --holder k2
+kill "$k1p"; wait_gone "$k1p" || bad "test setup: the k1 launch process did not end" "$k1p"
+assert_exit "H-105: once its launch process is gone, its slot is freed" 0 "$h" slot "$r" acquire stage:lint --holder k2
 
 # ---- H-105: a failed launch whose session process runs keeps its worker slot ----
 # pidof <run> <name>: the PID the launcher reported, kept for cleanup (a failed launch's record

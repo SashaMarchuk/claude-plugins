@@ -15,7 +15,8 @@
 #   <run>/slots/.lock                    the lock (a folder; mkdir is atomic)
 #
 # A holder is a session of this run. Its slot is freed by release, by session close, or when
-# the session reads dead or closed (lib/liveness.sh) or its record is gone. A session that
+# the session reads dead (every recorded process of it is gone) or closed (lib/liveness.sh), or
+# its record is gone. The age of a record or a slot never frees a slot. A session that
 # needs a stage slot and the heavy slot takes the stage slot first.
 # Exit codes: 64 usage, 65 refused, 66 no such session, 73 no free slot (try again later),
 # 78 bad limit in the config.
@@ -72,6 +73,10 @@ ho_slot_lock_take() {
 
 # ho_slot_free_dead <kind-dir>: remove slots whose holder has no record or reads dead or closed;
 # print one "<holder>\t<reason>" line for each. Called under the lock.
+# A slot is freed only by a proven end, never by age (H-105). Before a "dead" holder's slot is
+# freed, its close flag is written and the verdict is read again: a launcher records itself
+# before it reads that flag, so either the second read sees the launcher alive and the slot is
+# kept, or the launcher sees the flag and starts no session.
 ho_slot_free_dead() {
   local f holder rec v
   for f in "$1"/*.json; do
@@ -83,6 +88,10 @@ ho_slot_free_dead() {
       continue
     fi
     v=$(ho_live_verdict "$rec")
+    if [ "$v" = dead ]; then
+      : > "$HO_RUN_DIR/sessions/$holder.closing" 2>/dev/null || continue
+      v=$(ho_live_verdict "$rec")
+    fi
     case $v in dead | closed) rm -f "$f" && printf '%s\tsession %s\n' "$holder" "$v" ;; esac
   done
 }

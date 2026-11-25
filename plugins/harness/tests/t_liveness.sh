@@ -44,7 +44,8 @@ launch w2 >/dev/null
 p2=$(rec w2 .pid)
 kill "$p2"
 wait_gone "$p2" || bad "test setup: w2 did not end" "$p2"
-sleep 7 # past boot_grace_seconds (5) + 5 s, so the gap of a model fallback is over
+# The launcher may still try the next model; it ends (or gives up) at once, as no model is left.
+i=0; while [ "$(st w2 | jq -r .liveness)" = starting ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
 out=$(st w2)
 assert_eq "H-090 / D20: a dead process ID reads as dead" dead "$(printf '%s' "$out" | jq -r .liveness)"
 assert_eq "H-090: the dead process is reported as gone" gone "$(printf '%s' "$out" | jq -r .process)"
@@ -62,13 +63,23 @@ jq -n --arg run "$(basename "$run")" --arg pid "$other" '{schemaVersion: 2, run:
   status: "running", runtime: "claude-code"}' > "$run/sessions/w3.json"
 assert_eq "H-090: a reused PID without the session ID reads as dead" dead "$(st w3 | jq -r .liveness)"
 
-# ---- the gap between two model attempts is not dead ----
+# ---- the gap between two model attempts is not dead, at any age ----
 jq -n --arg run "$(basename "$run")" --arg pf "$run/sessions/w4.pid" '{schemaVersion: 2, run: $run, name: "w4", role: "worker",
   session_id: "11111111-2222-4333-8444-666666666666", pid: 1, pid_file: $pf, status: "running", runtime: "claude-code"}' > "$run/sessions/w4.json"
 printf '999999 %s 11111111-2222-4333-8444-666666666666\n' "$(basename "$run")" > "$run/sessions/w4.pid"
-assert_eq "H-090: a fresh PID file with no live process yet reads as starting (model fallback)" starting "$(st w4 | jq -r .liveness)"
+sleep 600 &
+l4=$!
+echo "$l4" >> "$base/extra.pids"
+printf '%s %s\n' "$l4" "$(LC_ALL=C TZ=UTC ps -o lstart= -p "$l4" | sed 's/^ *//; s/ *$//')" > "$run/sessions/w4.launcher"
+touch -t "$(date -v-1H '+%Y%m%d%H%M' 2>/dev/null || date -d '-1 hour' '+%Y%m%d%H%M')" "$run/sessions/w4.pid" "$run/sessions/w4.json"
+assert_eq "H-090: no session process while its launcher lives reads as starting (model fallback), however old" starting "$(st w4 | jq -r .liveness)"
+printf '%s %s\n' "$l4" "Thu Jan  1 00:00:00 1970" > "$run/sessions/w4.launcher"
+assert_eq "H-090: a launcher PID with another start time is not that launcher (a reused PID)" dead "$(st w4 | jq -r .liveness)"
+jq '.status = "running"' "$run/sessions/w4.json" > "$base/w4.json" && mv "$base/w4.json" "$run/sessions/w4.json"
+printf '%s %s\n' "$l4" "$(LC_ALL=C TZ=UTC ps -o lstart= -p "$l4" | sed 's/^ *//; s/ *$//')" > "$run/sessions/w4.launcher"
 printf 'every model in the chain failed to start\n' > "$run/sessions/w4.failed"
 assert_eq "H-090: a launcher that gave up reads as dead" dead "$(st w4 | jq -r .liveness)"
+kill "$l4"; wait_gone "$l4" || true
 
 # ---- cannot read is not dead (field note I1) ----
 printf 'not json' > "$run/sessions/w5.json"

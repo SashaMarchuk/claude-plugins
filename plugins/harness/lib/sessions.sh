@@ -10,6 +10,7 @@
 #                                  each launch) and its session_id are the tags of the
 #                                  session's pane or tab
 #   <run>/sessions/<name>.pid      "<pid> <run-id> <session-id>", written by the launcher
+#   <run>/sessions/<name>.launcher "<pid> <start time>" of the launcher, written by it first
 #   <run>/sessions/<name>.closing  present while a close is under way (stops model fallback)
 #   <run>/sessions/<name>.failed   written by the launcher when the session could not start
 #   <run>/launchers/<name>.sh      the generated launcher
@@ -328,6 +329,14 @@ ho_session_launcher_text() {
   printf 'export PATH=%s\n' "$(ho_q "$path")"
   printf 'export HO_PROJECT_DIR=%s HO_RUN_DIR=%s HO_RUN_ID=%s\n' "$(ho_q "$HO_PROJECT_DIR")" "$(ho_q "$HO_RUN_DIR")" "$(ho_q "$HO_RUN_ID")"
   printf 'export HO_SESSION_NAME=%s HO_SESSION_ROLE=%s HO_SESSION_ID=%s\n' "$(ho_q "$name")" "$(ho_q "$role")" "$(ho_q "$sid")"
+  # H-105: before anything slow, the launcher records itself (PID and start time), then reads
+  # the close flag. A slot is freed only after its close flag is written and no process of the
+  # session is found (lib/slots.sh), so a launcher either counts as alive or starts nothing.
+  declare -f ho_proc_start
+  printf 'ho_self=$(ho_proc_start "$$")\n'
+  printf '[ -n "$ho_self" ] && printf '"'"'%%s %%s\\n'"'"' "$$" "$ho_self" > %s && mv -f %s %s || ho_fatal 70 "cannot record the launcher process; the session was not started"\n' \
+    "$(ho_q "${pidfile%.pid}.launcher.tmp")" "$(ho_q "${pidfile%.pid}.launcher.tmp")" "$(ho_q "${pidfile%.pid}.launcher")"
+  printf '[ -e %s ] && { ho_note "a close is under way; not starting"; exit 0; }\n' "$(ho_q "$closing")"
   printf 'cd -- %s || ho_fatal 66 "cannot enter the working folder; the session was not started"\n' "$(ho_q "$cwd")"
   if [ -n "$account" ]; then
     declare -f ho_account_env_parse
@@ -491,10 +500,19 @@ ho_session_launch_one() {
     printf 'harness: session %s is already registered in run %s\n' "$name" "$HO_RUN_ID" >&2
     return 65
   fi
-  # The reserved record says "launching" from the start, so a launch killed before its full
-  # record is written still reads dead after the launch window and frees its slot (lib/slots.sh).
+  # Files of an earlier launch of this name (its record was removed) must not speak for this one.
+  rm -f "$sdir/$name.pid" "$sdir/$name.closing" "$sdir/$name.failed" "$sdir/$name.launcher"
+  # The reserved record says "launching" and names this launch command (PID and start time)
+  # from its first write. It reads dead only once this command, the launcher and the session
+  # process are all gone (lib/liveness.sh), never by its age: a launch may wait for a slot or
+  # for its account command for as long as it needs.
+  local launch_pid=$$ launch_start
+  launch_start=$(ho_proc_start "$launch_pid")
+  [ -n "$launch_start" ] || { rm -f "$rec"; echo "harness: cannot read the start time of the launch process; nothing was launched" >&2; return 1; }
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg ts "$(ho_now)" \
-    '{schemaVersion: 2, run: $run, name: $name, role: $role, session_id: null, pid: null, status: "launching", created: $ts}' \
+    --argjson lp "$launch_pid" --arg ls "$launch_start" \
+    '{schemaVersion: 2, run: $run, name: $name, role: $role, session_id: null, pid: null, status: "launching", created: $ts,
+      launch_pid: $lp, launch_start: $ls}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   # The worker cap: counted and taken under the slot lock, while the name is reserved.
   if [ "$role" = worker ]; then
@@ -519,7 +537,9 @@ ho_session_launch_one() {
   # the other and stops.
   if [ -n "$resume" ]; then
     jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg sid "$sid" --arg pidfile "$sdir/$name.pid" --arg ts "$(ho_now)" \
-      '{schemaVersion: 2, run: $run, name: $name, session_id: $sid, pid: null, pid_file: $pidfile, status: "launching", created: $ts}' \
+      --argjson lp "$launch_pid" --arg ls "$launch_start" \
+      '{schemaVersion: 2, run: $run, name: $name, session_id: $sid, pid: null, pid_file: $pidfile, status: "launching", created: $ts,
+        launch_pid: $lp, launch_start: $ls}' \
       | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
     local f other=""
     for f in "$sdir"/*.json; do
@@ -567,14 +587,22 @@ ho_session_launch_one() {
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg account "$acct_name" \
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
-    --arg troot "$troot" \
+    --arg troot "$troot" --argjson lp "$launch_pid" --arg ls "$launch_start" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
       runtime: $runtime, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
-      transcript_root: (if $troot == "" then null else $troot end)}' \
+      transcript_root: (if $troot == "" then null else $troot end), launch_pid: $lp, launch_start: $ls}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"
 
+  # A worker opens a terminal only while it holds its slot. Only a proven end frees a slot, and
+  # this launch is alive, so this holds; the check keeps any later change from opening a worker
+  # without one.
+  if [ "$role" = worker ] && [ ! -f "$HO_RUN_DIR/slots/worker/$name.json" ]; then
+    rm -f "$rec"
+    printf 'harness: %s no longer holds a worker slot; nothing was opened\n' "$name" >&2
+    return "$HO_SLOT_NOSLOT"
+  fi
   local handle rc=0
   handle=$(ho_term_open "$group" "$title" "$launcher" "$tag" "$sid") || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -630,9 +658,9 @@ ho_session_close() {
   fi
   status=$(jq -r '.status // ""' "$rec")
   [ "$status" = closed ] && { printf 'session %s already closed\n' "$name"; return 0; }
-  # A launch rewrites its record within the boot timeout; a record left "launching" for
-  # longer belongs to a launch that died, and may be closed.
-  if [ "$status" = launching ] && [ -z "$(find "$rec" -mmin +10 2>/dev/null)" ]; then
+  # A launching record may be closed only once its launch is proven gone (every process of it
+  # is gone); its age says nothing.
+  if [ "$status" = launching ] && [ "$(ho_live_verdict "$rec")" != dead ]; then
     printf 'harness: session %s is still launching; close it once the launch has finished\n' "$name" >&2
     return 65
   fi

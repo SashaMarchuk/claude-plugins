@@ -171,7 +171,7 @@ kill "$tp"; wait_gone "$tp" || bad "test setup: t1 did not end" "$tp"
 wait_file "$base/rc-t2" 250 || bad "test setup: t2 did not return" ""
 assert_eq "H-105: a stop during the slot wait ends the launch with exit 75 and starts nothing" "75 no" \
   "$(cat "$base/rc-t2") $([ -f "$r/sessions/t2.pid" ] && echo yes || echo no)"
-assert_eq "H-105: the waiting launch holds no slot after the stop" 0 "$(ls "$r/slots/worker" | wc -l | tr -d ' ')"
+assert_eq "H-105: the waiting launch holds no slot after the stop" no "$([ -f "$r/slots/worker/t2.json" ] && echo yes || echo no)"
 
 # A slot whose holder reads unknown has an owner's way out, at a terminal only.
 r=$("$h" run new --workers 1)

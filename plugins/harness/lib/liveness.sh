@@ -49,13 +49,19 @@ ho_proc_same() {
   [ -n "$s" ] && [ "$s" = "$2" ]
 }
 
+# ho_live_launch_cmd_alive <record>: 0 when the launch command that wrote the record is alive.
+ho_live_launch_cmd_alive() {
+  local p s
+  p=$(jq -r '.launch_pid // "" | tostring' "$1" 2>/dev/null) || p=""
+  s=$(jq -r '.launch_start // ""' "$1" 2>/dev/null) || s=""
+  ho_proc_same "$p" "$s"
+}
+
 # ho_live_launch_alive <record>: 0 when the launch command or the launcher of this launch is
 # alive. Reads only.
 ho_live_launch_alive() {
   local rec=$1 p s lf
-  p=$(jq -r '.launch_pid // "" | tostring' "$rec" 2>/dev/null) || p=""
-  s=$(jq -r '.launch_start // ""' "$rec" 2>/dev/null) || s=""
-  ho_proc_same "$p" "$s" && return 0
+  ho_live_launch_cmd_alive "$rec" && return 0
   lf="${rec%.json}.launcher"
   [ -f "$lf" ] || return 1
   p="" s=""

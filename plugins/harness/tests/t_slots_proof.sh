@@ -58,6 +58,7 @@ age "$r/sessions/s1.json"
 assert_eq "H-105: a launch busy in its account command reads as starting at any age" starting \
   "$("$h" session "$r" status s1 | jq -r .liveness)"
 assert_exit "H-105: slow account command: its slot is not freed, so the next worker waits" 73 wl "$r" s2
+assert_exit "H-105: a launch whose launch command still runs cannot be closed, however old its record" 65 "$h" session "$r" close s1
 rm -f "$base/hold"
 wait_file "$base/rc-s1" 300 || bad "test setup: s1 did not return" ""
 assert_eq "H-105: the slow launch still starts its session" 0 "$(cat "$base/rc-s1")"
@@ -81,9 +82,9 @@ wait_file "$r/sessions/k1.pid" 100 || bad "test setup: the k1 launcher did not s
 sleep 0.5
 assert_eq "H-105: killed launch: cap 1 never shows two worker processes" 1 "$(live_workers "$r" k1 k2)"
 kp=$(pid_of "$r" k1)
-kill "$kp"; wait_gone "$kp" || bad "test setup: k1 did not end" "$kp"
-i=0; while [ "$("$h" session "$r" status k1 | jq -r .liveness)" != dead ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
-assert_eq "H-090: once every process of the launch is gone the record reads dead" dead "$("$h" session "$r" status k1 | jq -r .liveness)"
+assert_contains "H-105: once its launch command is gone, close ends the session of a launching record" \
+  "$("$h" session "$r" close k1 2>&1)" "closed"
+assert_eq "H-105: the closed session's process is gone" no "$(alive "$kp" && echo yes || echo no)"
 assert_exit "H-105: then the slot is free" 0 wl "$r" k2
 
 # ---- freeing the slot of a dead launch stops a launcher that has not started yet ----

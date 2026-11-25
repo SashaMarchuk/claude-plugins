@@ -658,9 +658,9 @@ ho_session_close() {
   fi
   status=$(jq -r '.status // ""' "$rec")
   [ "$status" = closed ] && { printf 'session %s already closed\n' "$name"; return 0; }
-  # A launching record may be closed only once its launch is proven gone (every process of it
-  # is gone); its age says nothing.
-  if [ "$status" = launching ] && [ "$(ho_live_verdict "$rec")" != dead ]; then
+  # A launching record may be closed once the launch command that wrote it is gone (its own
+  # check, not the record's age). Its session, if one runs, is then closed as any other.
+  if [ "$status" = launching ] && { ho_live_launch_cmd_alive "$rec" || [ -z "$(jq -r '.launch_start // ""' "$rec" 2>/dev/null)" ]; }; then
     printf 'harness: session %s is still launching; close it once the launch has finished\n' "$name" >&2
     return 65
   fi

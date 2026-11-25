@@ -161,8 +161,10 @@ assert_contains "Rebuild graceful close: the timeout is recorded in the ledger" 
 # ---- records that cannot be trusted are not closed ---------------------------------------
 launch k1 >/dev/null
 pk=$(rec k1 .pid)
-jq '.status = "launching"' "$run/sessions/k1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/k1.json"
-assert_exit "Rebuild graceful close: a session still launching is not closed" 65 "$h" session "$run" close k1
+# A launch still in progress: its launch command (here the test shell, by PID and start time) runs.
+jq --argjson p "$$" --arg s "$(LC_ALL=C TZ=UTC ps -o lstart= -p "$$" | sed 's/^ *//; s/ *$//')" \
+  '.status = "launching" | .launch_pid = $p | .launch_start = $s' "$run/sessions/k1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/k1.json"
+assert_exit "Rebuild graceful close: a session whose launch command still runs is not closed" 65 "$h" session "$run" close k1
 jq '.status = "running" | .session_id = ""' "$run/sessions/k1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/k1.json"
 assert_exit "S8-27: a record without a session ID is refused, not marked closed" 66 "$h" session "$run" close k1
 assert_eq "S8-27: the session behind an unusable record keeps running" "yes" "$(alive "$pk" && echo yes || echo no)"

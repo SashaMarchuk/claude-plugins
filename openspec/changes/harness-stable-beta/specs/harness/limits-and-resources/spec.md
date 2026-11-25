@@ -103,10 +103,10 @@ Source: interview 2026-11-24 R21.6; D26b; context rejected entry 4; owner messag
 - **WHEN** the owner configures concurrency and no usage history exists
 - **THEN** the harness shows no recommended value, and the defaults apply: a total of 1, and per-stage values per design.md D26
 
-### Requirement: H-109 Limits are read for every added account, including a possible 5-hour window
-The harness SHALL read the subscription limits of every account added to it, and SHALL account for a possible 5-hour limit, which only some subscriptions have. The owner accepted the current reading method and welcomed a better or more efficient one. The reading source is an agent decision (design.md D28, S8-23).
+### Requirement: H-109 Limits are read for every added account, in every window it has
+The harness SHALL read the subscription limits of every account added to it, in every window the account reports: a 5-hour window, which only some subscriptions have, a weekly window and any other window present. The owner accepted the current reading method and welcomed a better or more efficient one. The reading source is an agent decision (design.md D28, S8-23).
 Decided: design.md D37-LIMITS-5
-Source: interview 2026-11-24 R23.1, R23.2, R23.4; D28, S8-23
+Source: interview 2026-11-24 R23.1, R23.2, R23.4; D28, S8-23; owner decision 2026-11-26
 
 #### Scenario: Direct endpoint read is opt-in
 - **WHEN** the harness reads limits and the user has not opted in to the direct endpoint read
@@ -124,21 +124,45 @@ Source: interview 2026-11-24 R23.1, R23.2, R23.4; D28, S8-23
 - **WHEN** an account reports a weekly window but no 5-hour window
 - **THEN** the harness checks the weekly window and does not treat the missing 5-hour window as an error
 
-### Requirement: H-110 Configurable thresholds and the stop action at each threshold
-Thresholds on limit usage, such as 90%, SHALL be configurable per project and per person. The action at each threshold SHALL be configurable: a soft stop or a hard stop, and which kind of soft or hard stop. The default threshold and action, and the order in which person and project settings combine, are agent decisions (design.md D28 and D28a).
-Source: interview 2026-11-24 R23.3, R20.13; D28, D28a
+#### Scenario: An account has another window
+- **WHEN** an account reports a window that is neither the 5-hour nor the weekly one
+- **THEN** the harness reads that window too, under the name the account reports
+
+### Requirement: H-110 Optional per-window thresholds, set by the user, and the stop action at each
+Thresholds on limit usage SHALL be optional and set by the user, one per window: 5-hour, weekly and any other window present. When switched on, the harness SHALL read them and apply the user's values. A project MAY set its own, and the project setting SHALL beat the user setting. Setup SHALL offer 90% for every window. The action at each threshold SHALL be configurable: a soft or a hard stop, and which kind.
+Source: interview 2026-11-24 R23.3, R20.13; D28, D28a; owner decision 2026-11-26
+
+#### Scenario: Thresholds are switched off
+- **WHEN** neither the project settings nor the user settings switch a threshold on
+- **THEN** no threshold action runs below a limit
+- **AND** the wait at a limit that was hit still applies (H-114)
+
+#### Scenario: Setup offers the default
+- **WHEN** the person reaches the limits part of setup
+- **THEN** setup offers a threshold of 90% for every window
+- **AND** thresholds are switched on only after a yes
+
+#### Scenario: Each window has its own threshold
+- **WHEN** the user sets 80% for the 5-hour window and 90% for the weekly window, and an account reaches 80% of its 5-hour window and 85% of its weekly window
+- **THEN** the action of the 5-hour threshold runs
+- **AND** the weekly threshold triggers nothing
 
 #### Scenario: A threshold triggers its configured action
-- **WHEN** a project sets "at 90%, soft stop after the current step" and an account reaches 90%
+- **WHEN** a project sets "weekly window at 90%, soft stop after the current step" and an account reaches 90% of its weekly window
 - **THEN** the harness runs that soft stop
 
 #### Scenario: A threshold set to a hard stop
-- **WHEN** the owner's settings set "at 95%, hard stop" and an account reaches 95%
+- **WHEN** the owner's settings set "5-hour window at 95%, hard stop" and an account reaches 95% of its 5-hour window
 - **THEN** the harness runs the configured hard stop variant
 
-#### Scenario: Person and project settings both exist (agent decision D28a)
-- **WHEN** the owner's personal settings and the project settings both define the same threshold setting
-- **THEN** the project setting wins, then the personal setting, then the shipped default
+#### Scenario: Project and user settings both exist
+- **WHEN** the user settings and the project settings both set a threshold for the same window
+- **THEN** the project setting wins for runs in that project
+- **AND** other projects keep the user setting
+
+#### Scenario: A window has no threshold
+- **WHEN** thresholds are set for the weekly window only and an account also reports a 5-hour window
+- **THEN** no threshold action runs for the 5-hour window
 
 ### Requirement: H-111 An unreadable limit does not stop work
 When a limit cannot be read, the harness SHALL continue the work. An unreadable limit MUST NOT block worker starts or ticket work. How the unreadable state is recorded and reported is an agent decision (design.md D28b).
@@ -152,32 +176,33 @@ Source: interview 2026-11-24 R23.6; D28b
 - **WHEN** the limit source returns an error for an account during a run
 - **THEN** the harness keeps running tickets and starting workers
 
-### Requirement: H-112 The reserve for the owner's own work is a setting with no shipped value
-The harness SHALL let the owner set a reserve of subscription capacity for the owner's own work, per project or per user. The harness SHALL ship no reserve value. The owner sets it later; this is not an agent decision.
-OPEN: see design.md OPEN-15
-Source: interview 2026-11-24 R23.7; D29
+### Requirement: H-112 The reserve for the owner's own work is kept through the per-window thresholds
+The harness SHALL let the owner keep a reserve of subscription capacity for the owner's own work, per project or per user, through the optional per-window thresholds of H-110. The reserve of a window SHALL be the part above its threshold. The harness SHALL ship no active reserve: with thresholds switched off, none is kept.
+Source: interview 2026-11-24 R23.7; D29; owner decision 2026-11-26
 
-#### Scenario: No reserve is configured
-- **WHEN** neither the project nor the user settings define a reserve
-- **THEN** the harness applies no reserve and uses only the configured thresholds
+#### Scenario: No threshold is switched on
+- **WHEN** neither the project nor the user settings switch a threshold on
+- **THEN** the harness keeps no reserve
+
+#### Scenario: The offered default is accepted
+- **WHEN** the person accepts 90% for every window at setup
+- **THEN** the harness keeps 10% of every window as the reserve
 
 #### Scenario: The owner sets a reserve for one project
-- **WHEN** the owner sets a reserve in one project's settings
+- **WHEN** the owner sets a threshold in one project's settings
 - **THEN** that project's runs keep the reserve, and other projects are not affected
 
 ### Requirement: H-113 The limit banner in the terminal is recognised
-The harness MUST recognise the subscription-limit banner that the coding tool shows in a session's terminal, and this SHALL be validated in the final product check. If that is not possible before release, a prepared deferred test task is left in the build tasks (tasks.md), not the released plugin, and the owner starts it.
-OPEN: see design.md OPEN-LIMITS-3
-OPEN: see design.md OPEN-15
-Source: interview 2026-11-24 R27.4; D35
+The harness MUST recognise the subscription-limit banner that the coding tool shows in a session's terminal, and this SHALL be validated in the final product check. If that is not possible before release, a prepared deferred test task is left in the build tasks (tasks.md), not the released plugin. The build session MAY start that test itself when the build account comes close to a real limit.
+Source: interview 2026-11-24 R27.4; D35; owner decision 2026-11-26
 
 #### Scenario: The builder plans around current limits
 - **WHEN** the build is planned
-- **THEN** the owner instructs the builder to plan around the current limits so the banner test can happen
+- **THEN** the builder plans around the current limits so the banner test can happen
 
-#### Scenario: An approaching limit prompts the test
-- **WHEN** an account approaches its limit while the deferred test task is still open
-- **THEN** that prompts the owner to start the banner test
+#### Scenario: An approaching limit may start the test
+- **WHEN** the build account comes close to a real limit while the deferred test task is still open
+- **THEN** the build session may start the banner test itself, and no owner start is needed
 
 #### Scenario: A session shows the limit banner
 - **WHEN** a session's terminal shows the subscription-limit banner
@@ -185,7 +210,7 @@ Source: interview 2026-11-24 R27.4; D35
 
 #### Scenario: The banner cannot be validated before release
 - **WHEN** no account reaches a limit during the final product check
-- **THEN** banner recognition is recorded as not yet validated, a prepared deferred test task is left in the build tasks, and only the owner starts it
+- **THEN** banner recognition is recorded as not yet validated, and a prepared deferred test task is left in the build tasks
 
 ### Requirement: H-114 A hit limit waits for reset and the run continues
 When a session stops because its account hit a subscription limit, the harness SHALL wait until that limit resets and then continue the work. This is existing behaviour that stays; it was decided before the interview and was not restated in it. The wait and resume mechanism is an agent decision (design.md D28c).

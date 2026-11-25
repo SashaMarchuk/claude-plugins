@@ -103,11 +103,11 @@ Decided: design.md D37-FLOW-2
 - **THEN** the harness stops at start and names the step
 - **AND** the message names the route: copy the system's step list into an own flow
 
-### Requirement: H-068 Any flow system is supported; a ready-made or own flow is chosen explicitly
-The harness MUST support any flow system; named ones (GSD, superpowers) are examples only. Nothing SHALL restrict the choice, and no flow system's name SHALL be hard-coded in engine code. The user SHALL explicitly pick a ready-made flow or set up their own. Generic ready-made flow and its name: design.md S8-16a.
+### Requirement: H-068 Any flow system is supported; the flow is the person's confirmed choice
+The harness MUST support any flow system; named ones (GSD, superpowers) are examples only. Nothing SHALL restrict the choice, and no flow system's name SHALL be hard-coded in engine code. The flow SHALL be the person's confirmed choice: a ready-made flow, an own flow, or the default of H-001. The harness MUST NOT use a flow that nobody confirmed.
 
-Source: interview 2026-11-24 R16.1, R16.2; S8-16a; context (rejected: binding to one flow or hard-coding a vendor name)
-Decided: design.md D37-FLOW-1 (H-001: see OPEN-1)
+Source: interview 2026-11-24 R16.1, R16.2; S8-16a; owner decision 2026-11-26
+Decided: design.md D37-FLOW-1
 
 #### Scenario: The user picks a ready-made flow
 - **WHEN** the user picks a ready-made flow during setup
@@ -118,24 +118,29 @@ Decided: design.md D37-FLOW-1 (H-001: see OPEN-1)
 - **THEN** the harness lets the user define the steps of that flow
 - **AND** runs tickets by it
 
+#### Scenario: The default is confirmed
+- **WHEN** nothing is configured and the person confirms the default in the configuration skill or at the first start
+- **THEN** the harness runs tickets by the GSD flow
+- **AND** the flow's name comes from the shipped default config, not from engine code
+
 #### Scenario: A system the harness has not seen before
 - **WHEN** the user points the flow configuration to a flow system that is not among the named examples
 - **THEN** the harness does not refuse it because of its name
 
-#### Scenario: No flow is selected
-- **WHEN** a run starts and no flow is selected
-- **THEN** the harness does not pick a flow by itself
+#### Scenario: Nothing is configured and nothing is confirmed
+- **WHEN** a run starts, no flow is configured at the project level or the user level, and no confirmation exists
+- **THEN** the harness uses no flow silently
 - **AND** it follows H-072
 
 #### Scenario: The chosen flow cannot be loaded
 - **WHEN** a run starts and the named flow file is missing or unreadable
 - **THEN** the harness stops at start and names the flow
-- **AND** it does not fall back to another flow
+- **AND** it does not fall back to another flow or to the default
 
 ### Requirement: H-069 Setup recommends the flow the person already uses
-At setup, the configuration flow SHALL check the person's memory and existing setup. If it finds an existing flow, it SHALL recommend that flow and say whether it is on the tested list (design.md D37-FLOW-6). If it finds none, it SHALL propose that the person creates their own flow. The recommendation MUST NOT replace the person's explicit choice.
+At setup, the configuration flow SHALL check the person's memory and existing setup. If it finds an existing flow, it SHALL recommend that flow and say whether it is on the tested list (design.md D37-FLOW-6). If it finds none, it SHALL offer the default of H-001, and the person MAY create an own flow instead. The recommendation MUST NOT replace the person's explicit choice.
 
-Source: interview 2026-11-24 R16.6
+Source: interview 2026-11-24 R16.6; owner decision 2026-11-26
 Decided: design.md D37-FLOW-6
 
 #### Scenario: An existing flow is found
@@ -145,7 +150,8 @@ Decided: design.md D37-FLOW-6
 
 #### Scenario: No existing flow is found
 - **WHEN** setup finds no flow in the person's memory or setup
-- **THEN** setup proposes creating the person's own flow
+- **THEN** setup offers the default: the GSD flow with OpenSpec
+- **AND** the person confirms it, picks another flow, or creates an own flow
 
 #### Scenario: The found flow is not on the tested list
 - **WHEN** setup finds a flow system that the README does not list as tested
@@ -170,7 +176,7 @@ Source: interview 2026-11-24 R17.1, R17.2, R17.3
 - **THEN** the harness runs by the one that is selected, and ignores the other
 
 ### Requirement: H-071 A local file selects the config to use
-A local file on each machine SHALL select which committed config the harness uses. Two machines that clone the same repo MUST be able to do a short harness setup and then reuse the same committed workflow. Whether the flow is chosen per project or per person is set in design.md S8-16b.
+A local file on each machine SHALL select which committed config the harness uses, or record that the confirmed default is used. Two machines that clone the same repo MUST be able to do a short harness setup and then reuse the same committed workflow. Whether the flow is chosen per project or per person is set in design.md S8-16b.
 
 Source: interview 2026-11-24 R17.4; S8-16b
 Decided: design.md D37-FLOW-5 (where the local file lives, that it is not committed, and what remote config means)
@@ -189,11 +195,11 @@ Decided: design.md D37-FLOW-5 (where the local file lives, that it is not commit
 - **THEN** git does not track that file
 - **AND** the repository's shared ignore file is unchanged
 
-### Requirement: H-072 A missing local selection stops the harness and offers setup
-When no local file selects a config, the harness SHALL NOT continue with development (hard stop; design.md D37-FLOW-4). If the repo holds a config, the harness SHALL ask whether to use it and, on yes, create a local file that points to it; otherwise a new workflow SHALL be created.
+### Requirement: H-072 A missing confirmation stops the harness and asks once
+With no confirmed config for the project on this machine, the harness SHALL stop development and ask once. A committed config SHALL need the person's yes on this machine. With no config anywhere, the harness SHALL offer the default of H-001. A saved user default SHALL count only when the repo holds no config. An unattended run SHALL stop and raise an attention notice, and MUST NOT pick silently.
 
-Source: interview 2026-11-24 R17.9
-Decided: design.md D37-FLOW-4 (the hard stop is an agent decision)
+Source: interview 2026-11-24 R17.9; owner decision 2026-11-26
+Decided: design.md D37-FLOW-4
 
 #### Scenario: A committed config is found and accepted
 - **WHEN** the harness starts with no local selection and the repo holds a config
@@ -205,9 +211,31 @@ Decided: design.md D37-FLOW-4 (the hard stop is an agent decision)
 - **WHEN** the person declines the committed config
 - **THEN** the harness guides the person through creating a new workflow
 
-#### Scenario: No config exists anywhere
-- **WHEN** the harness starts with no local selection and the repo holds no config
-- **THEN** the harness stops and offers the configuration skill, and harness work stays blocked until the first config files exist
+#### Scenario: Nothing is configured anywhere
+- **WHEN** the harness starts with no local selection, the repo holds no config, and the user settings hold no confirmed default
+- **THEN** the harness stops, offers the default (the GSD flow with OpenSpec) and names the configuration skill, which recommends a flow the person already uses (H-069)
+- **AND** on yes, it writes the local file that records the confirmation, and asks whether to save the confirmation in the user settings
+- **AND** the person may pick another flow or requirements format through the configuration skill instead
+
+#### Scenario: A confirmed default is saved in the user settings
+- **WHEN** the harness starts with no local selection, the repo holds no config, and the user settings hold a confirmed default
+- **THEN** the run starts without a question
+- **AND** the local file records that the confirmation came from the user settings
+
+#### Scenario: A committed config next to a saved user default
+- **WHEN** the harness starts with no local selection, the repo holds a config, and the user settings hold a confirmed default
+- **THEN** the harness still stops and asks whether to use the committed config
+- **AND** the saved user default does not accept it
+
+#### Scenario: A config is committed after a start on the default
+- **WHEN** a project runs on the confirmed default and a config later appears in the repo
+- **THEN** the harness keeps the confirmed selection and prints one notice that names the new config
+- **AND** it uses that config only after the person selects it
+
+#### Scenario: An unattended start with no confirmation
+- **WHEN** an automatic restart, a resume or another unattended start finds no confirmation at the project level or the user level
+- **THEN** it stops and raises an attention notice
+- **AND** it picks no flow, no requirements format and no config
 
 #### Scenario: A developer without the harness is not blocked
 - **WHEN** a developer who does not use the harness works in the same repo
@@ -215,8 +243,8 @@ Decided: design.md D37-FLOW-4 (the hard stop is an agent decision)
 
 #### Scenario: The selection names a missing config
 - **WHEN** the local file names a config that is missing or unreadable
-- **THEN** the harness stops as with no selection
-- **AND** it does not fall back to another config or to a shipped default config
+- **THEN** the harness stops as with no confirmation
+- **AND** it does not fall back to another config, to the saved user default or to the shipped default config
 
 ### Requirement: H-073 Flow systems are linked, never vendored, and checked present at start
 Flow systems themselves, such as GSD or superpowers, SHALL NOT be stored in the project repo. Configs SHALL only link to them. When the harness starts development, it MUST check that every technology and skill the flow names is present, because a linked system may be absent from a given machine. If one is missing, the harness SHALL stop before work starts, name it and install nothing (design.md D37-RUNTIME-3).
@@ -273,20 +301,33 @@ Decided: design.md D37-RUNTIME-1, D37-RUNTIME-2
 - **WHEN** the user looks at running the execution step on Codex
 - **THEN** the harness offers it as experimental (design.md D30)
 
-### Requirement: H-076 Optional requirements format, with an offer to set up OpenSpec
-The harness SHALL be able to offer OpenSpec setup as a project's requirements format; for now it is the only one. Using one MUST be optional and configurable, including whether grilling uses the requirements. A project without OpenSpec SHALL be a valid, normal case. Defaults: design.md D41 and D37-FLOW-7 (agent decisions on the owner's delegation); the default format is none.
+### Requirement: H-076 Optional requirements format; OpenSpec is the default after one confirmation
+The requirements format SHALL be a setting: OpenSpec, for now the only format, or none. When nothing is configured, the default SHALL be OpenSpec, confirmed once together with the flow (H-001). The setting SHALL resolve project first, then user. Whether grilling uses the requirements SHALL be configurable. A project without OpenSpec SHALL be a valid, normal case.
 
-Source: interview 2026-11-24 R30.2, R30.3; D41
-Decided: design.md D37-FLOW-7 (H-001: see OPEN-1)
+Source: interview 2026-11-24 R30.2, R30.3; D41; owner decision 2026-11-26
+Decided: design.md D37-FLOW-7
 
-#### Scenario: OpenSpec is offered and accepted
-- **WHEN** the user picks OpenSpec as the requirements format and the project has none
+#### Scenario: The default is confirmed in a project without OpenSpec
+- **WHEN** the person confirms OpenSpec as the requirements format and the project has none
 - **THEN** the harness offers to set up OpenSpec
 - **AND** sets it up only after the user says yes
 
+#### Scenario: The OpenSpec setup is declined
+- **WHEN** the person declines the OpenSpec setup, or answers none
+- **THEN** the harness records none as the requirements format for this project on this machine
+- **AND** tickets run normally, with nothing about OpenSpec added
+
 #### Scenario: A project without OpenSpec
-- **WHEN** a project uses GSD and has no OpenSpec
+- **WHEN** a project uses GSD and its requirements format is none
 - **THEN** the harness runs tickets normally, with nothing about OpenSpec added
+
+#### Scenario: A folder alone decides nothing
+- **WHEN** a project holds an `openspec/` folder and its requirements format is none
+- **THEN** the harness does not read that folder as requirements
+
+#### Scenario: The project beats the user
+- **WHEN** the user's confirmed default is OpenSpec and the selected project config sets none
+- **THEN** the requirements format for that project is none
 
 #### Scenario: Grilling ignores the requirements
 - **WHEN** the project uses OpenSpec and the user sets grilling not to take requirements into account

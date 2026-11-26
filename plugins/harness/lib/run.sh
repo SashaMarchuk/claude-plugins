@@ -231,8 +231,52 @@ ho_marker() {
 }
 
 # ho_run_new: create and stamp a run under the current project; print its folder.
+# Run limits (H-104, H-107, D26): read once at run start into <run>/limits.json; lib/slots.sh
+# enforces them.
+# ho_limit_value <jq-path> <default> <what>: a whole number of at least 1 from the config.
+ho_limit_value() {
+  local v
+  v=$(ho_cfg "$1" "$2") || exit $?
+  case $v in
+    '' | *[!0-9]* | 0 | 0*) printf 'harness: config %s=%s: %s must be a whole number of at least 1\n' "$1" "$v" "$3" >&2; return 78 ;;
+  esac
+  printf '%s\n' "$((10#$v))"
+}
+
+# ho_limits_stamp <run-dir> <workers-from-launch>: write limits.json once. A launch value beats
+# the config, which beats the default of 1.
+ho_limits_stamp() {
+  local dir=$1 workers=$2 heavy stages
+  if [ -z "$workers" ]; then workers=$(ho_limit_value '.limits.workers' 1 'the worker cap') || return 78; fi
+  heavy=$(ho_limit_value '.limits.heavy' 1 'the heavy-work limit') || return 78
+  stages=$(ho_cfg '.limits.stages | tojson' 'null') || return 78
+  [ "$stages" = null ] && stages='{}'
+  printf '%s' "$stages" | jq -e 'type == "object" and all(to_entries[]; (.key | test("^[a-z][a-z0-9-]{0,39}$")) and (.value | type == "number" and . >= 1 and . == floor))' >/dev/null 2>&1 || {
+    printf 'harness: config limits.stages must map stage ids (a-z 0-9 -) to whole numbers of at least 1\n' >&2
+    return 78
+  }
+  jq -n --argjson w "$workers" --argjson h "$heavy" --argjson s "$stages" \
+    '{schemaVersion: 2, workers: $w, heavy: $h, stages: ({browser: 1} + $s)}' | ho_atomic_write "$dir/limits.json"
+}
+
+# ho_workers_arg <value>: check a --workers value.
+ho_workers_arg() {
+  case ${1-} in
+    '' | *[!0-9]* | 0 | 0*) printf 'harness: --workers must be a whole number of at least 1, not %s\n' "${1-}" >&2; return 64 ;;
+  esac
+}
+
+# ho_run_new [--workers N]: the worker cap given at launch beats the config (H-104).
 ho_run_new() {
-  local proj runs id dir tries=0
+  local proj runs id dir tries=0 workers=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --workers) [ $# -ge 2 ] || { echo "harness: --workers needs a number" >&2; exit 64; }; workers=$2; shift 2 ;;
+      *) printf 'harness: unknown run new argument %s\n' "$1" >&2; exit 64 ;;
+    esac
+  done
+  [ -z "$workers" ] || ho_workers_arg "$workers" || exit 64
+  [ -z "$workers" ] || workers=$((10#$workers))
   ho_config_files >/dev/null || exit $?
   proj=$(ho_project_root) || { echo "harness: no project here (no .harness/config.json); run setup first" >&2; exit "$HO_EXIT_CONFIG"; }
   if [ -e "$proj/.harness/STOP" ]; then
@@ -249,6 +293,8 @@ ho_run_new() {
     [ "$tries" -lt 5 ] || { echo "harness: cannot create a run folder in $runs" >&2; exit 1; }
   done
   mkdir "$dir/markers"
+  # Limits are fixed for the run before the stamp is written: a run never starts without them.
+  ho_limits_stamp "$dir" "$workers" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
   jq -n --argjson schema "$HO_RUN_SCHEMA" --arg engine "$HO_ENGINE" --arg id "$id" --arg ts "$(ho_now)" \
     '{schemaVersion: $schema, engine: $engine, runId: $id, created: $ts}' | ho_atomic_write "$dir/run.json" || exit 1
   HO_RUN_DIR=$dir

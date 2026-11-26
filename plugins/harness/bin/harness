@@ -28,6 +28,10 @@ export HO_ROOT
 . "$HO_ROOT/lib/term.sh"
 # shellcheck source=../lib/sessions.sh
 . "$HO_ROOT/lib/sessions.sh"
+# shellcheck source=../lib/liveness.sh
+. "$HO_ROOT/lib/liveness.sh"
+# shellcheck source=../lib/slots.sh
+. "$HO_ROOT/lib/slots.sh"
 # shellcheck source=../lib/flow.sh
 . "$HO_ROOT/lib/flow.sh"
 # shellcheck source=../lib/loop.sh
@@ -47,9 +51,10 @@ verbs:
   selftest   check that no 0.6.0 variable or script can leak into this engine
   tickets    the ticket queue (run "harness tickets help")
   config     config get <jq-path> [default] | config get --int <jq-path> <default> | config check
-  run        run new: create a stamped run in this project
+  run        run new [--workers N]: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
-  session    session <run-dir> launch|close|list: launch, list and close sessions
+  session    session <run-dir> launch|close|list|status|read: sessions and their liveness
+  slot       slot <run-dir> acquire|release|list|limits|heavy-ops|heavy-add: engine-enforced limits
   loop       loop <run-dir> integration|ready|verdict|merge|status: the engine-checked merge
   flow       flows: list | check | steps | plan | preflight <flow> | copy <flow> <new> | render <flow> <role> ...
   screen     screen text: classify a capture, watch a session, pre-trust a folder, wait
@@ -65,9 +70,10 @@ case $verb in
   selftest) ho_isolation_check ;;
   tickets)  ho_tickets "$@" ;;
   config)   ho_config_main "$@" ;;
-  run)      [ "${1-}" = new ] || { ho_usage >&2; exit 64; }; ho_run_new ;;
+  run)      [ "${1-}" = new ] || { ho_usage >&2; exit 64; }; shift; ho_run_new "$@" ;;
   state)    ho_state_main "$@" ;;
   session)  ho_session_main "$@" ;;
+  slot)     ho_slot_main "$@" ;;
   flow)     ho_flow_main "$@" ;;
   loop)     ho_loop_main "$@" ;;
   screen)   ho_screen_main "$@" ;;

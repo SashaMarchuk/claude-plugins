@@ -115,7 +115,7 @@ ho_slot_try() {
     trap 'exit 143' TERM
     [ -f "$dir/$holder.json" ] && exit 0
     # The holder is checked again here, under the lock, at every try: a session that was closed
-    # or ended while it waited for the slot gets none (Codex review of PR #99).
+    # or ended while it waited for the slot gets none (review of PR #99).
     hrec="$HO_RUN_DIR/sessions/$holder.json"
     [ -f "$hrec" ] || { printf 'harness: %s is no longer a session of run %s; no slot taken\n' "$holder" "$HO_RUN_ID" >&2; exit 66; }
     hv=$(ho_live_verdict "$hrec")

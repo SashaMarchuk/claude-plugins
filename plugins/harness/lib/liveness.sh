@@ -168,7 +168,7 @@ ho_live_transcript_root() {
     v=$(printf '%s\n' "$envlines" | ho_account_env_parse 2>/dev/null | awk -F '\t' -v k="$var" '$1 == k { v = $2 } END { print v }')
   fi
   if [ -z "$v" ] && [ -n "$var" ]; then v=$(printenv "$var" 2>/dev/null || true); fi
-  # {home} is the session's HOME: the account's, when its command sets one (Codex review of
+  # {home} is the session's HOME: the account's, when its command sets one (review of
   # PR #99), as the launcher exports it; else the launch environment's.
   if [ -z "$v" ] && [ -n "$def" ]; then
     local h=""

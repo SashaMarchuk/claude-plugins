@@ -16,7 +16,7 @@
 #   HO_TICKET_LOCK_WAIT   seconds an add waits for the local lock (default 30)
 #   HO_TICKET_LOCK_STALE  seconds after which an abandoned lock is taken over (default 120)
 #
-# Exit codes: 64 usage, 65 wrong state or not ready, 66 no such ticket,
+# Exit codes: 64 usage, 65 wrong state, not ready or no confirmed write access, 66 no such ticket,
 # 70 id already on disk, 73 cannot create the ticket folder, 74 cannot read a ticket or
 # input file, 75 lock not free in time, 78 bad settings. Any failed gh or file step gives a
 # non-zero exit and no OK line.
@@ -39,8 +39,18 @@ verbs:
   fence <id>                         wrap stdin (for example a new comment) in the untrusted fence
   add <title> <body-file> [state]    new ticket (default ready); prints its number
   claim <id>                         ready -> in-progress
-  comment <id> <body-file>           add a new comment; earlier comments never change
+  comment <id> <body-file> [--role R] [--event E]
+                                     add a new comment in the one format (H-025); earlier
+                                     comments never change. Role: --role, else $HO_SESSION_ROLE
+  comments <id>                      one JSON line per comment: n, login, own, author, machine
   block <id> <why-file>              -> blocked, with the reason as a new comment
+  ask <id> <questions-file>          numbered questions in one comment, -> blocked (H-032);
+                                     inside a session the next poll closes that session
+  answer <id> <author> <body-file>   record an answer that arrived elsewhere, with its author (H-034)
+  step <id> <step> <result>          record a finished step; result commit:<sha> or file:<path>
+  resume <id> --repo <dir> <step>... print "next <step>" (first step without a real result) or "complete"
+  unblock <id>                       blocked -> ready, only for an account with write access (H-031)
+  template                           the ticket body headings the plugin writes (D6)
   review <id>                        -> needs-review
   release <id>                       in-progress -> ready (body must pass the ready floor)
   done <id>                          -> done (github: also closes the issue)
@@ -403,6 +413,214 @@ ho_tk_l_show() {
   { printf 'Title: %s\n\n' "$(ho_tk_l_title "$f")"; sed '1,/^$/d' "$f"; } | ho_tk_fence "$1"
 }
 
+# ---------------------------------------------------------------- comment format
+# One format for every comment the harness writes (H-025, D13, D5):
+#
+#   **<role>: <title>**                         visible first line: role and event
+#   <blank>
+#   <body>                                      short body; look-alike machine lines marked
+#   <blank>
+#   <!-- harness:v1 {"role":..,"event":..} -->  hidden machine line, always the last line
+#
+# The machine line is trusted only on a comment from the harness's own account (the signed-in
+# tracker account, never a config value). Every field value comes from a closed set or a tight
+# character set, so the line cannot end early. A body line that looks like a machine line gets
+# a visible "[text] " prefix, so worker text posted from the harness account cannot forge one.
+HO_TK_ROLES="harness orchestrator watcher worker validator question"
+HO_TK_MACHINE_RE='^<!-- harness:v1 (?<j>\{.*\}) -->$'
+# jq: the parsed machine line, or null.
+HO_TK_JQ_MLINE='def mline($re): (capture($re)? // null) | if . == null then null else (.j | fromjson? // null) | if type == "object" then . else null end end;'
+ho_tk_login_ok() { printf '%s' "${1-}" | LC_ALL=C grep -Eqx '[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?'; }
+ho_tk_repo_ok() { printf '%s' "${1-}" | LC_ALL=C grep -Eqx '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'; }
+ho_tk_step_ok() { printf '%s' "${1-}" | LC_ALL=C grep -Eqx '[A-Za-z0-9][A-Za-z0-9._-]{0,63}'; }
+ho_tk_event_ok() { printf '%s' "${1-}" | LC_ALL=C grep -Eqx '[a-z][a-z-]{0,39}'; }
+# A step result: commit:<hex sha> or file:<path inside the repository>.
+ho_tk_result_ok() {
+  case ${1-} in
+    commit:*) printf '%s' "${1#commit:}" | LC_ALL=C grep -Eqx '[0-9a-f]{7,40}' ;;
+    file:*)
+      local p=${1#file:}
+      printf '%s' "$p" | LC_ALL=C grep -Eqx '[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}' || return 1
+      case "/$p/" in */../* | */./*) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+}
+ho_tk_role() { # [--role value] -> the role to write: --role, else $HO_SESSION_ROLE, else harness
+  local r=${1:-${HO_SESSION_ROLE:-harness}}
+  case " $HO_TK_ROLES " in *" $r "*) printf '%s\n' "$r" ;; *) ho_tk_err "unknown role: $r (one of: $HO_TK_ROLES)"; return 64 ;; esac
+}
+ho_tk_neutral() { # stdin -> stdout: mark look-alike machine lines
+  LC_ALL=C tr -d '\r' | LC_ALL=C awk '{ l = tolower($0) } l ~ /<!--[[:space:]]*harness:/ { print "[text] " $0; next } { print }'
+}
+# ho_tk_format <id> <role> <event> <title> <body-file|-> [key value]...: the comment text.
+# Extra keys: step, result, author, from, to, questions. Values are checked by the callers.
+ho_tk_format() {
+  local id=$1 role=$2 event=$3 title=$4 bodyf=$5 machine
+  local -a args
+  shift 5
+  args=(--arg role "$role" --arg event "$event" --arg ticket "$id")
+  case ${HO_RUN_ID:-} in '' | *[!A-Za-z0-9-]*) ;; *) args+=(--arg run "$HO_RUN_ID") ;; esac
+  case ${HO_SESSION_NAME:-} in '' | *[!a-z0-9.-]*) ;; *) args+=(--arg session "$HO_SESSION_NAME") ;; esac
+  while [ $# -ge 2 ]; do args+=(--arg "$1" "$2"); shift 2; done
+  machine=$(jq -cn "${args[@]}" '$ARGS.named') || return 1
+  case $machine in *'-->'* | *"
+"*) ho_tk_err "the machine line would not be one safe line; nothing was posted"; return 1 ;; esac
+  printf '**%s: %s**\n\n' "$role" "$title"
+  if [ "$bodyf" = - ]; then ho_tk_neutral; else ho_tk_neutral < "$bodyf"; fi || return 1
+  printf '\n<!-- harness:v1 %s -->\n' "$machine"
+}
+# ho_tk_post <id> <role> <event> <title> <body-file|-> [key value]...: format and add one new comment.
+ho_tk_post() {
+  local id=$1 tmp rc=0
+  tmp=$(mktemp "${TMPDIR:-/tmp}/ho-comment.XXXXXX") || return 1
+  ho_tk_format "$@" > "$tmp" || { rm -f "$tmp"; return 1; }
+  if ho_tk_gh; then ho_tk_gh_comment "$id" "$tmp" >/dev/null || rc=$?
+  else ho_tk_locked ho_tk_l_comment_locked "$id" "$tmp" || rc=$?; fi
+  rm -f "$tmp"
+  return "$rc"
+}
+# ho_tk_status_comment <id> <role> <from> <to> <reason> <next>: the D5 status-change comment.
+ho_tk_status_comment() {
+  printf 'Reason: %s\nNext: %s\n' "$5" "$6" | ho_tk_post "$1" "$2" status "$3 -> $4" - from "$3" to "$4"
+}
+
+# ---------------------------------------------------------------- identity and access
+# ho_tk_own_login: the harness's own account, the signed-in tracker account. Empty when it
+# cannot be read; then no machine line is trusted.
+ho_tk_own_login() {
+  local l
+  l=$(gh api user 2>/dev/null | jq -r '.login // empty' 2>/dev/null) || l=""
+  ho_tk_login_ok "$l" && printf '%s\n' "$l"
+  return 0
+}
+# ho_tk_access <login> [repo]: "writer" for write, maintain or admin access; "read-only" for
+# anything else, an unexpected login, or a query that fails (H-008, H-009). The permission
+# field reads "write" for maintain and "read" for triage.
+ho_tk_access() {
+  local login=${1-} repo=${2:-$HO_TK_REPO} p
+  if ho_tk_login_ok "$login" && ho_tk_repo_ok "$repo"; then
+    p=$(gh api "repos/$repo/collaborators/$login/permission" 2>/dev/null | jq -r '.permission // empty' 2>/dev/null) || p=""
+    case $p in admin | write) echo writer; return 0 ;; esac
+  fi
+  echo read-only
+}
+# ho_tk_gh_events <id>: the issue's events as one JSON array, oldest first; fails when unreadable.
+ho_tk_gh_events() {
+  gh api --paginate "repos/$HO_TK_REPO/issues/$1/events?per_page=100" 2>/dev/null | jq -cs 'map(arrays) | add // []'
+}
+# ho_tk_last_labeled <events-json> <label>: "<index> <login>" of the newest labeled event for the
+# label, or nothing. The index is the position in the event list (oldest first).
+ho_tk_last_labeled() {
+  printf '%s' "$1" | jq -r --arg l "$2" '
+    [to_entries[] | select(.value.event == "labeled" and .value.label.name == $l)] | last
+    | select(. != null) | "\(.key) \(.value.actor.login // "")"'
+}
+
+# ---------------------------------------------------------------- reading comments
+# ho_tk_comments <id>: one JSON object per comment, oldest first:
+#   {n, login, own, author, machine}
+# machine is the parsed last line only on the harness's own comments, else null; author is the
+# machine author field on an own comment that has one (H-034), else the platform author.
+ho_tk_comments() {
+  local id=$1 own json f
+  if ho_tk_gh; then
+    own=$(ho_tk_own_login)
+    json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json comments) || { ho_tk_err "no ticket #$id"; return 66; }
+    printf '%s' "$json" | jq -c --arg own "$own" --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE"'
+      .comments | to_entries[] | (.value.author.login // "") as $login
+      | (($own != "") and ($login == $own)) as $mine
+      | ((.value.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "") as $last
+      | (if $mine then ($last | mline($re)) else null end) as $m
+      | {n: (.key + 1), login: $login, own: $mine,
+         author: (if $m != null and ($m.author | type) == "string" and ($m.author | test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\\[bot\\])?$")) then $m.author else $login end),
+         machine: $m}' 2>/dev/null || { ho_tk_err "cannot read the comments of #$id"; return 1; }
+  else
+    f=$(ho_tk_l_file "$id") || return
+    # Comments are the parts after each "---" / "<time> harness log:" pair; all are the harness's own.
+    LC_ALL=C awk '
+      { line[NR] = $0 }
+      END {
+        k = 0
+        for (i = 1; i <= NR; i++) {
+          if (line[i] == "---" && line[i + 1] ~ / harness log:$/) { k++; i++; last[k] = ""; continue }
+          if (k > 0 && line[i] ~ /[^ \t]/) last[k] = line[i]
+        }
+        for (j = 1; j <= k; j++) printf "%d\t%s\n", j, last[j]
+      }' "$f" | while IFS=$'\t' read -r n l; do
+        jq -cn --argjson n "$n" --arg l "$l" --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE"'
+          ($l | mline($re)) as $m
+          | {n: $n, login: "local", own: true,
+             author: (if $m != null and ($m.author | type) == "string" then $m.author else "local" end), machine: $m}'
+      done
+  fi
+}
+
+# ---------------------------------------------------------------- questions, steps, answers
+# ho_tk_ask <id> <questions-file> [role]: numbered questions in one new comment, then the ticket
+# waits in blocked (H-032, D2). One question per non-empty line; a leading "1." or "-" is dropped.
+ho_tk_ask() {
+  local id=$1 qf=$2 role=$3 tmp n
+  tmp=$(mktemp "${TMPDIR:-/tmp}/ho-ask.XXXXXX") || return 1
+  LC_ALL=C tr -d '\r' < "$qf" | LC_ALL=C tr -d '\000-\010\013-\037\177' |
+    sed -E 's/^[[:space:]]*([0-9]+[.)]|[-*])[[:space:]]+//; s/^[[:space:]]+//; s/[[:space:]]+$//' |
+    awk 'NF { n++; if (n <= 20) printf "%d. %s\n", n, substr($0, 1, 500) }' > "$tmp"
+  n=$(wc -l < "$tmp" | tr -d ' ')
+  if [ "$n" -eq 0 ]; then rm -f "$tmp"; ho_tk_err "no question in $qf; nothing was posted"; return 64; fi
+  {
+    printf 'The work needs answers from a person before it can go on:\n\n'
+    cat "$tmp"
+    printf '\nReply in a comment on this ticket. Only a reply from a person with write access resumes the work.\n'
+  } | ho_tk_post "$id" "$role" question question - questions "$n" || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  if ho_tk_gh; then ho_tk_gh_set_state "$id" blocked || return 1
+  else ho_tk_locked ho_tk_l_set_state_locked "$id" blocked || return 1; fi
+  HO_TK_ASKED=$n
+}
+# ho_tk_step_records <id>: "<step>\t<result>" for each trusted step record, oldest first.
+ho_tk_step_records() {
+  ho_tk_comments "$1" | jq -r 'select(.own and .machine != null and .machine.event == "step-done")
+    | .machine | select((.step | type) == "string" and (.result | type) == "string") | "\(.step)\t\(.result)"'
+}
+# ho_tk_result_exists <repo> <result>: the step's real result is there (D2).
+ho_tk_result_exists() {
+  local repo=$1 r=$2
+  ho_tk_result_ok "$r" || return 1
+  case $r in
+    commit:*) git -C "$repo" cat-file -e "${r#commit:}^{commit}" 2>/dev/null ;;
+    file:*) [ -e "$repo/${r#file:}" ] ;;
+  esac
+}
+ho_tk_unblock_terminal() { # <id>: the terminal form of unblock (OPEN-10, D37)
+  local id=$1 who state
+  if ho_tk_gh; then
+    state=$(ho_tk_gh_state "$id") || { ho_tk_err "no ticket #$id"; return 66; }
+    case " $state " in *" blocked "*) ;; *) ho_tk_err "#$id is not blocked (state: ${state:-none}); nothing was changed"; return 65 ;; esac
+    who=$(ho_tk_own_login)
+    [ -n "$who" ] || { ho_tk_err "cannot read the signed-in account, so its access is unconfirmed; #$id stays blocked"; return 65; }
+    [ "$(ho_tk_access "$who")" = writer ] || { ho_tk_err "the signed-in account has no confirmed write access to $HO_TK_REPO; #$id stays blocked"; return 65; }
+    ho_tk_gh_set_state "$id" ready || return 1
+  else
+    ho_tk_locked ho_tk_l_set_state_locked "$id" ready blocked || return
+  fi
+  ho_tk_status_comment "$id" harness blocked ready "unblocked from the terminal by a person with write access" \
+    "The harness picks the ticket up on its next poll and checks its readiness again." || return 1
+}
+ho_tk_template() {
+  cat <<'BODY'
+## Outcome
+What is true when this is done, in one or two sentences.
+
+## Scope
+Which repository, folders or files change, and what stays out.
+
+## Acceptance criteria
+- Each item is a fact a person or a test can check.
+
+## Checks
+- The commands or tests that prove the acceptance criteria.
+BODY
+}
+
 # ------------------------------------------------------------------------- verbs
 ho_tk_need_file() {
   [ -f "${1:-}" ] || { ho_tk_err "file not found: ${1:-<empty>}"; return 64; }
@@ -419,7 +637,7 @@ ho_tickets() {
   ho_tk_settings || return
   # Every verb that names a ticket gets the id in base 10 (08 is ticket 8).
   case $verb in
-    show|render|fence|claim|comment|block|review|release|done)
+    show|render|fence|claim|comment|comments|block|ask|answer|step|resume|unblock|review|release|done)
       ho_tk_check_id "${1:-}" || return
       set -- "$((10#$1))" "${@:2}" ;;
   esac
@@ -461,19 +679,75 @@ ho_tickets() {
       fi
       echo "OK claimed $1" ;;
     comment)
-      ho_tk_need_file "${2:-}" || return
-      if ho_tk_gh; then ho_tk_gh_comment "$1" "$2"
-      else ho_tk_locked ho_tk_l_comment_locked "$1" "$2" && echo "OK commented $1"; fi ;;
+      local cid=$1 cbody=${2:-} crole="" cevent=report
+      shift 2 2>/dev/null || { ho_tk_err "comment needs <id> <body-file>"; return 64; }
+      while [ $# -gt 0 ]; do
+        case $1 in
+          --role) [ $# -ge 2 ] || return 64; crole=$2; shift 2 ;;
+          --event) [ $# -ge 2 ] || return 64; cevent=$2; shift 2 ;;
+          *) ho_tk_err "comment: unknown argument $1"; return 64 ;;
+        esac
+      done
+      ho_tk_need_file "$cbody" || return
+      crole=$(ho_tk_role "$crole") || return 64
+      ho_tk_event_ok "$cevent" || { ho_tk_err "event must use a-z and -: $cevent"; return 64; }
+      ho_tk_post "$cid" "$crole" "$cevent" "$cevent" "$cbody" || return
+      echo "OK commented $cid" ;;
+    comments)
+      ho_tk_comments "$1" ;;
     block)
+      local brole
       ho_tk_need_file "${2:-}" || return
+      brole=$(ho_tk_role "") || return 64
       if ho_tk_gh; then
         ho_tk_gh_set_state "$1" blocked || return
-        ho_tk_gh_comment "$1" "$2" >/dev/null || return
       else
         ho_tk_locked ho_tk_l_set_state_locked "$1" blocked || return
-        ho_tk_locked ho_tk_l_comment_locked "$1" "$2" || return
       fi
+      ho_tk_post "$1" "$brole" blocked blocked "$2" || return
       echo "OK blocked $1" ;;
+    ask)
+      local arole
+      ho_tk_need_file "${2:-}" || return
+      arole=$(ho_tk_role "") || return 64
+      HO_TK_ASKED=0
+      ho_tk_ask "$1" "$2" "$arole" || return
+      # Inside a session: record the question for this session, so the next poll closes it.
+      if [ -n "${HO_RUN_DIR:-}" ] && [ -n "${HO_SESSION_NAME:-}" ]; then
+        ( ho_run_open "$HO_RUN_DIR" && ho_ledger_append question ticket "$1" session "$HO_SESSION_NAME" count "$HO_TK_ASKED" ) || return 1
+      fi
+      echo "OK asked $1 ($HO_TK_ASKED questions). The ticket waits for an answer: end this session now; the next poll closes it." ;;
+    answer)
+      local who=${2:-} abody=${3:-}
+      ho_tk_login_ok "$who" || { ho_tk_err "answer author must be an account name: $who"; return 64; }
+      ho_tk_need_file "$abody" || return
+      ho_tk_post "$1" harness answer "answer from $who" "$abody" author "$who" || return
+      echo "OK recorded the answer from $who on $1" ;;
+    step)
+      local srole
+      ho_tk_step_ok "${2:-}" || { ho_tk_err "step name must use letters, digits, . _ -: ${2:-}"; return 64; }
+      ho_tk_result_ok "${3:-}" || { ho_tk_err "result must be commit:<sha> or file:<path inside the repository>: ${3:-}"; return 64; }
+      srole=$(ho_tk_role "") || return 64
+      printf 'Result: %s\n' "$3" | ho_tk_post "$1" "$srole" step-done "step $2 done" - step "$2" result "$3" || return
+      echo "OK step $2 recorded on $1" ;;
+    resume)
+      local rid=$1 repo="" recs st r
+      shift
+      [ "${1:-}" = --repo ] && [ -n "${2:-}" ] || { ho_tk_err "resume needs --repo <dir> and the flow's steps"; return 64; }
+      repo=$2; shift 2
+      [ $# -gt 0 ] || { ho_tk_err "resume needs the flow's steps in order"; return 64; }
+      recs=$(ho_tk_step_records "$rid") || return 1
+      for st in "$@"; do
+        ho_tk_step_ok "$st" || { ho_tk_err "bad step name: $st"; return 64; }
+        r=$(printf '%s\n' "$recs" | awk -F '\t' -v s="$st" '$1 == s { v = $2 } END { print v }')
+        if [ -z "$r" ] || ! ho_tk_result_exists "$repo" "$r"; then echo "next $st"; return 0; fi
+      done
+      echo complete ;;
+    unblock)
+      ho_tk_unblock_terminal "$1" || return
+      echo "OK unblocked $1" ;;
+    template)
+      ho_tk_template ;;
     review)
       if ho_tk_gh; then ho_tk_gh_set_state "$1" needs-review || return
       else ho_tk_locked ho_tk_l_set_state_locked "$1" needs-review || return; fi

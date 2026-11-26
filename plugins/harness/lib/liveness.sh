@@ -249,10 +249,89 @@ ho_live_verdict() {
   echo dead
 }
 
+# ---- Hook log (H-089; design S8-SESSIONS, D37-SESSIONS-2) ----
+# hooks/liveness-hook.sh appends one JSON line per event to <run>/hooks.jsonl: t (epoch
+# seconds), ts, event, session_id, and tool and tool_use_id, or error for StopFailure. The
+# records add facts to a status line; they never change a verdict, so a dead process ID always
+# wins. Ages come from the time in each line, never from a file's mtime (H-105).
+#   open call  a PreToolUse with no closing record: a later PostToolUse or PostToolUseFailure
+#              with the same tool call ID, or any later Stop, StopFailure or SessionEnd of the
+#              session. "Later" means later in the file.
+#   quiet      the flag of D20: a working session with no hook event for 15 minutes. An open
+#              call holds it off for liveness.tool_running_max_minutes (default 60), because a
+#              cancelled call fires no closing event and a tool can hang. Judged only for a
+#              working session whose records can be read; otherwise null.
+HO_LIVE_HOOK_EVENTS_ALL="SessionStart PreToolUse PostToolUse PostToolUseFailure Stop StopFailure SessionEnd"
+HO_LIVE_QUIET_SECONDS=900
+
+ho_live_hook_log() { printf '%s/hooks.jsonl\n' "$HO_RUN_DIR"; }
+
+# ho_live_hook_events: the events the hooks record, from liveness.hook_events (default all
+# seven), in the fixed order. A name outside the seven is dropped; a value that is not a list
+# is reported and the default is used.
+ho_live_hook_events() {
+  local v e out=""
+  v=$(ho_cfg '.liveness.hook_events | if . == null then null elif type == "array" then map(select(type == "string" and test("^[A-Za-z]+$"))) | join(" ") else "!not-a-list" end' "$HO_LIVE_HOOK_EVENTS_ALL") || return 1
+  case $v in
+    *[!A-Za-z\ ]*)
+      printf 'harness: config .liveness.hook_events is not a list of event names; using all seven\n' >&2
+      v=$HO_LIVE_HOOK_EVENTS_ALL
+      ;;
+  esac
+  for e in $HO_LIVE_HOOK_EVENTS_ALL; do
+    case " $v " in *" $e "*) out="$out${out:+ }$e" ;; esac
+  done
+  printf '%s\n' "$out"
+}
+
+# ho_live_hooks <record> <verdict>: {"hooks": {...}, "quiet": true|false|null} for the session.
+ho_live_hooks() {
+  local rec=$1 verdict=$2 sid log events maxs tracked=false state
+  log=$(ho_live_hook_log)
+  sid=$(jq -r '.session_id // ""' "$rec" 2>/dev/null) || sid=""
+  if [ ! -e "$log" ]; then state=missing
+  elif [ ! -r "$log" ] || [ ! -f "$log" ]; then state=unreadable
+  else state=present; fi
+  events=$(ho_live_hook_events 2>/dev/null) || events=$HO_LIVE_HOOK_EVENTS_ALL
+  case " $events " in *" PreToolUse "*) case " $events " in *" PostToolUse "*) case " $events " in
+    *" PostToolUseFailure "*) tracked=true ;; esac ;; esac ;; esac
+  maxs=$(( $(ho_cfg_int '.liveness.tool_running_max_minutes' 60 2>/dev/null || echo 60) * 60 ))
+  if [ "$state" != present ] || [ -z "$sid" ]; then
+    jq -cn --arg s "$state" --argjson tr "$tracked" '{hooks: {state: $s, tools_tracked: $tr, events: 0, last_event: null,
+      last_event_at: null, last_event_age_seconds: null, open_tools: [], tool_running: false, stop_error: null}, quiet: null}'
+    return 0
+  fi
+  jq -R -s -c --arg sid "$sid" --argjson now "$(date +%s)" --argjson max "$maxs" --argjson tr "$tracked" \
+    --argjson quiet "$HO_LIVE_QUIET_SECONDS" --arg v "$verdict" '
+    [split("\n")[] | select(length > 0) | (try fromjson catch null)
+      | select(type == "object" and .session_id == $sid and (.t | type) == "number" and (.event | type) == "string")] as $r
+    | reduce $r[] as $e ({open: {}, order: [], stop_error: null};
+        if $e.event == "PreToolUse" and (($e.tool_use_id // "") | type) == "string" and ($e.tool_use_id // "") != "" then
+          .open[$e.tool_use_id] = {tool: $e.tool, tool_use_id: $e.tool_use_id, t: $e.t} | .order += [$e.tool_use_id]
+        elif $e.event == "PostToolUse" or $e.event == "PostToolUseFailure" then
+          (($e.tool_use_id // "") | tostring) as $id | del(.open[$id])
+        elif $e.event == "Stop" or $e.event == "StopFailure" or $e.event == "SessionEnd" then
+          .open = {} | .order = []
+          | if $e.event == "StopFailure" then .stop_error = ($e.error // "unknown")
+            elif $e.event == "Stop" then .stop_error = null else . end
+        else . end) as $s
+    | ($r | last) as $last
+    | (if $tr then [$s.order | unique[] as $id | $s.open[$id] | select(. != null)] | sort_by(.t)
+         | map({tool, tool_use_id, age_seconds: ([$now - .t, 0] | max)}) else [] end) as $open
+    | ($open | map(select(.age_seconds < $max)) | length > 0) as $running
+    | (if $last == null then null else ([$now - $last.t, 0] | max) end) as $age
+    | {hooks: {state: (if $last == null then "none" else "present" end), tools_tracked: $tr, events: ($r | length),
+        last_event: $last.event, last_event_at: $last.ts, last_event_age_seconds: $age,
+        open_tools: $open, tool_running: ($v == "working" and $running), stop_error: $s.stop_error},
+       quiet: (if $v != "working" or $last == null then null else ($age >= $quiet and ($running | not)) end)}
+  ' "$log" 2>/dev/null || jq -cn --argjson tr "$tracked" '{hooks: {state: "unreadable", tools_tracked: $tr, events: 0, last_event: null,
+      last_event_at: null, last_event_age_seconds: null, open_tools: [], tool_running: false, stop_error: null}, quiet: null}'
+}
+
 # ho_live_status_one <record>: one JSON line of facts. A running record whose process is gone
 # turns "dead" here, once, with one ledger line (H-090: the record is kept current, D42h).
 ho_live_status_one() {
-  local rec=$1 verdict pid="" tr="" tstate=missing tage=null tbytes=null now t
+  local rec=$1 verdict pid="" tr="" tstate=missing tage=null tbytes=null now t hooks
   verdict=$(ho_live_verdict "$rec")
   # Only a running record is brought up to date here; a launching one belongs to its launch.
   if [ "$verdict" = working ]; then
@@ -279,14 +358,16 @@ ho_live_status_one() {
       tstate=unreadable
     fi
   fi
+  hooks=$(ho_live_hooks "$rec" "$verdict")
   jq -c --arg v "$verdict" --arg pid "$pid" --arg tr "$tr" --arg ts "$tstate" --argjson age "$tage" \
-    --argjson bytes "${tbytes:-null}" --arg now "$(ho_now)" '{
+    --argjson bytes "${tbytes:-null}" --arg now "$(ho_now)" --argjson hk "$hooks" '{
       name, role, session_id, record_status: .status, liveness: $v,
       pid: (if $pid != "" then ($pid | tonumber) else .pid end),
       process: (if $v == "working" then "alive" elif $v == "dead" or $v == "closed" then "gone" else "unknown" end),
       account, cwd, handle, backend,
       transcript: (if $tr != "" then $tr else null end), transcript_state: $ts,
-      transcript_age_seconds: $age, transcript_bytes: $bytes, checked: $now}' "$rec" 2>/dev/null \
+      transcript_age_seconds: $age, transcript_bytes: $bytes,
+      hooks: $hk.hooks, quiet: $hk.quiet, checked: $now}' "$rec" 2>/dev/null \
     || jq -cn --arg name "$(basename "$rec" .json)" --arg now "$(ho_now)" \
       '{name: $name, liveness: "unknown", reason: "the record cannot be read", checked: $now}'
 }

@@ -43,7 +43,7 @@ label_event() { # label_event <issue number> <labeled|unlabeled> <label>
   [ -f "$ef" ] || echo '[]' > "$ef"
   tmp=$(mktemp "$dir/.tmp.XXXXXX")
   jq --arg e "$2" --arg l "$3" --arg u "$user" \
-    '. + [{event: $e, actor: {login: $u, type: (if ($u | endswith("[bot]")) then "Bot" else "User" end)},
+    '. + [{id: (1000 + length), event: $e, actor: {login: $u, type: (if ($u | endswith("[bot]")) then "Bot" else "User" end)},
            label: {name: $l}, created_at: "2026-01-01T00:00:00Z", performed_via_github_app: null}]' "$ef" > "$tmp"
   mv "$tmp" "$ef"
 }

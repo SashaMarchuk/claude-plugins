@@ -71,3 +71,18 @@ jq '.tickets.required_content = "outcome"' "$proj/.harness/config.json" > "$base
 t8=$(ticket "Bad content setting")
 label alice "$t8" ready
 assert_exit "H-013 required content that is not a list of text is refused (exit 78)" 78 "$h" intake "$run" tick
+
+# The judge runs past tickets.readiness_timeout_seconds: it is stopped, and the verdict is unknown.
+jq '.tickets.required_content = null | .tickets.readiness_timeout_seconds = 10' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+age_poll
+"$h" intake "$run" tick >/dev/null 2>&1 || true
+t9=$(ticket "Slow judge")
+label alice "$t9" ready
+start=$(date +%s)
+out=$(HO_FAKE_CLAUDE_HOLD=ignore HO_FAKE_CLAUDE_HOLD_MAX=120 tick 2>/dev/null)
+el=$(( $(date +%s) - start ))
+assert_eq "H-012 a judge past the time limit is stopped within the limit plus a margin" "yes" "$([ "$el" -le 25 ] && echo yes || echo "no (${el}s)")"
+assert_eq "H-012 a timed-out judge gives the verdict unknown" '"unknown" ' "$(verdicts "$t9")"
+assert_eq "H-012 a timed-out judge does not start the ticket" "" "$(printf '%s' "$out" | grep "start $t9" || true)"
+jq '.tickets.readiness_timeout_seconds = 5' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+assert_exit "H-012 a judge time limit below 10 seconds is refused" 78 "$h" intake "$run" tick

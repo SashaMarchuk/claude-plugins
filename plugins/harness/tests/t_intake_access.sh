@@ -21,10 +21,13 @@ assert_eq "H-002 a run command in a comment does not pick the ticket up" "" "$(p
 assert_eq "H-002 the commented ticket keeps its state (no label)" '[]' "$(labels "$t2")"
 
 # H-008 H-011: triage and read access are not enough; the ticket moves to needs-review.
+judge_calls() { grep -c '^-p	' "$HO_FAKE_CLAUDE_LOG" 2>/dev/null || true; }
 for who in tom rita; do
   t=$(ticket "Set by $who")
   label "$who" "$t" ready
+  j0=$(judge_calls)
   out=$(tick)
+  assert_eq "H-008 D2 the $who ticket text never reaches the readiness judge" "$j0" "$(judge_calls)"
   assert_contains "H-008 H-011 a label set by $who ($(jq -r --arg w "$who" '.[$w]' "$HO_FAKE_GH_DIR/perms.json")) moves the ticket to needs-review" "$out" "needs-review $t"
   assert_eq "H-011 H-030 the $who ticket carries only needs-review" '["harness:needs-review"]' "$(labels "$t")"
   assert_eq "H-011 the $who ticket is not claimed (no assignee)" "[]" "$(jq -c .assignees "$HO_FAKE_GH_DIR/issues/$t.json")"
@@ -38,7 +41,9 @@ assert_contains "H-026 D5 the needs-review comment says what a writer does next"
 # H-009: an unknown user (the access query answers 404) counts as read-only.
 t3=$(ticket "Unknown person")
 label stranger "$t3" ready
+j0=$(judge_calls)
 out=$(tick)
+assert_eq "H-009 D2 the unknown user's ticket never reaches the readiness judge" "$j0" "$(judge_calls)"
 assert_contains "H-009 an unknown user's label moves the ticket to needs-review" "$out" "needs-review $t3"
 # H-009: the code host does not answer the access query.
 t4=$(ticket "Access query fails")
@@ -97,7 +102,8 @@ else
 fi
 c=$(jq -r '.comments[0].body' "$HO_FAKE_GH_DIR/issues/$t8.json")
 assert_contains "D2 the pickup comment is posted at the claim" "$c" "picked up"
-assert_eq "D2 the readiness judge ran once, after the claim" "1" "$(grep -c '^-p	' "$HO_FAKE_CLAUDE_LOG" || true)"
+assert_eq "D2 the readiness judge ran once for the pickup" "1" "$(grep -c '^-p	' "$HO_FAKE_CLAUDE_LOG" || true)"
+assert_eq "D2 the ledger records the pickup before the readiness verdict" "pickup readiness" "$(jq -r --arg t "$t8" 'select((.kind == "pickup" or .kind == "readiness") and .ticket == $t) | .kind' "$run/ledger.jsonl" | tr '\n' ' ' | sed 's/ $//')"
 
 # H-008 D37-INTAKE-9: a configured target repository where the person has no write access.
 jq '.tickets.target_repos = ["fake/repo", "fake/api"]' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
@@ -115,6 +121,17 @@ assert_contains "D37-INTAKE-9 no readable access on a named target repository: n
 c=$(jq -r '.comments[-1].body' "$HO_FAKE_GH_DIR/issues/$t9.json")
 assert_contains "D37-INTAKE-9 the one comment names the repository" "$c" "fake/api"
 assert_eq "D37-INTAKE-9 exactly one comment on the refused ticket" "1" "$(ncomments "$t9")"
+t9b=$(ticket "Repo name in other case" "" "## Outcome
+Change Fake/API too.
+
+## Scope
+Fake/API
+
+## Acceptance criteria
+Test passes.")
+label alice "$t9b" ready
+out=$(HO_FAKE_GH_FAIL_API=repos/fake/api/ tick)
+assert_contains "D37-INTAKE-9 a target repository named in another letter case is still checked" "$out" "needs-review $t9b"
 t10=$(ticket "One repo" "" "## Outcome
 Docs only in this repository.
 
@@ -129,3 +146,10 @@ assert_contains "D37-INTAKE-9 a ticket that names no other target repository is 
 
 # The ledger records each intake verdict with the trigger author.
 assert_contains "H-011 the ledger records the needs-review verdict" "$(ledger)" "\"ticket\":\"$t4\""
+
+# A tracker step that fails after the claim is never silent: one result line and a ledger line.
+t11=$(ticket "Comment fails")
+label alice "$t11" ready
+out=$(HO_FAKE_GH_FAIL="issue comment" tick 2>/dev/null || true)
+assert_contains "D2 a failed pickup comment prints an error line for the ticket" "$out" "error $t11"
+assert_contains "D2 a failed pickup comment is recorded in the ledger" "$(jq -c --arg t "$t11" 'select(.kind == "pickup-error" and .ticket == $t)' "$run/ledger.jsonl")" '"step":"pickup-comment"'

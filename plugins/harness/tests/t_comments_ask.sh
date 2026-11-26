@@ -40,6 +40,14 @@ assert_eq "H-032 the asking session's record is closed" "closed" "$(rec w1 .stat
 assert_contains "H-032 other ready tickets continue" "$out" "start $t2"
 out=$(tick)
 assert_eq "H-032 a closed asking session is closed only once" "" "$(printf '%s' "$out" | grep 'closed w1' || true)"
+# D14: after the answer a new launch under the same name (its old record removed) is not closed
+# by the old question.
+rm -f "$run/sessions/w1.json"
+launch w1 >/dev/null
+p1b=$(rec w1 .pid)
+out=$(tick)
+assert_eq "H-032 D14 a relaunched session of the same name is not closed by the old question" "" "$(printf '%s' "$out" | grep 'closed w1' || true)"
+assert_eq "H-032 D14 the relaunched session keeps running" "yes" "$(alive "$p1b" && echo yes || echo no)"
 
 # An empty question file is refused; nothing is posted and the state does not change.
 t3=$(new_ticket "Empty" in-progress)

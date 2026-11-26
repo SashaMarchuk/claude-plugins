@@ -181,11 +181,26 @@ ho_in_review() {
   ho_tk_status_comment "$1" orchestrator "$2" needs-review "$3" "$HO_IN_NEXT_STEP" || return 1
 }
 
-# ho_in_pickup <id>: print one result line. Returns 0 only when the ticket starts.
+# ho_in_pickup <id>: print one result line. Returns 0 only when the ticket starts. A tracker
+# step that fails is never silent: it prints "error <id>" and adds a pickup-error ledger line.
 ho_in_pickup() {
+  local rc=0
+  HO_IN_STEP=access
+  ho_in_pickup_steps "$1" || rc=$?
+  case $rc in
+    0) return 0 ;;
+    1) return 1 ;;
+  esac
+  ho_ledger_append pickup-error ticket "$1" step "${HO_IN_STEP:-unknown}"
+  echo "error $1"
+  return 1
+}
+
+# ho_in_pickup_steps <id>: returns 0 start, 1 handled (not started), 2 a step failed.
+ho_in_pickup_steps() {
   local id=$1 state events ready blocked login="" ridx=-1 bidx=-1 repo body qf
   if ho_tk_gh; then
-    state=$(ho_tk_gh_state "$id") || { ho_in_err "cannot read the labels of #$id"; return 1; }
+    state=$(ho_tk_gh_state "$id") || { ho_in_err "cannot read the labels of #$id"; return 2; }
     if events=$(ho_tk_gh_events "$id"); then
       ready=$(ho_tk_last_labeled "$events" "$HO_TK_PREFIX:ready")
       blocked=$(ho_tk_last_labeled "$events" "$HO_TK_PREFIX:blocked")
@@ -202,15 +217,15 @@ ho_in_pickup() {
   # Unblock (H-031): the ready label on a blocked ticket.
   case " $state " in *" blocked "*)
     if [ -n "$login" ] && [ "$ridx" -gt "$bidx" ] && [ "$(ho_tk_access "$login")" = writer ]; then
-      ho_tk_gh_set_state "$id" ready || return 1
+      ho_tk_gh_set_state "$id" ready || return 2
       ho_tk_status_comment "$id" orchestrator blocked ready "a person with write access set the ready label" \
-        "The harness checks the ticket's readiness again now." || return 1
+        "The harness checks the ticket's readiness again now." || return 2
       ho_ledger_append unblock ticket "$id" by "$login"
       echo "unblocked $id"
     else
-      ho_tk_gh_set_state "$id" blocked || return 1
+      ho_tk_gh_set_state "$id" blocked || return 2
       printf 'Reason: the person who set the ready label has no confirmed write access, or the label is older than the block.\nNext: Only a person with write access can unblock the ticket, by setting the ready label.\n' |
-        ho_tk_post "$id" orchestrator status "ready label removed, still blocked" - from blocked to blocked || return 1
+        ho_tk_post "$id" orchestrator status "ready label removed, still blocked" - from blocked to blocked || return 2
       ho_ledger_append unblock-refused ticket "$id" by "${login:-unknown}"
       echo "kept-blocked $id"
       return 1
@@ -220,7 +235,7 @@ ho_in_pickup() {
   # 1. Write access of the trigger author, on the ticket repository and every named target.
   if ho_tk_gh; then
     if [ -z "$login" ] || [ "$(ho_tk_access "$login")" != writer ]; then
-      ho_in_review "$id" ready "the person who set the ready label has no confirmed write access to $HO_TK_REPO" || return 1
+      ho_in_review "$id" ready "the person who set the ready label has no confirmed write access to $HO_TK_REPO" || return 2
       ho_ledger_append intake ticket "$id" verdict needs-review by "${login:-unknown}" repo "$HO_TK_REPO"
       echo "needs-review $id"
       return 1
@@ -228,9 +243,9 @@ ho_in_pickup() {
     body=$(gh issue view "$id" --repo "$HO_TK_REPO" --json body 2>/dev/null | jq -r '.body // ""') || body=""
     while IFS= read -r repo; do
       [ -n "$repo" ] && [ "$repo" != "$HO_TK_REPO" ] || continue
-      printf '%s\n' "$body" | LC_ALL=C grep -Fq -- "$repo" || continue
+      printf '%s\n' "$body" | LC_ALL=C grep -Fqi -- "$repo" || continue
       if [ "$(ho_tk_access "$login" "$repo")" != writer ]; then
-        ho_in_review "$id" ready "the person who set the ready label has no confirmed write access to $repo, which the ticket names" || return 1
+        ho_in_review "$id" ready "the person who set the ready label has no confirmed write access to $repo, which the ticket names" || return 2
         ho_ledger_append intake ticket "$id" verdict needs-review by "$login" repo "$repo"
         echo "needs-review $id"
         return 1
@@ -241,31 +256,34 @@ EOF_REPOS
   fi
 
   # 2. Claim and comment.
+  HO_IN_STEP=claim
   if ho_tk_gh; then
-    ho_tk_gh_set_state "$id" in-progress --add-assignee "@me" || return 1
+    ho_tk_gh_set_state "$id" in-progress --add-assignee "@me" || return 2
   else
-    ho_tk_locked ho_tk_l_set_state_locked "$id" in-progress ready || return 1
+    ho_tk_locked ho_tk_l_set_state_locked "$id" in-progress ready || return 2
   fi
+  HO_IN_STEP=pickup-comment
   printf 'The harness took this ticket and checks its readiness now.\n' |
-    ho_tk_post "$id" orchestrator pickup "picked up" - from ready to in-progress || return 1
+    ho_tk_post "$id" orchestrator pickup "picked up" - from ready to in-progress || return 2
   ho_ledger_append pickup ticket "$id" by "$login"
 
   # 3. Readiness check, at every pickup (H-012).
-  qf=$(mktemp "${TMPDIR:-/tmp}/ho-questions.XXXXXX") || return 1
+  HO_IN_STEP=readiness
+  qf=$(mktemp "${TMPDIR:-/tmp}/ho-questions.XXXXXX") || return 2
   ho_in_judge "$id" "$qf"
   ho_ledger_append readiness ticket "$id" verdict "$HO_IN_VERDICT" questions "$(grep -c . "$qf" || true)"
   case $HO_IN_VERDICT in
     ready) rm -f "$qf"; echo "start $id"; return 0 ;;
     not-ready)
-      ho_tk_ask "$id" "$qf" orchestrator || { rm -f "$qf"; return 1; }
+      ho_tk_ask "$id" "$qf" orchestrator || { rm -f "$qf"; return 2; }
       rm -f "$qf"
       echo "blocked $id" ;;
     *)
       rm -f "$qf"
       if ho_tk_gh; then
-        ho_in_review "$id" in-progress "the readiness check gave no readable verdict" || return 1
+        ho_in_review "$id" in-progress "the readiness check gave no readable verdict" || return 2
       else
-        ho_tk_locked ho_tk_l_set_state_locked "$id" needs-review || return 1
+        ho_tk_locked ho_tk_l_set_state_locked "$id" needs-review || return 2
       fi
       echo "needs-review $id" ;;
   esac
@@ -275,13 +293,16 @@ EOF_REPOS
 # ho_in_close_asked: close every session that asked a question and is not closed yet (H-032).
 ho_in_close_asked() {
   local s st
-  ho_ledger_events | jq -r 'select(.kind == "question") | .session // empty' | awk '!seen[$0]++' |
+  # Only a session whose newest question has no later question-closed line: a session relaunched
+  # under the same name after the answer (D14) is not closed again.
+  ho_ledger_events | jq -rn 'reduce (inputs | select(.kind == "question" or .kind == "question-closed")
+      | select((.session | type) == "string")) as $e ({}; .[$e.session] = $e.kind)
+    | to_entries[] | select(.value == "question") | .key' |
     while IFS= read -r s; do
       ho_session_name_ok "$s" 2>/dev/null || continue
       [ -f "$HO_RUN_DIR/sessions/$s.json" ] || continue
       st=$(jq -r '.status // ""' "$HO_RUN_DIR/sessions/$s.json" 2>/dev/null) || continue
-      [ "$st" = closed ] && continue
-      if ho_session_close "$s" >/dev/null 2>&1; then
+      if [ "$st" = closed ] || ho_session_close "$s" >/dev/null 2>&1; then
         ho_ledger_append question-closed session "$s"
         echo "closed $s"
       fi

@@ -508,12 +508,14 @@ ho_tk_access() {
 ho_tk_gh_events() {
   gh api --paginate "repos/$HO_TK_REPO/issues/$1/events?per_page=100" 2>/dev/null | jq -cs 'map(arrays) | add // []'
 }
-# ho_tk_last_labeled <events-json> <label>: "<index> <login>" of the newest labeled event for the
-# label, or nothing. The index is the position in the event list (oldest first).
+# ho_tk_last_labeled <events-json> <label>: "<rank> <login>" of the newest labeled event for the
+# label, or nothing. Events are ordered by their id (GitHub ids grow with time), then by list
+# position, so the order never rests on the list order alone; the rank is the place in that order.
 ho_tk_last_labeled() {
   printf '%s' "$1" | jq -r --arg l "$2" '
-    [to_entries[] | select(.value.event == "labeled" and .value.label.name == $l)] | last
-    | select(. != null) | "\(.key) \(.value.actor.login // "")"'
+    [to_entries | sort_by([(.value.id // 0), .key]) | to_entries[]
+      | select(.value.value.event == "labeled" and .value.value.label.name == $l)] | last
+    | select(. != null) | "\(.key) \(.value.value.actor.login // "")"'
 }
 
 # ---------------------------------------------------------------- reading comments

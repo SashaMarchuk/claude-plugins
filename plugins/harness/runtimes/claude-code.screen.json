@@ -1,10 +1,17 @@
 {
-  "_comment": "Recognition data for lib/screen.sh (H-113, H-099). Anchor and companion patterns are matched against the lower-cased line, with the frame and the padding removed, and they must match the whole line. The alternatives come from the 0.6.0 watch patterns, which is the only part of that watch the rebuild keeps. There is no typed reaction to any of these shapes. The input line may end with a no-break space, as the real prompt does. status_line is the shape of a line of the status area under the input box (the status lines and the agent list): two spaces, then text. It is a shape, not words; issue #104. notification_line is the shape of a right-aligned notification line of the runtime, glued to the top rule of the box: at least ten spaces, then text.",
+  "_comment": "Recognition data for lib/screen.sh (H-113, H-099). Anchor and companion patterns are matched against the lower-cased line, with the frame and the padding removed, and they must match the whole line. The alternatives come from the 0.6.0 watch patterns, which is the only part of that watch the rebuild keeps. There is no typed reaction to any of these shapes. The input line may end with a no-break space, as the real prompt does. The status area under the input box (issue #104; PR #105 review): status_first_line is the shape of the line right under the box (the runtime's or the user's own status line: two spaces, then text); every other line there must have one of the status_lines shapes (the permission-mode line, the shortcuts hint, and the agent list). These are shapes of the runtime's own interface, not session words. notification_line is the shape of one right-aligned notification line of the runtime, glued to the top rule of the box: at least ten spaces, then text.",
   "frame_start": "^(╭|╮|╰|╯|│|─)",
   "frame_end": "(│)$",
   "frame_only": "^[╭╮╰╯│─ ]*$",
   "input_box": "^[│ ]*(>|❯)([ │]| )*$",
-  "status_line": "^  [^ ]",
+  "status_first_line": "^  [^ ]",
+  "status_lines": [
+    "^  (⏵⏵|⏸) ",
+    "^  \\? for shortcuts$",
+    "^  ⏺ [^ ]",
+    "^  ◯ [^ ]",
+    "^  ↓ [0-9]+ more$"
+  ],
   "notification_line": "^ {10,}[^ ]",
   "shapes": [
     {

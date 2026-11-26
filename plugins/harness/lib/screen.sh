@@ -36,12 +36,14 @@
 #   boundary, so a boxed notice or dialog needs no blank line above it.
 #   The runtime's own tail (issue #104): when the capture ends with a closed, empty input box
 #   (a frame line, the input line, a frame line) and under it only lines of the profile's
-#   status_line shape (the runtime's status lines and agent list) and blank lines, that tail
+#   status-area shapes (the runtime's status lines and agent list) and blank lines, that tail
 #   is set aside first, and the rules above read the lines above the box. The tail counts
 #   only in this order: status lines with no box, or between a block and the box, are text.
-#   A data file without status_line reads as before. Then the lines at the end that have the
-#   profile's notification_line shape (a right-aligned line of the runtime, glued to the top
-#   rule of the box) are set aside too, with no blank line between them. Known limit: a faithful paste of the notice as the last
+#   The status area (ho_screen_status_area): the line right under the box may have the
+#   status_first_line shape (the runtime's or the user's own status line); every other line
+#   must have one of the status_lines shapes. A data file without them reads as before. Then
+#   at most one line at the end that has the profile's notification_line shape (a
+#   right-aligned line of the runtime, glued to the top rule of the box) is set aside too. Known limit: a faithful paste of the notice as the last
 #   block of the screen cannot be told from the notice itself by text. That is bounded, not
 #   closed: nothing is typed, and the wait it leads to is recorded once and ends on STOP.
 #
@@ -106,11 +108,12 @@ ho_screen_shape_match() {
   HO_SC_FRAME_END=$(printf '%s' "$frames" | jq -r '.frame_end')
   HO_SC_FRAME_ONLY=$(printf '%s' "$frames" | jq -r '.frame_only')
   HO_SC_INPUT_BOX=$(printf '%s' "$frames" | jq -r '.input_box')
-  HO_SC_STATUS_LINE=$(printf '%s' "$frames" | jq -r '.status_line // "" | strings')
+  HO_SC_STATUS_FIRST=$(printf '%s' "$frames" | jq -r '.status_first_line // "" | strings')
+  HO_SC_STATUS_LINES=$(printf '%s' "$frames" | jq -r '[.status_lines // [] | .[] | strings | "(" + . + ")"] | join("|")')
   HO_SC_NOTIFICATION_LINE=$(printf '%s' "$frames" | jq -r '.notification_line // "" | strings')
   HO_SC_PROSE=$HO_SCREEN_PROSE
   export HO_SC_ANCHOR HO_SC_COMPANION HO_SC_BLOCK_ABOVE HO_SC_LAST_ONLY \
-    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_LINE HO_SC_NOTIFICATION_LINE HO_SC_PROSE
+    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_NOTIFICATION_LINE HO_SC_PROSE
   LC_ALL=C awk '
     BEGIN {
       anchor = ENVIRON["HO_SC_ANCHOR"]
@@ -121,7 +124,8 @@ ho_screen_shape_match() {
       frame_end = ENVIRON["HO_SC_FRAME_END"]
       frame_only = ENVIRON["HO_SC_FRAME_ONLY"]
       input_box = ENVIRON["HO_SC_INPUT_BOX"]
-      status_line = ENVIRON["HO_SC_STATUS_LINE"]
+      status_first = ENVIRON["HO_SC_STATUS_FIRST"]
+      status_lines = ENVIRON["HO_SC_STATUS_LINES"]
       notification_line = ENVIRON["HO_SC_NOTIFICATION_LINE"]
       prose = ENVIRON["HO_SC_PROSE"]
     }
@@ -148,7 +152,7 @@ ho_screen_shape_match() {
       # The runtime tail: the last input line with a frame line right above it, a frame line
       # as the next non-blank line below it (an empty box), and below that only status lines
       # and blank lines. The lines from the opening frame down are set aside.
-      if (status_line != "") {
+      if (status_first != "" || status_lines != "") {
         for (p = n; p >= 2; p--) {
           if (blank(raw[p]) || trim(raw[p]) !~ input_box) continue
           if (blank(raw[p - 1]) || trim(raw[p - 1]) !~ frame_only) break
@@ -156,13 +160,20 @@ ho_screen_shape_match() {
           while (q <= n && blank(raw[q])) q++
           if (q > n || trim(raw[q]) !~ frame_only) break
           tail_ok = 1
-          for (j = q + 1; j <= n; j++) if (!blank(raw[j]) && trim(raw[j]) !~ status_line) { tail_ok = 0; break }
+          for (j = q + 1; j <= n; j++) {
+            if (blank(raw[j])) continue
+            t = trim(raw[j])
+            if (j == q + 1 && status_first != "" && t ~ status_first) continue
+            if (status_lines != "" && t ~ status_lines) continue
+            tail_ok = 0
+            break
+          }
           if (tail_ok) n = p - 2
           break
         }
       }
       if (notification_line != "") {
-        while (n >= 1 && !blank(raw[n]) && trim(raw[n]) ~ notification_line) n--
+        if (n >= 1 && !blank(raw[n]) && trim(raw[n]) ~ notification_line) n--
       }
       if (n < NR) {
         last = 0
@@ -212,8 +223,34 @@ ho_screen_shape_match() {
       exit 1
     }' "$file" 2>/dev/null || rc=$?
   unset HO_SC_ANCHOR HO_SC_COMPANION HO_SC_BLOCK_ABOVE HO_SC_LAST_ONLY \
-    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_LINE HO_SC_NOTIFICATION_LINE HO_SC_PROSE
+    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_NOTIFICATION_LINE HO_SC_PROSE
   case $rc in 0 | 1 | 3) return "$rc" ;; esac
+  return 70
+}
+
+# ho_screen_status_area <data-json>: read the lines under the closing frame of the input box
+# on stdin, the first of them right under the frame. 0 when every non-blank line is the
+# runtime's status area (the shapes above), 1 when one is not, 78 when the data holds no
+# status shapes. Delivery uses it: any other line under the box gets nothing typed.
+ho_screen_status_area() {
+  local rc=0
+  HO_SC_STATUS_FIRST=$(printf '%s' "$1" | jq -r '.status_first_line // "" | strings')
+  HO_SC_STATUS_LINES=$(printf '%s' "$1" | jq -r '[.status_lines // [] | .[] | strings | "(" + . + ")"] | join("|")')
+  export HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
+  if [ -z "$HO_SC_STATUS_FIRST$HO_SC_STATUS_LINES" ]; then
+    unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
+    return 78
+  fi
+  LC_ALL=C awk '
+    BEGIN { first = ENVIRON["HO_SC_STATUS_FIRST"]; lines = ENVIRON["HO_SC_STATUS_LINES"] }
+    { t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t) }
+    t == "" { next }
+    NR == 1 && first != "" && t ~ first { next }
+    lines != "" && t ~ lines { next }
+    { bad = 1; exit }
+    END { exit bad ? 1 : 0 }' 2>/dev/null || rc=$?
+  unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
+  case $rc in 0 | 1) return "$rc" ;; esac
   return 70
 }
 

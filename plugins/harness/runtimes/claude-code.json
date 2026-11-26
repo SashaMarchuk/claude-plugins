@@ -113,7 +113,10 @@
       "esc to interrupt"
     ],
     "suggestion_sgr": "2",
-    "busy_prompt_sgr": "38;5;246"
+    "busy_prompt_sgr": "38;5;246",
+    "idle_prompt_sgr": "39",
+    "status_separator": " · ",
+    "cut_mark": "…"
   },
   "force_send": {
     "bytes": [

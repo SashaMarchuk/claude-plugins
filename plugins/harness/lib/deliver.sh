@@ -288,13 +288,19 @@ ho_deliver_scan() {
 #   - A backend that keeps no colours (iTerm2) cannot tell suggested text from typed text, so
 #     any text after the prompt there is a draft.
 #   - A busy mark counts above the box and in the runtime's status area under it (issue #104).
-#     On a narrow pane the status line is cut short with "…": a cut part after the last " · "
-#     that is the start of a busy mark counts as that mark. A styled capture also shows a busy
+#     On a narrow pane the status line is cut short with the profile's cut_mark: a cut part
+#     after the last status_separator that is the start of a busy mark counts as that mark.
+#   - Every line under the box must be the runtime's status area (ho_screen_status_area): any
+#     other line there, a dialog or a notice say, reads as unknown (PR #105 review, M1). A styled capture also shows a busy
 #     session by the colour of its prompt (busy_prompt_sgr in the profile), at any width.
+#   - Idle is proven, never read from a missing busy mark (PR #105 review round 1): the screen
+#     is empty only when the prompt shows the runtime's idle colour (idle_prompt_sgr in the
+#     profile). A prompt line with no colour code at all (a plain capture, as iTerm2 gives) or
+#     with any other colour reads as unknown, so nothing is typed. A draft is still a draft.
 # For the check before Enter, "draft <text>" carries the box text, its lines joined. With the
 # third argument "reread", a first line "busy" or "idle" tells whether a busy mark shows.
 ho_deliver_screen() {
-  local rec=$1 profile=$2 mode=${3-} cap plain esc rc sgr bsgr k kend i n line raw text part mark p pfx="" prefixes marks cand=0 csi top busy=""
+  local rec=$1 profile=$2 mode=${3-} cap plain esc rc sgr bsgr isgr sep cutm k kend i n line raw text part mark p pfx="" prefixes marks cand=0 csi top busy=""
   esc=$(printf '\033')
   csi="$esc\\[[0-?]*[ -/]*[@-~]"
   cap=$(HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec") ho_term_capture "$(jq -r '.handle // ""' "$rec")" \
@@ -313,6 +319,10 @@ ho_deliver_screen() {
   case $sgr in *[!0-9]*) sgr="" ;; esac
   bsgr=$(jq -r '.screen.busy_prompt_sgr // "" | strings' "$profile")
   case $bsgr in *[!0-9\;]*) bsgr="" ;; esac
+  isgr=$(jq -r '.screen.idle_prompt_sgr // "" | strings' "$profile")
+  sep=$(jq -r '.screen.status_separator // "" | strings' "$profile")
+  cutm=$(jq -r '.screen.cut_mark // "" | strings' "$profile")
+  case $isgr in *[!0-9\;]*) isgr="" ;; esac
   prefixes=$(jq -r '.screen.prompt_prefixes[] | strings' "$profile")
   marks=$(jq -r '.screen.busy_marks[]? | strings' "$profile")
   local -a P R
@@ -370,6 +380,17 @@ EOF_PFX2
     i=$((i + 1))
   done
   [ "$kend" -gt "$k" ] || { echo "draft (no closing frame equal to the opening frame)"; return 0; }
+  # Every line under the box must be the runtime's status area (PR #105 review, M1).
+  if [ "$kend" -lt $((n - 1)) ]; then
+    local sdata src=0
+    sdata=$(ho_screen_profile_data "$profile" 2>/dev/null) || { echo "unknown the runtime data holds no status area shapes"; return 0; }
+    (i=$((kend + 1)); while [ "$i" -lt "$n" ]; do printf '%s\n' "${P[i]}"; i=$((i + 1)); done) | ho_screen_status_area "$sdata" || src=$?
+    case $src in
+      0) ;;
+      1) echo "unknown a line under the input box is not the runtime's status area"; return 0 ;;
+      *) echo "unknown the status area under the input box could not be read"; return 0 ;;
+    esac
+  fi
   # The lines above the opening frame go to the screen reader once more: a hold shown above a
   # box that already holds typed text reads as later text in the whole capture, but not here.
   if [ "$k" -ge 2 ]; then
@@ -400,9 +421,10 @@ EOF_BUSY
       [ -n "$mark" ] || continue
       case $line in *"$mark"*) busy=$mark; break ;; esac
       case $line in
-        *"…")
-          part=${line%"…"}
-          part=${part##*" · "}
+        *"$cutm")
+          [ -n "$cutm" ] && [ -n "$sep" ] || continue
+          part=${line%"$cutm"}
+          part=${part##*"$sep"}
           part=${part#"${part%%[! ]*}"}
           if [ -n "$part" ]; then case $mark in "$part"*) busy=$mark; break ;; esac; fi
           ;;
@@ -433,6 +455,16 @@ EOF_BUSY2
   [ "$mode" != reread ] || { [ -n "$busy" ] && echo busy || echo idle; }
   [ -z "$text" ] || { echo "draft $text"; return 0; }
   [ -z "$busy" ] || { echo "busy $busy"; return 0; }
+  # Idle is proven by the idle prompt colour; anything else reads as unknown.
+  case ${R[k]-} in
+    *"$esc["*) ;;
+    *) echo "unknown the screen shows no colour, so idle is not proven"; return 0 ;;
+  esac
+  [ -n "$isgr" ] || { echo "unknown the runtime data names no idle prompt colour, so idle is not proven"; return 0; }
+  case ${R[k]-} in
+    "$esc[${isgr}m$pfx"* | "$esc[${isgr}m${pfx% }") ;;
+    *) echo "unknown the prompt does not show the idle colour, so idle is not proven"; return 0 ;;
+  esac
   echo "empty"
 }
 

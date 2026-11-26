@@ -50,6 +50,61 @@ assert_eq "H-113 (F1): n-prose-bare-phrase.txt does not match" "none" "$(cls n-p
 assert_eq "H-113 (F1): n-prose-two-line-summary.txt does not match" "none" "$(cls n-prose-two-line-summary.txt)"
 assert_eq "H-113: n-prose-no-reset-line.txt does not match without the reset line" "none" "$(cls n-prose-no-reset-line.txt)"
 
+# ---- the real Claude Code layout (issue #104) -------------------------------------------
+# tests/fixtures/screens-real holds the real screen shape: the input box (rule line, prompt,
+# rule line) and, under it, the runtime's status lines and agent list. Each case below puts
+# a saved fixture of this folder above that box, by script, the way the screen shows it.
+# The saved fixture keeps its own bytes; nothing is printed.
+real="$HO_PLUGIN_ROOT/tests/fixtures/screens-real"
+plain() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*m//g" "$1"; }
+# head_of / tail_of <real-fixture>: the lines above the box / the box and everything under it.
+head_of() { plain "$real/$1.txt" | awk '/^────/ { exit } { print }'; }
+tail_of() { plain "$real/$1.txt" | awk '/^────/ { t = 1 } t { print }'; }
+# splice <fixture> <lines to drop from its end> <real tail>: print the spliced screen.
+splice() {
+  local n
+  n=$(awk 'END { print NR }' "$fix/$1.txt")
+  head_of idle-full
+  head -n "$((n - $2))" "$fix/$1.txt"
+  tail_of "$3"
+}
+rcls() { splice "$@" > "$base/real.txt"; "$h" screen "$run" classify "$base/real.txt" 2>/dev/null; }
+tails="idle-box-only idle-status idle-full wide-idle-full"
+for t in $tails; do
+  for f in limit-notice-boxed limit-notice-plain limit-notice-short limit-notice-contraction limit-notice-contraction-typographic; do
+    for d in 0 1 2; do
+      assert_eq "#104, H-113: $f.txt (last $d lines dropped) above the real box ($t) is recognised" "limit" "$(rcls "$f" "$d" "$t")"
+    done
+  done
+  for f in trust-dialog trust-dialog-after-prose; do
+    assert_eq "#104, H-099: $f.txt above the real box ($t) is recognised" "trust" "$(rcls "$f" 0 "$t")"
+  done
+  for f in password-prompt password-prompt-sudo; do
+    assert_eq "#104, H-099: $f.txt above the real box ($t) is recognised" "password" "$(rcls "$f" 0 "$t")"
+  done
+  for f in "$fix"/n-*.txt; do
+    f=$(basename "$f" .txt)
+    for d in 0 1; do
+      assert_eq "#104 (F1, I2): $f.txt (last $d lines dropped) above the real box ($t) does not match" "none" "$(rcls "$f" "$d" "$t")"
+    done
+  done
+done
+# The status area counts only under a closed, empty box. Status lines with no box under a
+# notice, status lines between a notice and the box, and later prose between a notice and
+# the box: none of them reads as a notice.
+st=$(tail_of idle-status | sed -n '4,5p')
+{ head_of idle-full; sed '$d' "$fix/limit-notice-plain.txt"; printf '%s\n' "$st"; } > "$base/real.txt"
+assert_eq "#104: status lines under a notice with no input box do not count as the box" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
+{ head_of idle-full; sed '$d' "$fix/limit-notice-plain.txt"; printf '%s\n\n' "$st"; tail_of idle-full; } > "$base/real.txt"
+assert_eq "#104: status lines between a notice and the box are not the status area" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
+{ head_of idle-full; sed '$d' "$fix/limit-notice-plain.txt"; printf 'Later the session went on with other work.\n\n'; tail_of idle-full; } > "$base/real.txt"
+assert_eq "#104: a notice with later prose above the real box does not match" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
+# The real screens themselves hold no shape.
+for f in "$real"/*.txt; do
+  plain "$f" > "$base/real.txt"
+  assert_eq "#104: the real screen $(basename "$f") holds no shape" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
+done
+
 # ---- unknown is never "nothing found" (field notes I1 and I3) --------------------------
 : > "$base/empty.txt"
 assert_eq "H-113 (I3): an empty capture reads as unknown" "unknown" "$("$h" screen "$run" classify "$base/empty.txt" 2>/dev/null)"

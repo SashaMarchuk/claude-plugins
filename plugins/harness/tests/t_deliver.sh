@@ -813,3 +813,45 @@ set_wait 2
 assert_eq "Codex P2: a version check that hangs is stopped; deliver returns within the bound (at most 16 s)" "yes" "$([ "$el" -le 16 ] && echo yes || echo "no (${el}s)")"
 assert_eq "Codex P2: with the version unknown no chord is sent" "" "$(calls | grep "byte $(rec d9-ver .handle) " || true)"
 assert_contains "Codex P2: the skipped chord names the unknown version" "$(ledger | grep -F deliver-force-send | tail -n 1)" "unknown"
+
+# ==== Issue #104: the real Claude Code screen layout ============================================
+# tests/fixtures/screens-real holds styled screens in the real layout: the prompt is the
+# runtime's mark with a no-break space, and the runtime's status lines and agent list sit under
+# the box. At 64 columns the busy hint shows only there, cut short. No test prints a screen.
+set_runtime claude-code
+set_wait 2
+real="$HO_TESTS_DIR/fixtures/screens-real"
+rscreen() { cat "$real/$2.txt" > "$(fout "$1")"; }
+for fx in idle-full idle-status idle-box-only wide-idle-full; do
+  start "r104-$fx"
+  rscreen "r104-$fx" "$fx"
+  out=$(deliver "r104-$fx" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "#104, H-099: the real idle screen ($fx) gets the instruction typed and proven (exit 0)" "0" "$rc"
+done
+for fx in draft-one-line draft-multi-line draft-separator-only busy-draft; do
+  start "r104-$fx"
+  rscreen "r104-$fx" "$fx"
+  out=$(deliver "r104-$fx" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "#104, H-099: a draft in the real box ($fx) gets 0 bytes (exit 1)" "1 0" "$rc $(inbytes "r104-$fx")"
+  assert_contains "#104, H-099: the real draft ($fx) is reported as the user's text" "$out" "input line holds text typed by the user"
+  assert_eq "#104, H-099: no Enter key reached the session ($fx)" "" "$(calls | grep -F "key $(rec "r104-$fx" .handle) Enter" || true)"
+done
+for fx in busy-full busy-status wide-busy-full; do
+  start "r104-$fx"
+  rscreen "r104-$fx" "$fx"
+  out=$(deliver "r104-$fx" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "#104, D42g: the real busy screen ($fx) gets 0 bytes (exit 1)" "1 0" "$rc $(inbytes "r104-$fx")"
+  assert_contains "#104, D42g: the real busy screen ($fx) is reported as busy" "$out" "the session is busy; nothing was typed"
+done
+# A hold above the real box: the T14 fixtures spliced in by script.
+rhead() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*m//g" "$real/idle-full.txt" | awk '/^────/ { exit } { print }'; }
+rtail() { awk -v e="$(printf '\033')" 'index($0, e "[38;5;244m─") == 1 { t = 1 } t { print }' "$real/$1.txt"; }
+# rhold <fixture> <real screen> <lines to drop>: a T14 fixture between the real text and the box.
+rhold() { local n; n=$(awk 'END { print NR }' "$sf/$1.txt"); rhead; head -n "$((n - $3))" "$sf/$1.txt"; rtail "$2"; }
+for tl in idle-full draft-one-line busy-full; do
+  for fx in limit-notice-plain limit-notice-short; do
+    hold_case "r104-h-$fx-$tl" "a hold ($fx) above the real box ($tl)" rhold "$fx" "$tl" 1
+  done
+  hold_case "r104-h-trust-$tl" "a hold (trust-dialog) above the real box ($tl)" rhold trust-dialog "$tl" 0
+  hold_case "r104-h-pass-$tl" "a hold (password-prompt) above the real box ($tl)" rhold password-prompt "$tl" 0
+done

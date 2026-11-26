@@ -15,10 +15,11 @@ jq --arg m "$HO_TESTS_DIR/fake-bin/fake-msg" '.message.argv = [$m, "{session_id}
 h="$plug/bin/harness"
 screens="$HO_TESTS_DIR/fixtures/screens"
 export HO_FAKE_CLAUDE_TRANSCRIPT=1 HO_FAKE_MSG_LOG="$base/msg.log"
-jq '.delivery = {"message_timeout_seconds": 5}' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
-# delivery.wait_seconds is read from the user config only (review round 5 of PR #95).
-DW=2 CUR=claude-code
-write_user() { printf '{"schemaVersion": 2, "runtime": {"main": "%s"}, "delivery": {"wait_seconds": %s} }\n' "$CUR" "$DW" > "$user/config.json"; }
+# The delivery safety settings are read from the user config only (review rounds 5 and 7).
+DW=2 DT=5 DG=2 CUR=claude-code
+write_user() { printf '{"schemaVersion": 2, "runtime": {"main": "%s"}, "delivery": {"wait_seconds": %s, "message_timeout_seconds": %s, "message_kill_grace_seconds": %s} }\n' "$CUR" "$DW" "$DT" "$DG" > "$user/config.json"; }
+set_timeout() { DT=$1; write_user; }
+set_grace() { DG=$1; write_user; }
 set_runtime() { CUR=$1; write_user; }
 set_wait() { DW=$1; write_user; }
 export HO_FAKE_TOOLS_PATH="$PATH"
@@ -353,7 +354,7 @@ assert_eq "Codex P2: the force-send still works with the launch-checked runtime"
 
 # ==== Fix round 2 of PR #95 (Codex P2 at line 470, validator F2, minor 12) ==================
 # ---- F1, H-101: a message command that fails after it delivered gets no typed copy ----------
-jq '.delivery.message_timeout_seconds = 2' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+set_timeout 2
 set_runtime claude-msg
 for mode in deliver-fail deliver-hang; do
   start "w-$mode"
@@ -413,12 +414,16 @@ assert_eq "N2: no raw shell error reaches the output" "" "$(printf '%s\n' "$out"
 start z3
 screen z3 busy
 : > "$(fbusy z3)"
+# A positive force-send passes through the queue and the screen gate: a longer wait.
+set_wait 10
 out=$(HO_FAKE_MSG_MODE=queue-fail HO_FAKE_CLAUDE_VERSION=2.1.332 deliver z3 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+set_wait 2
 assert_eq "N3, D37-LIFECYCLE-4: a queued stop from a failed command still gets the chord once" "0x18 0x13" \
   "$(calls | grep "^tmux byte $(rec z3 .handle) " | awk '{ print $4 }' | tr '\n' ' ' | sed 's/ $//')"
 assert_eq "N3: nothing is typed for it (0 bytes besides the chord)" "<0x18><0x13>" "$(cat "$(fin z3)")"
 # ---- N4: a command that ignores SIGTERM: its group gets SIGKILL after the grace -------------
-jq '.delivery.message_timeout_seconds = 2 | .delivery.message_kill_grace_seconds = 1' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+set_timeout 2
+set_grace 1
 start z4
 screen z4 idle-empty
 t0=$(date +%s)
@@ -482,7 +487,10 @@ planted() { cat "$base/planted-bash.log" "$base/planted-env.log" 2>/dev/null | g
 start r1
 screen r1 busy
 : > "$(fbusy r1)"
+# A positive force-send passes through the queue and the screen gate: a longer wait.
+set_wait 10
 out=$(PATH="$proj/bin:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver r1 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+set_wait 2
 assert_eq "Codex P2: a bash or env planted in a project folder first on PATH never runs the version check" "" "$(planted '--version')"
 assert_contains "Codex P2: the planted programs were on PATH (the engine's own scripts went through them)" "$(cat "$base/planted-bash.log" 2>/dev/null || true)" "session"
 assert_eq "Codex P2: the force-send still works with the fixed PATH (exit 0)" "0" "$rc"
@@ -585,4 +593,108 @@ screen h-wait idle-empty
 printf '{"schemaVersion": 2, "runtime": {"main": "claude-code"}, "delivery": {"wait_seconds": "5"} }\n' > "$user/config.json"
 rc=0; deliver h-wait --text "run tests" >/dev/null 2>&1 || rc=$?
 assert_eq "minor 3: delivery.wait_seconds given as a string is refused (78), 0 bytes typed" "78 0" "$rc $(inbytes h-wait)"
+set_runtime claude-code
+
+# ==== Fix round 7 of PR #95 (validator B5; Codex security P2 lines 394 and 510; minors) =====
+set_runtime claude-code
+R7='────────────────────────────────────────'
+# tall <n> <first-line> <inner...>: a framed box whose closing rule line is <n> lines below
+# the input line; the inner lines come first, then blank lines.
+tall() {
+  local n=$1 first=$2 i=1
+  shift 2
+  printf ' Fake runtime 0.0.0\n\n%s\n>%s\n' "$R7" "$first"
+  for l in "$@"; do printf '%s\n' "$l"; i=$((i + 1)); done
+  while [ "$i" -lt "$n" ]; do printf '\n'; i=$((i + 1)); done
+  printf '%s\n  ? for shortcuts\n' "$R7"
+}
+b5() { # <name> <label> <expect: draft|empty> <tall args...>
+  local nm=$1 label=$2 want=$3
+  shift 3
+  start "$nm"
+  tall "$@" > "$(fout "$nm")"
+  out=$(deliver "$nm" --text "run tests" 2>&1) && rc=0 || rc=$?
+  if [ "$want" = draft ]; then
+    assert_eq "B5, H-099: $label: 0 bytes, no Enter (exit 1)" "1 0" "$rc $(inbytes "$nm")"
+  else
+    assert_eq "B5: $label: typed and delivered (exit 0)" "0" "$rc"
+  fi
+}
+for N in 21 40; do
+  b5 "b5-$N" "a separator and text, closing frame $N lines down" draft "$N" " " "  ────────────" "  some text of the owner" "  more text"
+done
+b5 b5-25 "a separator and text, closing frame 25 lines down" draft 25 " " "  ────────────" "  some text of the owner"
+b5 b5-sep "a draft that is only a separator line" draft 3 " " "  ────────────"
+b5 b5-empty25 "an empty box whose closing frame is 25 lines down" empty 25 " "
+# A second input line on the screen reads as a draft.
+start b5-two
+printf ' Fake runtime 0.0.0\n%s\n> \n%s\nolder text\n%s\n> \n%s\n  ? for shortcuts\n' "$R7" "$R7" "$R7" "$R7" > "$(fout b5-two)"
+out=$(deliver b5-two --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "B5: two input lines on the screen read as a draft (0 bytes, exit 1)" "1 0" "$rc $(inbytes b5-two)"
+
+# ---- minor 1: the chord passes the same screen gate as typing ----------------------------------
+set_runtime claude-msg
+start c7-draft
+screen c7-draft busy-draft
+out=$(HO_FAKE_MSG_MODE=queue HO_FAKE_CLAUDE_VERSION=2.1.332 deliver c7-draft --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+assert_eq "minor 1: a queued stop gets no chord while the input line holds a draft" "" "$(calls | grep "byte $(rec c7-draft .handle) " || true)"
+jq 'del(.screen_file)' "$plug/runtimes/claude-msg.json" > "$plug/runtimes/claude-noscreen.json"
+set_runtime claude-noscreen
+start c7-noreader
+screen c7-noreader busy
+out=$(HO_FAKE_MSG_MODE=queue HO_FAKE_CLAUDE_VERSION=2.1.332 deliver c7-noreader --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+assert_eq "minor 1: a queued stop gets no chord when the screen reader cannot run" "" "$(calls | grep "byte $(rec c7-noreader .handle) " || true)"
+
+# ---- minor 3: the screen reader uses the session's own runtime --------------------------------
+jq '.shapes |= map(select(.id == "password"))' "$plug/runtimes/claude-code.screen.json" > "$plug/runtimes/other.screen.json"
+jq '.screen_file = "other.screen.json"' "$plug/runtimes/claude-code.json" > "$plug/runtimes/claude-other.json"
+set_runtime claude-code
+start c7-own
+{ sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n> \n%s\n' "$R7" "$R7"; } > "$(fout c7-own)"
+set_runtime claude-other
+out=$(deliver c7-own --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "minor 3: a hold is read with the pattern file of the session's runtime, not runtime.main (0 bytes)" "1 0" "$rc $(inbytes c7-own)"
+set_runtime claude-code
+
+# ---- minor 6: every CSI code is stripped before the screen is read ----------------------------
+E7=$(printf '\033')
+start c7-csi
+{ sed '$d' "$sf/limit-notice-plain.txt" | sed "s/^/${E7}[2K${E7}[38:2::255:0:0m/; s/\$/${E7}[0m/"; printf '%s\n> \n%s\n' "$R7" "$R7"; } > "$(fout c7-csi)"
+out=$(deliver c7-csi --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "minor 6: a hold wrapped in colon-form and non-colour CSI codes is still a hold (0 bytes)" "1 0" "$rc $(inbytes c7-csi)"
+start c7-esc
+{ printf '%sX\n' "$E7"; cat "$screens/idle-empty.txt"; } > "$(fout c7-esc)"
+out=$(deliver c7-esc --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "minor 6: an escape byte left after stripping reads as unknown (0 bytes)" "1 0" "$rc $(inbytes c7-esc)"
+
+# ---- minor 5: no capture file is left behind -----------------------------------------------------
+assert_eq "minor 5: no capture file of delivery is left in the run's screen folder" "" "$(ls -A "$run/screen" 2>/dev/null | grep '^\.deliver\.' || true)"
+
+# ---- Codex P2 (line 394): the version parser and compare do not use the caller's awk -----------
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/planted-awk.log"\nexec /usr/bin/awk "$@"\n' "$base" > "$proj/bin/awk"
+chmod 700 "$proj/bin/awk"
+start c7-awk
+screen c7-awk busy
+: > "$(fbusy c7-awk)"
+# A positive force-send passes through the queue and the screen gate: a longer wait.
+set_wait 10
+out=$(PATH="$proj/bin:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver c7-awk --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+set_wait 2
+assert_eq "Codex P2: an awk planted first on PATH never reads the runtime's version" "" "$(grep -e 'print \$1' -e '2.1.275' "$base/planted-awk.log" 2>/dev/null || true)"
+assert_eq "Codex P2: the force-send still works (exit 0)" "0" "$rc"
+
+# ---- Codex P2 (line 510): delivery safety settings, user config only and bounded --------------
+start c7-set
+screen c7-set idle-empty
+for k in terminal.typed_max_bytes delivery.message_timeout_seconds delivery.message_kill_grace_seconds; do
+  jq --arg k "$k" 'setpath($k | split("."); 0)' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+  rc=0; deliver c7-set --text "run tests" >/dev/null 2>&1 || rc=$?
+  assert_eq "Codex P2: $k in the project config is refused (65), 0 bytes typed" "65 0" "$rc $(inbytes c7-set)"
+  jq --arg k "$k" 'delpaths([$k | split(".")])' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+done
+for v in 0 100 1001 '"800"'; do
+  printf '{"schemaVersion": 2, "runtime": {"main": "claude-code"}, "delivery": {"wait_seconds": 2}, "terminal": {"typed_max_bytes": %s} }\n' "$v" > "$user/config.json"
+  rc=0; deliver c7-set --text "run tests" >/dev/null 2>&1 || rc=$?
+  assert_eq "Codex P2: terminal.typed_max_bytes=$v in the user config is refused (78), 0 bytes typed" "78 0" "$rc $(inbytes c7-set)"
+done
 set_runtime claude-code

@@ -96,22 +96,25 @@ ho_deliver_exec_path() {
   printf '%s\n' "$p"
 }
 
-# ho_deliver_wait_setting: delivery.wait_seconds from the user config only, a JSON number that
-# is a whole number of at least 2 (default 30); a string is refused. It decides when a failed message command counts as a proven failure,
-# so a project config may not set it (65), as with session.permissions; a value below 2 or not
-# a number exits 78 (validator, PR #95).
-ho_deliver_wait_setting() {
-  local v
-  v=$(jq -r 'if type == "object" then (.delivery.wait_seconds // null) else null end | if . == null then "" else tostring end' \
-    "$HO_PROJECT_DIR/.harness/config.json" 2>/dev/null) || v=""
+# ho_deliver_setting <jq-path> <default> <min> <max>: a delivery safety setting. It is read
+# from the user config only: a project config that sets it is refused (65), as with
+# session.permissions, because a repository must not be able to loosen how delivery decides.
+# The value must be a JSON number, a whole number from <min> to <max>; anything else exits 78.
+# The settings (PR #95 review, round 7): delivery.wait_seconds (30, 2-3600),
+# delivery.message_timeout_seconds (30, 1-600), delivery.message_kill_grace_seconds (2, 0-30),
+# terminal.typed_max_bytes (800, 300-1000; 300 leaves room for the pointer line to the file).
+ho_deliver_setting() {
+  local path=$1 def=$2 min=$3 max=$4 v
+  v=$(jq -r --arg p "$path" 'if type == "object" then (getpath($p | ltrimstr(".") | split(".")) // null) else null end
+    | if . == null then "" else tostring end' "$HO_PROJECT_DIR/.harness/config.json" 2>/dev/null) || v=set
   if [ -n "$v" ]; then
-    printf 'harness: the project config sets delivery.wait_seconds; it decides when a message counts as failed, so it belongs in the user config %s\n' "$(ho_user_config)" >&2
+    printf 'harness: the project config sets %s; it is a delivery safety setting and belongs in the user config %s\n' "${path#.}" "$(ho_user_config)" >&2
     return 65
   fi
-  v=$(ho_cfg_user '.delivery.wait_seconds' | jq -r 'if . == null then "30" elif type == "number" then tostring else "x" end') || return 78
+  v=$(ho_cfg_user "$path" | jq -r --arg d "$def" 'if . == null then $d elif type == "number" then tostring else "x" end') || return 78
   case $v in '' | *[!0-9]*) v=x ;; esac
-  if [ "$v" = x ] || [ "${#v}" -gt 4 ] || [ "$((10#$v))" -lt 2 ]; then
-    echo "harness: delivery.wait_seconds must be a whole number of at least 2" >&2
+  if [ "$v" = x ] || [ "${#v}" -gt 5 ] || [ "$((10#$v))" -lt "$min" ] || [ "$((10#$v))" -gt "$max" ]; then
+    printf 'harness: %s must be a JSON number, a whole number from %s to %s\n' "${path#.}" "$min" "$max" >&2
     return 78
   fi
   printf '%s\n' "$((10#$v))"
@@ -234,32 +237,44 @@ ho_deliver_scan() {
 }
 
 # ho_deliver_screen <record> <profile>: read the session's screen and print one word and a
-# reason: "empty", "draft <text>", "busy <mark>" or "unknown <why>". Only "empty" lets the typed
-# fallback run (D42g). A draft is checked before every other state, so a draft always means
-# 0 bytes, --force-send included (validator B3). The input box is the last line that starts
-# with a prompt prefix, right below a rule line, down to the next rule line (a long input
-# wraps onto more lines). Dim text in the runtime's suggestion style is suggested text and
-# counts as empty (H-099). A backend that keeps no colours (iTerm2) cannot tell suggested text
-# from typed text, so any text there counts as a draft. A draft of more than one line reads
-# "draft" with its lines joined; the caller never writes draft text to the ledger.
+# reason: "empty", "draft <text>", "busy <mark>", "hold <class>" or "unknown <why>". Only "empty"
+# (and "busy" for --force-send) lets the typed fallback or the chord run (D42g). The rule is
+# fail-closed (PR #95 review, round 7):
+#   - Every CSI escape code is stripped first (any parameters, ";" or ":" forms, any final
+#     byte); a capture that still holds an escape byte reads as unknown.
+#   - The same capture goes to the engine's screen reader (lib/screen.sh), with the pattern
+#     file of the session's own runtime. A limit notice, a trust dialog or a password prompt is
+#     a hold. If the reader cannot run, the screen reads as unknown.
+#   - The input line is a line that starts with a prompt prefix right below a rule line. More
+#     than one such line reads as a draft.
+#   - The box ends at the LAST rule line of the whole capture below the input line, with no
+#     line cap. No closing rule line reads as a draft.
+#   - The box is empty only if the input line holds no text (dim suggested text in the
+#     runtime's suggestion style aside) and every other line inside the box is blank. Any other
+#     text inside the box, a rule line included, is the person's text: a draft.
+#   - A backend that keeps no colours (iTerm2) cannot tell suggested text from typed text, so
+#     any text after the prompt there is a draft.
+# For the check before Enter, "draft <text>" carries the box text, its lines joined.
 ho_deliver_screen() {
-  local rec=$1 profile=$2 cap plain esc rc sgr k kend i j n line raw text part mark p pfx="" prefixes marks
+  local rec=$1 profile=$2 cap plain esc rc sgr k kend i n line raw text part mark p pfx="" prefixes marks cand=0 csi
   esc=$(printf '\033')
+  csi="$esc\\[[0-?]*[ -/]*[@-~]"
   cap=$(HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec") ho_term_capture "$(jq -r '.handle // ""' "$rec")" \
     "$(jq -r '.term_tag // ""' "$rec")" "$(jq -r '.session_id // ""' "$rec")" 60 styled 2>/dev/null) || { echo "unknown the screen could not be read"; return 0; }
-  plain=$(printf '%s\n' "$cap" | sed "s/$esc\[[0-9;]*m//g")
-  # The same capture goes through the engine's screen reader (lib/screen.sh). A limit notice, a
-  # trust dialog or a password prompt is a hold: nothing is typed, no Enter, no chord (D42g;
-  # validator B4, Codex review). A notice with later text below it reads "none", so a continue
-  # message after a reset still goes through. If the reader cannot run, nothing is typed. The
-  # capture file stays in the run's screen folder only while it is read.
-  local sdir cfile class
+  plain=$(printf '%s\n' "$cap" | LC_ALL=C sed -E "s|$csi||g")
+  case $plain in *"$esc"*) echo "unknown the screen holds escape codes that cannot be read"; return 0 ;; esac
+  # The screen reader, on the same plain capture. The capture file lives in the run's screen
+  # folder only while it is read; a trap removes it if this step is stopped.
+  local sdir class
   sdir="$HO_RUN_DIR/screen"
   mkdir -p "$sdir" && chmod 700 "$sdir" 2>/dev/null || true
-  cfile=$(umask 077 && mktemp "$sdir/.deliver.XXXXXX" 2>/dev/null) || { echo "unknown the screen reader could not run"; return 0; }
-  printf '%s\n' "$plain" > "$cfile"
-  class=$(ho_screen_classify "$cfile" 2>/dev/null) || class=unknown
-  rm -f "$cfile"
+  HO_DELIVER_CFILE=$(umask 077 && mktemp "$sdir/.deliver.XXXXXX" 2>/dev/null) || { echo "unknown the screen reader could not run"; return 0; }
+  trap 'rm -f "$HO_DELIVER_CFILE"' EXIT HUP INT TERM
+  printf '%s\n' "$plain" > "$HO_DELIVER_CFILE"
+  unset HO_SCREEN_SELFTEST
+  class=$(ho_screen_classify "$HO_DELIVER_CFILE" "$profile" 2>/dev/null) || class=unknown
+  rm -f "$HO_DELIVER_CFILE"
+  trap - EXIT HUP INT TERM
   case $class in
     none) ;;
     limit | trust | password) echo "hold $class"; return 0 ;;
@@ -279,22 +294,16 @@ EOF_P
   while IFS= read -r line; do R[i]=$line; i=$((i + 1)); done <<EOF_R
 $cap
 EOF_R
-  k=-1 kend=-1
+  # The input line: a prompt-prefix line right below a rule line.
+  k=-1
   i=1
-  while [ "$i" -lt $((n - 1)) ]; do
+  while [ "$i" -lt "$n" ]; do
     line=${P[i]}
     while IFS= read -r p; do
       [ -n "$p" ] || continue
       case $line in
         "$p"* | "${p% }")
-          ho_deliver_rule "${P[i - 1]}" "$rc" || continue
-          # The box ends at the LAST rule line within 20 lines, so a separator pasted into a
-          # draft cannot end the box early and hide the text below it (Codex review).
-          j=$((i + 1))
-          while [ "$j" -lt "$n" ] && [ "$j" -le $((i + 20)) ]; do
-            if ho_deliver_rule "${P[j]}" "$rc"; then k=$i; kend=$j; pfx=$p; fi
-            j=$((j + 1))
-          done
+          if ho_deliver_rule "${P[i - 1]}" "$rc"; then k=$i; pfx=$p; cand=$((cand + 1)); break; fi
           ;;
       esac
     done <<EOF_PFX
@@ -303,7 +312,7 @@ EOF_PFX
     i=$((i + 1))
   done
   if [ "$k" -lt 0 ]; then
-    # A prompt line with text but no frame is still taken as a draft: nothing may be typed.
+    # A prompt line with text but no frame is still a draft: nothing may be typed.
     i=0
     while [ "$i" -lt "$n" ]; do
       while IFS= read -r p; do
@@ -318,24 +327,28 @@ EOF_PFX2
       "$(printf '%s\n' "$plain" | grep -v '^[[:space:]]*$' | tail -n 3 | sed 's/^[[:space:]]*//' | tr '\n' '|' | sed 's/|$//' | cut -c1-200)"
     return 0
   fi
-  text=""
-  i=$k
-  while [ "$i" -lt "$kend" ]; do
-    raw=${R[i]-}
-    [ -z "$sgr" ] || raw=$(printf '%s\n' "$raw" | sed -E "s/$esc\[${sgr}m[^$esc]*($esc\[(0|22)?m|\$)//g")
-    part=$(printf '%s\n' "$raw" | sed "s/$esc\[[0-9;]*m//g")
-    if [ "$i" -eq "$k" ]; then
-      case $part in "$pfx"*) part=${part#"$pfx"} ;; *) part=${part#"${pfx% }"} ;; esac
-    elif ho_deliver_rule "$part" "$rc"; then
-      # A frame line inside the box is no text, but the lines around it are read.
-      part=""
-    else
-      part=$(printf '%s' "$part" | sed 's/^[[:space:]]*//')
-    fi
-    text="$text$(printf '%s' "$part" | sed 's/[[:space:]]*$//')"
+  [ "$cand" -eq 1 ] || { echo "draft (more than one input line on the screen)"; return 0; }
+  # The box ends at the last rule line below the input line, anywhere in the capture.
+  kend=-1
+  i=$((k + 1))
+  while [ "$i" -lt "$n" ]; do
+    ho_deliver_rule "${P[i]}" "$rc" && kend=$i
     i=$((i + 1))
   done
-  text=$(printf '%s' "$text" | sed 's/^[[:space:]]*//')
+  [ "$kend" -gt "$k" ] || { echo "draft (no closing frame)"; return 0; }
+  # The input line: dim suggested text aside, then the prompt prefix off.
+  raw=${R[k]-}
+  [ -z "$sgr" ] || raw=$(printf '%s\n' "$raw" | LC_ALL=C sed -E "s/$esc\\[${sgr}m[^$esc]*($esc\\[(0|22)?m|\$)//g")
+  text=$(printf '%s\n' "$raw" | LC_ALL=C sed -E "s|$csi||g")
+  case $text in "$pfx"*) text=${text#"$pfx"} ;; *) text=${text#"${pfx% }"} ;; esac
+  text=$(printf '%s' "$text" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  # Every other line inside the box must be blank; a rule line there is the person's text.
+  i=$((k + 1))
+  while [ "$i" -lt "$kend" ]; do
+    part=$(printf '%s' "${P[i]}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    text="$text$part"
+    i=$((i + 1))
+  done
   [ -z "$text" ] || { echo "draft $text"; return 0; }
   i=0
   while [ "$i" -lt "$k" ]; do
@@ -363,7 +376,7 @@ ho_deliver_rule() {
 
 # ho_deliver_version_ge <have> <want>: 0 when the dotted version <have> is at least <want>.
 ho_deliver_version_ge() {
-  awk -v a="$1" -v b="$2" 'BEGIN {
+  /usr/bin/awk -v a="$1" -v b="$2" 'BEGIN {
     na = split(a, x, "."); nb = split(b, y, ".")
     n = (na > nb) ? na : nb
     for (i = 1; i <= n; i++) { p = x[i] + 0; q = y[i] + 0; if (p > q) exit 0; if (p < q) exit 1 }
@@ -373,9 +386,13 @@ ho_deliver_version_ge() {
 # ho_deliver_chord <record> <profile> <id>: send the runtime's send-now chord once (D37-LIFECYCLE-4).
 ho_deliver_chord() {
   local rec=$1 profile=$2 id=$3 bytes want cmd have rc=0
-  # No chord while the screen shows a hold (a limit notice, a trust dialog or a password prompt).
-  case $(ho_deliver_screen "$rec" "$profile") in
-    hold*) ho_ledger_append deliver-force-send id "$id" result skipped reason "the screen shows a hold"; return 1 ;;
+  # The chord passes the same screen gate as typing: only an empty input line or a busy
+  # session. A hold, a draft, an unknown screen or a reader that cannot run gets no chord.
+  local gate
+  gate=$(ho_deliver_screen "$rec" "$profile")
+  case $gate in
+    empty | busy*) ;;
+    *) ho_ledger_append deliver-force-send id "$id" result skipped reason "the screen gate is closed (${gate%% *})"; return 1 ;;
   esac
   # Once per instruction, across both routes: the marker is taken before anything is sent.
   (set -C; : > "$HO_RUN_DIR/messages/$id.chord") 2>/dev/null || return 1
@@ -391,7 +408,7 @@ ho_deliver_chord() {
   case $cmd in /*) ;; *) cmd="" ;; esac
   if [ -n "$cmd" ] && { [ ! -x "$cmd" ] || ! ho_session_runtime_path_ok "$cmd" 2>/dev/null; }; then cmd=""; fi
   have=""
-  [ -z "$cmd" ] || have=$(PATH=$(ho_deliver_exec_path "$cmd") "$cmd" --version 2>/dev/null < /dev/null | awk 'NR == 1 { print $1 }')
+  [ -z "$cmd" ] || have=$(PATH=$(ho_deliver_exec_path "$cmd") "$cmd" --version 2>/dev/null < /dev/null | /usr/bin/awk 'NR == 1 { print $1 }')
   case $have in '' | *[!0-9.]*) have="" ;; esac
   if [ -z "$have" ] || ! ho_deliver_version_ge "$have" "$want"; then
     ho_ledger_append deliver-force-send id "$id" result skipped reason "runtime version ${have:-unknown} is below $want"
@@ -472,7 +489,7 @@ EOF_ARGV
   PATH=$(ho_deliver_exec_path "$cmd") "$cmd" "${argv[@]:1}" < /dev/null > /dev/null 2>> "$HO_RUN_DIR/logs/deliver.log" &
   pid=$!
   set +m
-  deadline=$(( $(date +%s) + $(ho_cfg_int '.delivery.message_timeout_seconds' 30) ))
+  deadline=$(( $(date +%s) + ${HO_DELIVER_MSG_TIMEOUT:-30} ))
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
       ho_deliver_stop_group "$pid"
@@ -497,7 +514,7 @@ ho_deliver_stop_group() {
   local g=$1 grace
   kill -0 -- "-$g" 2>/dev/null || return 0
   kill -TERM -- "-$g" 2>/dev/null || true
-  grace=$(( $(date +%s) + $(ho_cfg_int '.delivery.message_kill_grace_seconds' 2) ))
+  grace=$(( $(date +%s) + ${HO_DELIVER_GRACE:-2} ))
   while kill -0 -- "-$g" 2>/dev/null && [ "$(date +%s)" -lt "$grace" ]; do sleep 0.1; done
   kill -KILL -- "-$g" 2>/dev/null || true
 }
@@ -506,8 +523,7 @@ ho_deliver_stop_group() {
 # line of safe characters within the byte limit, else a short line that names the file.
 ho_deliver_typed_line() {
   local id=$1 text=$2 file=$3 max line
-  max=$(ho_cfg_int '.terminal.typed_max_bytes' 800)
-  [ "$max" -le 1000 ] || max=1000
+  max=${HO_DELIVER_MAX_BYTES:-800}
   line="$id: $text"
   if [ "$(ho_deliver_bytes "$line")" -le "$max" ] && ho_term_text_ok "$line" 2>/dev/null; then
     printf 'direct\t%s\n' "$line"
@@ -556,7 +572,10 @@ ho_session_deliver() {
   if [ -n "$id" ]; then ho_deliver_id_ok "$id" || return 65; else id=$(ho_deliver_new_id); fi
   local delay
   delay=$(ho_term_enter_delay) || return 78
-  HO_DELIVER_WAIT=$(ho_deliver_wait_setting) || return $?
+  HO_DELIVER_WAIT=$(ho_deliver_setting .delivery.wait_seconds 30 2 3600) || return $?
+  HO_DELIVER_MSG_TIMEOUT=$(ho_deliver_setting .delivery.message_timeout_seconds 30 1 600) || return $?
+  HO_DELIVER_GRACE=$(ho_deliver_setting .delivery.message_kill_grace_seconds 2 0 30) || return $?
+  HO_DELIVER_MAX_BYTES=$(ho_deliver_setting .terminal.typed_max_bytes 800 300 1000) || return $?
   local rec profile tr off msg tmp st rc pid screen
   rec=$(ho_deliver_record "$name") || return $?
   profile=$(ho_deliver_profile "$rec") || return $?

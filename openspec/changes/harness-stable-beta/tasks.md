@@ -86,7 +86,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 ## 14. Autonomy and git
 
-- [ ] 14.1 Autonomy profiles checked by the engine at every step boundary and before push, PR, merge and deploy
+- [ ] 14.1 Autonomy profiles checked by the engine at every step boundary and before push, PR, merge and deploy — including the approval record of D37-FLOW-8: the recorded fields, the compare at run start, the ranking file and the stop on a raise (H-036)
 - [ ] 14.2 Push to the ticket branch, draft PR after verification, merge confirmation by git, close on merge
 
 ## 15. Verification
@@ -129,7 +129,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 ## 20a. Owner review-page answers (2026-11-26)
 
-- [ ] 20a.1 Detect the repository's automatic reviewer from recent pull requests; wait with a first-signal limit and a total limit; a short fixed wait when there is none; offer to list a detected bot (H-145, H-146, H-147; D44, D45)
+- [ ] 20a.1 Detect the repository's automatic reviewer from recent pull requests; wait with a first-signal limit and a total limit; a short fixed wait when there is none; offer to list a detected bot; the review settings are recorded fields of the approval record (H-145, H-146, H-147; D44, D45, D37-FLOW-8)
 - [ ] 20a.2 Check after each terminal action: exact check, second sample, cheap checker role; an unclear answer fails; a model answer never allows typing (H-148; D46)
 - [ ] 20a.3 Confidence log by terminal, runtime and operating system version, and the light, medium and deep check levels (H-149; D47)
 - [ ] 20a.4 `models.json` with the four roles for each runtime; a step, check or chain names a role (H-150; D48)

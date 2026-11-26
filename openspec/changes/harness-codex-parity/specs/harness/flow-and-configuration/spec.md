@@ -19,7 +19,7 @@ Decided: design.md D37-RUNTIME-1, D53
 - **WHEN** the flow configuration sets the execution step to run on Codex, and the Codex success path and the comparison run of H-157 have passed
 - **THEN** execution runs on Codex in an interactive session, and the harness does not mark it experimental
 
-#### Scenario: Execution on Codex before the success path passed
+#### Scenario: Execution on Codex before both release checks passed
 - **WHEN** the flow configuration sets the execution step to run on Codex, and the Codex success path or the comparison run of H-157 has not passed for this release
 - **THEN** the start output marks the step as experimental
 

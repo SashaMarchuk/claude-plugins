@@ -463,7 +463,7 @@ Decided: design.md D46
 - **THEN** the check uses that model, and no engine code changes
 
 ### Requirement: H-149 A confidence log by version sets how deep the checks go
-The harness SHALL log which terminal actions worked for each combination of terminal app version, runtime version and operating system. A new combination SHALL get the deepest checks. The first run of a day SHALL get more checks than later runs that day. A known-good combination SHALL get light checks. A failed light check SHALL bring back the deep checks.
+The harness SHALL log which terminal actions worked for each combination of terminal app version, runtime version and operating system. A new combination SHALL get the deepest checks. The first session of a day SHALL get more checks than later sessions that day. A known-good combination SHALL get light checks. A failed light check SHALL bring back the deep checks.
 
 Source: owner decision 2026-11-26 (review page, item 3): RP3.10
 Decided: design.md D47
@@ -474,7 +474,7 @@ Decided: design.md D47
 - **AND** it records each result under the new combination
 
 #### Scenario: A known-good combination later the same day
-- **WHEN** a combination already passed the deep checks today and the harness delivers another instruction
+- **WHEN** a combination already passed the deep checks in an earlier session today and the harness delivers an instruction in a new session
 - **THEN** it runs only the light checks
 
 #### Scenario: A light check fails

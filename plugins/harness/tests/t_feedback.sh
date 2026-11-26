@@ -114,6 +114,15 @@ printf '## Goal\nCANARY-TICKET-BODY secret plan\n\n## Acceptance\n- [ ] it works
 before=$(tree_sum "$run")
 printf 'It hangs. My notes are in %s/notes.md and %s/private.txt.\nThe plugin script %s/lib/run.sh looks wrong.\nTokens: %s\nMail me at canary@example.com, password=hunter2secret, I am canaryacct.\n' \
   "$proj" "$HOME" "$HO_PLUGIN_ROOT" "$tokens" > "$base/d2.txt"
+# Shapes found in review: secret keys with a prefix, a base64 secret with "/", paths after -I,
+# ">", "../" and file://, a path with spaces, and an account name in other case.
+cat >> "$base/d2.txt" <<'EOF'
+DB_PASSWORD=canarypw1 client_secret=canarysec2 GITHUB_TOKEN=canarytok3 "api_key": "canarykey4"
+blob wJalrXUtnFEMI/K7MDENG/bPxRfiCYcanaryKEYabcd end
+cc -I/home/canary/include; see ../../canary/notes.txt; echo hi >/tmp/canary/out.log
+open file:///Users/canary/x.html and /home/bob/My canary Acme/file.txt then words
+I am Canaryacct, also CANARYACCT.
+EOF
 rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d2.txt") || rc=$?
 assert_eq "H-140 private: preview exits 0" "0" "$rc"
 d=$(draft_of "$out")
@@ -125,7 +134,7 @@ shown=$(printf '%s\n' "$out" | sed '/^DRAFT /,$d')
 for where in shown stored; do
   txt=${!where}
   leaks=""
-  for canary in CANARY canary hunter2secret "$proj" "$HOME" "$base" $tokens; do
+  for canary in CANARY Canary canary hunter2secret "$proj" "$HOME" "$base" $tokens; do
     case $txt in *"$canary"*) leaks="$leaks [$canary]" ;; esac
   done
   case $txt in *"$(id -un)"*) [ ${#USER} -ge 3 ] && leaks="$leaks [the login name]" ;; esac

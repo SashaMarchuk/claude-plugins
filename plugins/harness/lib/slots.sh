@@ -114,12 +114,18 @@ ho_slot_try() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     [ -f "$dir/$holder.json" ] && exit 0
-    # One stop rule for every kind (worker, heavy, stage), with or without a wait: a stopped run
-    # takes no slot. It is read here, under the lock, at every try, so a stop recorded during a
-    # wait is seen even when the slot frees before the next poll (review of PR #99).
+    # The stop rule is read here, under the lock, at every try, so a stop recorded during a wait
+    # is seen even when the slot frees before the next poll (review of PR #99). A worker slot
+    # starts new work: a stop refuses it, except for a ticket that a soft:ticket stop lets
+    # finish. A heavy or stage slot serves a session that already runs: a soft stop lets that
+    # session finish its step (D25a, H-086). An unknown stop state refuses every kind.
     st=0
-    ho_stopped || st=$?
-    [ "$st" -eq 1 ] || { echo "harness: the run is stopped (or its stop state is unknown); no slot taken" >&2; exit 75; }
+    if [ "$kind" = worker ]; then
+      ho_stop_gate "$(jq -r '.ticket // ""' "$HO_RUN_DIR/sessions/$holder.json" 2>/dev/null || true)" || st=$?
+    else
+      ho_stop_gate_soft || st=$?
+    fi
+    [ "$st" -eq 0 ] || { echo "harness: the run is stopped (or its stop state is unknown); no slot taken" >&2; exit 75; }
     # The holder is checked again here, under the lock, at every try: a session that was closed
     # or ended while it waited for the slot gets none (review of PR #99).
     hrec="$HO_RUN_DIR/sessions/$holder.json"

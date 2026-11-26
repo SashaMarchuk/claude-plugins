@@ -199,3 +199,69 @@ assert_eq "H-105: the forced release tells the launch not to start" yes "$([ -f 
 wl "$r" u2 >/dev/null
 rc=0; answer u2 "$h" slot "$r" release worker --holder u2 --force || rc=$?
 assert_eq "H-105: a working worker's slot cannot be force-released" "65 held" "$rc $([ -f "$r/slots/worker/u2.json" ] && echo held || echo freed)"
+
+# ---- review round 2 (PR #99) ----
+# An end file next to a live worker decides nothing while the session process may still run.
+r=$("$h" run new --workers 1)
+wl "$r" e1 >/dev/null
+ep=$(pid_of "$r" e1)
+: > "$r/sessions/e1.ended"
+rc=0; PATH="$base/selfps:$PATH" "$h" session "$r" launch --role worker --name e2 --cwd "$proj/src" --prompt "$base/prompt.md" >/dev/null 2>&1 || rc=$?
+assert_eq "H-105: a forged end file under a narrow view frees no slot: the next launch gets 73, one worker runs" "73 1" \
+  "$rc $(live_workers "$r" e1 e2)"
+assert_eq "H-090: a narrow view with an end file next to a live worker reads unknown, never dead" unknown \
+  "$(PATH="$base/selfps:$PATH" "$h" session "$r" status e1 | jq -r .liveness)"
+rm -f "$r/sessions/e1.ended"
+# A real end under the same narrow view still reads dead: the kernel says no such process.
+kill "$ep"; wait_gone "$ep" || bad "test setup: e1 did not end" "$ep"
+i=0; while [ "$(PATH="$base/selfps:$PATH" "$h" session "$r" status e1 | jq -r .liveness)" != dead ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+assert_eq "H-090: a worker that really ended reads dead under a narrow view too" dead \
+  "$(PATH="$base/selfps:$PATH" "$h" session "$r" status e1 | jq -r .liveness)"
+
+# A heavy-slot wait for a session closed during the wait takes nothing (Codex review of PR #99).
+r=$("$h" run new --workers 3)
+wl "$r" q1 >/dev/null
+wl "$r" q2 >/dev/null
+assert_exit "test setup: q1 takes the heavy slot" 0 "$h" slot "$r" acquire heavy --holder q1 --op image-build
+(c=0; "$h" slot "$r" acquire heavy --holder q2 --op app-build --wait 20 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-q2") &
+sleep 1
+assert_contains "test setup: q2 is closed while it waits" "$("$h" session "$r" close q2 2>&1)" "closed"
+"$h" slot "$r" release heavy --holder q1 >/dev/null
+wait_file "$base/rc-q2" 250 || bad "test setup: the q2 acquire did not return" ""
+assert_eq "H-107: a wait for a session closed meanwhile ends non-zero and records no slot for it" "nonzero none" \
+  "$([ "$(cat "$base/rc-q2")" -ne 0 ] && echo nonzero || echo zero) $([ -f "$r/slots/heavy/q2.json" ] && echo held || echo none)"
+
+# The forced release reads the holder again after the answer: a holder that came alive is kept.
+r=$("$h" run new --workers 1)
+mkdir -p "$r/sessions" "$r/slots/worker"
+jq -n --arg run "$(basename "$r")" '{schemaVersion: 2, run: $run, name: "f1", role: "worker", session_id: null, pid: null, status: "launching"}' > "$r/sessions/f1.json"
+jq -n --arg run "$(basename "$r")" '{run: $run, kind: "worker", holder: "f1", op: null, since: "x"}' > "$r/slots/worker/f1.json"
+fo=$( (sleep 3000 > /dev/null 2>&1 & echo $!) ); echo "$fo" >> "$base/extra.pids"
+fs=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$fo" | sed 's/^ *//; s/ *$//')
+: > "$base/f1.screen"
+# Once the prompt shows, the record gains a live launch command, then the name is typed.
+{ i=0; while ! grep -q 'Type the session name' "$base/f1.screen" 2>/dev/null && [ $i -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+  jq --argjson p "$fo" --arg s "$fs" '.launch_pid = $p | .launch_start = $s' "$r/sessions/f1.json" > "$base/f1.json" && mv "$base/f1.json" "$r/sessions/f1.json"
+  for _ in 1 2 3 4 5 6; do printf 'f1\n' || break; sleep 0.5; done; } 2>/dev/null \
+  | script -q /dev/null "$h" slot "$r" release worker --holder f1 --force > "$base/f1.screen" 2>&1 && rc=0 || rc=${PIPESTATUS[1]}
+assert_eq "H-105: a holder that reads starting after the answer keeps its slot, and no close flag is left" "65 held no" \
+  "$rc $([ -f "$r/slots/worker/f1.json" ] && echo held || echo freed) $([ -f "$r/sessions/f1.closing" ] && echo yes || echo no)"
+kill "$fo" 2>/dev/null || true
+
+# The usage of slot acquire names every exit of a wait.
+assert_contains "H-105: the slot usage names exit 75 for a stopped run" "$("$h" slot 2>&1 || true)" "75"
+
+# A process table that cuts long command lines (procps at the terminal width) needs -ww.
+mkdir -p "$base/cutps"
+cat > "$base/cutps/ps" <<'PS'
+#!/bin/sh
+case " $* " in *" -ww "*) exec /bin/ps "$@" ;; esac
+case "$*" in *command=*) /bin/ps "$@" | cut -c1-30; exit 0 ;; esac
+exec /bin/ps "$@"
+PS
+chmod +x "$base/cutps/ps"
+r=$("$h" run new --workers 1)
+wl "$r" c1 >/dev/null
+assert_eq "H-090: a long command line is read whole, so a live worker reads working" working \
+  "$(PATH="$base/cutps:$PATH" "$h" session "$r" status c1 | jq -r .liveness)"
+assert_exit "H-105: and its slot is kept" 73 env PATH="$base/cutps:$PATH" "$h" session "$r" launch --role worker --name c2 --cwd "$proj/src" --prompt "$base/prompt.md"

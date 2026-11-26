@@ -266,7 +266,7 @@ ho_session_identity() {
   local pid=${1-} sid=${2-} cmd
   case $pid in '' | *[!0-9]*) return 1 ;; esac
   [ -n "$sid" ] || return 1
-  cmd=$(ps -o command= -p "$pid" 2>/dev/null) || return 1
+  cmd=$(ps -ww -o command= -p "$pid" 2>/dev/null) || return 1
   case $cmd in *"$sid"*) return 0 ;; esac
   return 1
 }

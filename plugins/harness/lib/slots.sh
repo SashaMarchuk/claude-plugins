@@ -105,7 +105,7 @@ ho_slot_count() {
 # ho_slot_try <kind> <holder> <op>: one attempt. 0 taken (or already held), 73 full.
 # Prints the freed slots for the ledger.
 ho_slot_try() {
-  local kind=$1 holder=$2 op=$3 dir="$HO_RUN_DIR/slots/$1" limit rc=0
+  local kind=$1 holder=$2 op=$3 dir="$HO_RUN_DIR/slots/$1" limit rc=0 hrec hv
   limit=$(ho_slot_limit "$kind")
   mkdir -p "$dir" || return 1
   ho_slot_lock_take || return 1
@@ -114,6 +114,12 @@ ho_slot_try() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     [ -f "$dir/$holder.json" ] && exit 0
+    # The holder is checked again here, under the lock, at every try: a session that was closed
+    # or ended while it waited for the slot gets none (Codex review of PR #99).
+    hrec="$HO_RUN_DIR/sessions/$holder.json"
+    [ -f "$hrec" ] || { printf 'harness: %s is no longer a session of run %s; no slot taken\n' "$holder" "$HO_RUN_ID" >&2; exit 66; }
+    hv=$(ho_live_verdict "$hrec")
+    case $hv in dead | closed) printf 'harness: session %s reads %s; no slot taken\n' "$holder" "$hv" >&2; exit 65 ;; esac
     ho_slot_free_dead "$dir"
     [ "$(ho_slot_count "$dir")" -lt "$limit" ] || exit "$HO_SLOT_NOSLOT"
     jq -n --arg run "$HO_RUN_ID" --arg kind "$kind" --arg holder "$holder" --arg op "$op" --arg ts "$(ho_now)" \
@@ -177,12 +183,16 @@ ho_slot_usage() {
 usage: harness slot <run-dir> <verb> [args]
   acquire heavy --holder NAME --op TYPE [--wait SECONDS]
   acquire stage:<id> --holder NAME [--wait SECONDS]
-                       take the slot; exit 73 when none is free in time (try again later)
+                       take the slot; exit 73 when none is free in time (try again later),
+                       75 when the run is stopped during the wait, 65 or 66 when the session
+                       is closed, ends or is gone during the wait (nothing is taken)
   release heavy|stage:<id> --holder NAME
   release worker --holder NAME --force
                        for the owner, at a terminal: free the worker slot of a session that
                        cannot be judged (it reads unknown or dead); asks for the name, writes
                        the close flag and a ledger line. Never for a working or starting one.
+                       If that session is in fact alive, the run then has one worker more than
+                       the cap.
   list                 kind, holder, operation and since, one line per held slot
   limits               the limits of this run (fixed at run start)
   heavy-ops            the heavy types of this run
@@ -247,8 +257,12 @@ ho_slot_cli_take_or_give() {
 
 # ho_slot_force_release <holder>: the owner's way out for a worker slot whose holder cannot be
 # judged (a record from older code, an unreadable record, a process view that cannot see the
-# session). It needs a person at a terminal who types the session name; an agent's shell has no
-# terminal. A holder that reads working or starting is refused: its process is seen alive.
+# session). It needs a terminal where the session name is typed. That stops an accident, not a
+# script: a program that opens a terminal passes it, so it is a speed bump, not a security
+# boundary (D37-FLOW-8a). A holder that reads working or starting is refused, before the prompt
+# and again after the answer. If the holder is in fact alive (a view that cannot see it), the run
+# then has one worker more than the cap, and the close flag left behind stops that session's
+# model fallback (a later "session close" still works).
 ho_slot_force_release() {
   local holder=$1 f="$HO_RUN_DIR/slots/worker/$1.json" rec="$HO_RUN_DIR/sessions/$1.json" v=unknown ans=""
   [ -f "$f" ] || { printf 'OK %s holds no worker slot\n' "$holder"; return 0; }
@@ -265,10 +279,16 @@ ho_slot_force_release() {
   IFS= read -r -t 120 ans <&3 || ans=""
   exec 3>&-
   [ "$ans" = "$holder" ] || { printf 'harness: the answer did not match %s; nothing was released\n' "$holder" >&2; return 65; }
+  # Read again after the answer: the holder may have come alive while the prompt waited.
+  [ ! -f "$rec" ] || v=$(ho_live_verdict "$rec")
+  case $v in working | starting)
+    printf 'harness: session %s now reads %s; its slot is not released\n' "$holder" "$v" >&2
+    return 65 ;;
+  esac
   # The flag first: a launcher that has not started yet then starts nothing (see ho_slot_free_dead).
   : > "$HO_RUN_DIR/sessions/$holder.closing" 2>/dev/null || true
   rm -f "$f" || return 1
-  ho_ledger_append slot-force-released kind worker holder "$holder" verdict "$v" by owner
+  ho_ledger_append slot-force-released kind worker holder "$holder" verdict "$v" confirmed terminal
   printf 'OK released the worker slot of %s\n' "$holder"
 }
 

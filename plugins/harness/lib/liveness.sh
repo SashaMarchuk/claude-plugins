@@ -85,7 +85,8 @@ ho_live_sid_state() {
   local pid=${1-} sid=${2-} cmd
   case $pid in '' | *[!0-9]*) echo gone; return 0 ;; esac
   [ -n "$sid" ] || { echo gone; return 0; }
-  cmd=$(ps -o command= -p "$pid" 2>/dev/null) || cmd=""
+  # -ww: the whole command line, never cut at a terminal width (the session ID may sit late).
+  cmd=$(ps -ww -o command= -p "$pid" 2>/dev/null) || cmd=""
   if [ -n "$cmd" ]; then
     case $cmd in *"$sid"*) echo alive ;; *) echo gone ;; esac
     return 0
@@ -229,8 +230,10 @@ ho_live_verdict() {
   # command, a model fallback), unless the launcher has recorded its end.
   if [ "$cmd" = alive ]; then echo starting; return 0; fi
   if [ "$lch" = alive ] && [ "$ended" -eq 0 ]; then echo starting; return 0; fi
-  # The launcher recorded its end: no session process of this launch runs or will start.
-  [ "$ended" -eq 1 ] && [ "$cmd" != unknown ] && { echo dead; return 0; }
+  # The launcher recorded its end: no session process of this launch runs or will start. The
+  # file decides only when no recorded session process may still run: with the session process
+  # unknown, a process with that PID exists, so a stray end file proves nothing.
+  [ "$ended" -eq 1 ] && [ "$cmd" != unknown ] && [ "$sess" != unknown ] && { echo dead; return 0; }
   # Otherwise every recorded process must be proven gone.
   if [ "$sess" = unknown ] || [ "$cmd" = unknown ] || [ "$lch" = unknown ]; then echo unknown; return 0; fi
   # A launching record always names its launch command; one that does not is not proof.

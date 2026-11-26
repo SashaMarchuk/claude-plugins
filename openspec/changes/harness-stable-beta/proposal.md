@@ -49,7 +49,7 @@ Not in this beta. These come from items the owner answered "no" or "later", from
 - Plugin limits on who pushes or where: no. Such limits live at project level (R26.5).
 - Managing which MCP tools a session gets: no (R26.6).
 - Scrubbing secrets from transcripts: no. It is each project's or person's own setting (R26.8).
-- Helping people tune their own setup for the harness: later, as a to-do (R26.7).
+- Helping people tune their own setup for the harness: later, as a to-do (R26.7). The readiness check and the install offer (H-154, H-073) cover only what the harness itself needs to run.
 - Support for other agent harnesses beyond Claude Code and Codex: later (R24.8).
 - Interactive Codex sessions: not in this beta, by agent decision D30. Codex execution is experimental until a comparison run passes (D30, D31). The owner's answers of 2026-11-26 ask for Codex at the same level as Claude Code; they are in the change `harness-codex-parity`, planned for the next release.
 - Production deploy in any ready-made profile: no. A user's own profile may allow it at their own risk (R9.1, R9.2).

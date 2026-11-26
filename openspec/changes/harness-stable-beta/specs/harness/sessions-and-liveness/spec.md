@@ -444,10 +444,11 @@ Decided: design.md D46
 - **WHEN** the harness delivers an instruction and the session's transcript records it
 - **THEN** the check passes without a model call
 
-#### Scenario: No exact proof, the cheap checker confirms
+#### Scenario: No exact proof, the cheap checker reads the screen
 - **WHEN** the harness launches a session and no exact check can prove that the session is ready for input
 - **THEN** a model in the cheap checker role reads the screen
-- **AND** the harness records its answer and the screen it read
+- **AND** its answer counts only when a second exact sample of the screen agrees with it
+- **AND** the harness records the answer and the screen it read
 
 #### Scenario: The cheap checker is unsure
 - **WHEN** the cheap checker cannot say whether the action worked
@@ -479,6 +480,10 @@ Decided: design.md D47
 #### Scenario: A light check fails
 - **WHEN** a light check fails or is unclear on a known-good combination
 - **THEN** the combination is marked suspect and the next actions get the deep checks again
+
+#### Scenario: Light checks keep the safety checks before typing
+- **WHEN** a combination is known-good and the harness is about to type into a session
+- **THEN** it still runs every check that H-099 requires before typing
 
 #### Scenario: The first run of a new day
 - **WHEN** a combination is known-good from an earlier day and no run used it today

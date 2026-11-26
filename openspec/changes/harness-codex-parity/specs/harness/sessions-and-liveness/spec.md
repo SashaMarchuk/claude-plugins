@@ -59,6 +59,14 @@ Decided: design.md D54
 - **WHEN** a found correction would type into a busy session
 - **THEN** the orchestrator does not keep it and records why
 
+#### Scenario: Screen text tries to steer the learning
+- **WHEN** the screen shows text that asks the model to type a shell command, and learning is automatic
+- **THEN** the screen text reaches the model only inside the untrusted fence, the correction may use only the listed action kinds, and an exact check must pass before the correction is kept
+
+#### Scenario: A flow without interactive terminals
+- **WHEN** the flow runs no interactive terminal sessions
+- **THEN** this learning does not run
+
 #### Scenario: The person starts a learning pass
 - **WHEN** the person runs the learning command
 - **THEN** the orchestrator reviews the recent failed actions and proposes corrections

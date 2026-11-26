@@ -205,18 +205,26 @@ Source: owner decision 2026-11-26; interview 2026-11-24 R30.5, R27.17
 - **WHEN** the run reports a merge and git does not show the change in the target branch
 - **THEN** the checklist item is not passed
 
-### Requirement: H-151 Every start checks that the settings profile is current for this machine
-Before a run, the harness SHALL find the settings profile it will use, and SHALL start the first setup if there is none. It SHALL check that the profile still matches this machine. A change that breaks the settings SHALL stop the start. A change in how the run behaves SHALL be asked about in an attended start and SHALL stop an unattended one. A change with no effect SHALL only be logged.
+### Requirement: H-151 Every start checks that the selected settings are current for this machine
+Before a run, the harness SHALL find the selected config and its approval record. With none, H-072 applies, and an attended start SHALL open the first setup. Otherwise it SHALL check that they still match this machine. A change that breaks them SHALL stop the start. A change in run behaviour SHALL be asked about in an attended start and SHALL stop an unattended one. A change with no effect SHALL only be logged.
 
 Source: owner decision 2026-11-26 (review page, item 4): RP4.1
 Decided: design.md D50
 
-#### Scenario: No profile
-- **WHEN** a run starts in a project with no settings profile on this machine
-- **THEN** an attended start opens the first setup, and an unattended start stops with an attention notice
+#### Scenario: Nothing is configured
+- **WHEN** an attended run starts and no config applies at the project level or the user level
+- **THEN** it opens the first setup (H-152), whose flow question is the one confirmation of H-072
+
+#### Scenario: Nothing is configured, unattended
+- **WHEN** an unattended run starts and no config applies at the project level or the user level
+- **THEN** it stops and raises an attention notice, as H-072 says
+
+#### Scenario: A saved user default
+- **WHEN** a run starts in a project with no project config and the person saved a confirmed default in the user settings
+- **THEN** the run uses that default with no setup, and the machine check still runs
 
 #### Scenario: Nothing changed
-- **WHEN** a run starts and the machine still matches the approved profile
+- **WHEN** a run starts and the machine still matches the approved settings
 - **THEN** the run starts and asks nothing
 
 #### Scenario: A runtime the plan uses is logged out
@@ -224,7 +232,7 @@ Decided: design.md D50
 - **THEN** the run stops before any worker starts and names the runtime with its login step
 
 #### Scenario: A flow system version changed
-- **WHEN** an attended run starts and the flow system was updated for one runtime since the approval
+- **WHEN** an attended run starts and the flow system's minor version changed for one runtime since the approval
 - **THEN** the harness shows the change, runs the readiness check (H-154) and asks one yes before it records the new state
 
 #### Scenario: An unattended start finds a change that needs a yes
@@ -236,7 +244,7 @@ Decided: design.md D50
 - **THEN** the harness writes one log line and the run starts
 
 #### Scenario: What the start compares
-- **WHEN** a run starts with an approved profile
+- **WHEN** a run starts with approved settings
 - **THEN** it compares the runtimes and their logins, the accounts that roles use, the flow system for each runtime, the terminal backends and the repository access with the approved state
 
 #### Scenario: The approved state changes only after a yes
@@ -244,10 +252,22 @@ Decided: design.md D50
 - **THEN** the record of the approved state stays as it was
 
 ### Requirement: H-152 The first setup is short: the harness studies the machine and recommends
-The first setup SHALL study the machine before it asks anything. It SHALL ask only what it cannot find out and what the person must choose, and SHALL show a recommended answer with its reason. A default user SHALL answer at most five questions. The setup SHALL write nothing before the last yes, and SHALL never pick a flow for the person.
+The first setup SHALL study the machine before it asks anything. It SHALL ask only what it cannot find out and what the person must choose, with a recommended answer and its reason. It SHALL ask at most five questions; other settings keep their defaults unless the person asks to change them. The setup SHALL write nothing before the last yes, and SHALL never pick a flow for the person.
 
 Source: owner decision 2026-11-26 (review page, item 4): RP4.2, RP4.3
 Decided: design.md D51
+
+#### Scenario: The configuration skill runs the first setup
+- **WHEN** a person starts the first setup
+- **THEN** it runs in the configuration skill (H-127, H-128)
+
+#### Scenario: The most questions
+- **WHEN** both runtimes are ready, the repository holds a committed config and the person declines it
+- **THEN** the setup still asks at most five questions: runtimes, flow and requirements format, autonomy level, limit thresholds, and the final save
+
+#### Scenario: Each question shows its recommendation
+- **WHEN** the setup asks the autonomy question on a machine whose account cannot push to the repository
+- **THEN** it marks the safe level as recommended, says why, and shows the levels that need a push as unavailable
 
 #### Scenario: A machine with one runtime
 - **WHEN** a person runs the first setup on a machine with only Claude Code logged in and no harness config in the repository
@@ -255,7 +275,7 @@ Decided: design.md D51
 
 #### Scenario: The repository already has a config
 - **WHEN** a person runs the first setup in a repository that holds a committed harness config
-- **THEN** the setup first asks whether to use it, and if yes it does not ask the flow or the autonomy questions
+- **THEN** the flow question offers that config first, and if the person takes it, the setup does not ask the autonomy question
 
 #### Scenario: Something the machine shows is not asked
 - **WHEN** the machine has one account and one supported terminal app
@@ -277,7 +297,8 @@ Decided: design.md D51
 
 #### Scenario: The evaluation runs before a release
 - **WHEN** the release checklist (H-141) runs
-- **THEN** the setup evaluation runs over every machine state and its result goes into the release PR
+- **THEN** the setup evaluation runs over every machine state, three times each, and its result goes into the release PR
+- **AND** a machine state passes only when all three runs pass
 
 #### Scenario: A setup asks what it could detect
 - **WHEN** a change makes the setup ask which terminal app to use on a machine with one supported terminal app
@@ -320,4 +341,12 @@ Decided: design.md D52
 #### Scenario: The start check uses the same command
 - **WHEN** a run starts
 - **THEN** the start check runs the read-only part of the readiness check and stops on a missing item
+
+#### Scenario: Limits cannot be read
+- **WHEN** the readiness check cannot read an account's limits
+- **THEN** it reports a note and does not stop the start (H-111)
+
+#### Scenario: The readiness check changes nothing
+- **WHEN** a person runs the readiness check skill
+- **THEN** it changes no settings; changing settings stays with the configuration skill
 

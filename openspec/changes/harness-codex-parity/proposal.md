@@ -4,7 +4,7 @@
 
 On 2026-11-26 the owner answered the review page of PR #100. He asked for Codex to work at the same level as Claude Code, as worker and as orchestrator of interactive terminal sessions. He asked for terminal control that corrects itself after an update breaks it. He asked for load routing between runtimes, a current list of which model fits which role, routing between subscriptions only across providers, other models inside a runtime, and the plugin and marketplace working in Codex too.
 
-The stable beta (`harness-stable-beta`) keeps interactive Codex sessions out (its Non-goals, D30) and runs Codex only for review steps. This change holds the owner's Codex answers as requirements. It is planned for the release after the beta; the owner decides whether any part moves into the beta. The beta-sized answers of the same review page (external review bots, the check after each terminal action, the confidence log, model roles, the start check, the first setup and its evaluation, the readiness check) are in `harness-stable-beta` as H-145 to H-154.
+The stable beta (`harness-stable-beta`) keeps interactive Codex sessions out (its Non-goals, D30) and runs Codex non-interactively: review steps, and execution only as an experimental option. This change holds the owner's Codex answers as requirements. It is planned for the release after the beta; the owner decides whether any part moves into the beta. The beta-sized answers of the same review page (external review bots, the check after each terminal action, the confidence log, model roles, the start check, the first setup and its evaluation, the readiness check) are in `harness-stable-beta` as H-145 to H-154.
 
 ## What Changes
 

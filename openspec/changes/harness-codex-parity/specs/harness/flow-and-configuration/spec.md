@@ -46,7 +46,7 @@ Decided: design.md D55
 ### Requirement: H-159 A step whose skill is missing on one runtime is set up there or moved to a runtime that has it
 When a skill, plugin or flow system that a step needs is missing on the step's runtime but present on another runtime, the harness SHALL offer two choices before the run: set it up after a yes (H-073), or run those steps on the runtime that has it. This SHALL hold in both directions. A step fixed to one runtime SHALL never move.
 
-Source: owner decision 2026-11-26 (review page, item 3): RP3.13, RP3.14
+Source: owner decision 2026-11-26 (review page, item 3): RP3.13, RP3.14, RP3.15
 Decided: design.md D55
 
 #### Scenario: The person moves the steps
@@ -62,7 +62,7 @@ Decided: design.md D55
 - **THEN** the harness offers to set it up for Claude Code or to run the step on Codex
 
 ### Requirement: H-160 The orchestrator may shift load between runtimes inside limits the person set
-At setup, the person SHALL be able to set a preferred split of steps between runtimes, steps fixed to one runtime, and whether the orchestrator may change the split during a run. With that permission, it MAY move movable steps by skill availability and by limits left, and SHALL record and report each move. Without it, it SHALL ask.
+At setup, the person SHALL be able to set a preferred split of steps between runtimes, steps fixed to one runtime, and whether the orchestrator may change the split during a run. With that permission, it MAY move movable steps by skill availability and by limits left, and SHALL record and report each move. Without it, an attended run SHALL ask, and an unattended run SHALL keep the split.
 
 Source: owner decision 2026-11-26 (review page, item 3): RP3.15, RP3.16
 Decided: design.md D56
@@ -84,7 +84,7 @@ Decided: design.md D56
 - **THEN** those steps never move, and other steps may move within the permission
 
 ### Requirement: H-161 The model role mapping stays current from a maintained public source
-The harness SHALL keep the role mapping of H-150 current. It SHALL check the mapping against a maintained public model list and against the runtimes' own model lists, at setup and at most once a day. A gone, deprecated or better-fitting model SHALL be shown as a proposed change, applied only after a yes. An unreadable list SHALL NOT fail a run.
+The harness SHALL keep the role mapping of H-150 current. It SHALL check the mapping against a maintained public model list and against the runtimes' own model lists, at setup and at most once a day. A gone or deprecated model, or a newer model of the same family, SHALL be shown as a proposed change, applied only after a yes. An unreadable list SHALL NOT fail a run.
 
 Source: owner decision 2026-11-26 (review page, item 3): RP3.17
 Decided: design.md D57

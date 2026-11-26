@@ -247,9 +247,9 @@ Decided: design.md D37-FLOW-4
 - **AND** it does not fall back to another config, to the saved user default or to the shipped default config
 
 ### Requirement: H-073 Flow systems are linked, never vendored, and checked present at start
-Flow systems, such as GSD, SHALL NOT be stored in the project repo; configs SHALL only link to them. At start, the harness MUST check that every technology and skill the flow names is present for each runtime that uses it. If one is missing, it SHALL stop before work starts and name it with its install step, and SHALL install only after a person's yes.
+Flow systems, such as GSD, SHALL NOT be stored in the project repo; configs SHALL only link to them. At start, the harness MUST check that every technology and skill the flow names is present for each runtime that uses it. If one is missing, it SHALL stop before work starts and name it with its install step. It SHALL run only a trusted install step, and only after a person's yes.
 
-Source: interview 2026-11-24 R17.5, R17.6; owner decision 2026-11-26 (review page, item 3): RP3.13
+Source: interview 2026-11-24 R17.5, R17.6; agent reading of RP3.13, RP3.14
 Decided: design.md D37-RUNTIME-3, D49
 
 #### Scenario: All named tools are present
@@ -263,6 +263,10 @@ Decided: design.md D37-RUNTIME-3, D49
 #### Scenario: The person agrees to set it up
 - **WHEN** an attended start finds a missing skill and the person says yes to the offer to set it up
 - **THEN** the harness runs the printed install step, checks again, and starts only when the check passes
+
+#### Scenario: An install step from a project config
+- **WHEN** the missing item's install step comes from a project flow config
+- **THEN** the harness shows the step as "not checked" and never offers to run it
 
 #### Scenario: The person declines, or nobody answers
 - **WHEN** an attended start finds a missing skill and the person says no, or an unattended start finds one
@@ -290,10 +294,10 @@ Source: interview 2026-11-24 R17.8
 - **THEN** the newcomer can learn from the repo that the harness is used and how to install it
 
 ### Requirement: H-075 Per-step runtime, including Codex for steps with the same result
-Each flow step SHALL be able to name its agent runtime, and any step SHALL be able to run on Codex, configurable with profiles. No runtime name SHALL be hard-coded in engine code; such names live in data files. Execution on Codex SHALL be marked experimental only until the Codex success path of H-157 passes.
+Each flow step SHALL be able to name its agent runtime. Steps with the same result SHALL be able to run on Codex, configurable with profiles (part of the beta). No runtime name SHALL be hard-coded in engine code; such names live in data files. Details: design.md D30, D31.
 
-Source: interview 2026-11-24 R24.5, R24.6; owner decision 2026-11-26 (review page, item 3): RP3.4
-Decided: design.md D37-RUNTIME-1, D53
+Source: interview 2026-11-24 R24.5, R24.6; D30, D31; context (rejected: hard-coding a vendor name)
+Decided: design.md D37-RUNTIME-1, D37-RUNTIME-2
 
 #### Scenario: UI review runs on Codex
 - **WHEN** the flow configuration sets the UI review step to run on Codex
@@ -358,10 +362,9 @@ Source: interview 2026-11-24 R28.9
 - **THEN** the agent communicates in that language
 
 ### Requirement: H-078 The same workflow runs on Codex and Claude Code where local setup allows
-The same workflow, for example GSD, SHOULD run on both Codex and Claude Code. If that needs harness changes, the harness SHALL include them. A workflow set up for one runtime only SHALL be offered for setup on the other one, or its steps SHALL go to the runtime that has it (H-159).
+The same workflow, for example GSD, SHOULD run on both Codex and Claude Code (the owner called this the ideal). If that needs harness changes, the harness SHALL include them. The agent's current assessment: installing a workflow for Codex is local setup (design.md D31).
 
-Source: interview 2026-11-24 R24.5, R24.6; owner decision 2026-11-26 (review page, item 3): RP3.13
-Decided: design.md D55
+Source: interview 2026-11-24 R24.5, R24.6; D31 (split from H-075)
 
 #### Scenario: One workflow on both runtimes
 - **WHEN** a flow based on GSD runs some steps on Codex and some on Claude Code, and GSD is set up locally for both
@@ -393,9 +396,3 @@ Decided: design.md D48
 - **WHEN** a step names a role that the mapping does not give for the step's runtime
 - **THEN** the run stops at start and names the role and the runtime
 - **AND** it never picks a model by itself
-
-#### Scenario: A project selects a role for a step
-- **WHEN** a project config sets the role of its code review step to strongest
-- **THEN** code review uses the model mapped to the strongest role for its runtime
-
-

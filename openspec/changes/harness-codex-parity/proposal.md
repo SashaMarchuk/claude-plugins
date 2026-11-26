@@ -8,7 +8,7 @@ The stable beta (`harness-stable-beta`) keeps interactive Codex sessions out (it
 
 ## What Changes
 
-- **Codex as orchestrator and worker:** Codex runs interactive terminal sessions at the same level as Claude Code, under the same safety rules (H-155, H-156). Execution on Codex stops being experimental once its success path passes (H-075 modified).
+- **Codex as orchestrator and worker:** Codex runs interactive terminal sessions at the same level as Claude Code, under the same safety rules (H-155, H-156). Execution on Codex stops being experimental once its success path and a comparison run pass (H-075 modified).
 - **Test depth:** Claude Code as orchestrator is tested fully; Codex is tested on its main success path for terminal control; a Codex orchestrator launching Claude Code exists but is not tested (H-157).
 - **Self-correcting terminal control:** off, ask or automatic learning from failed terminal actions, with corrections recorded by version combination, and a learning pass on command (H-158).
 - **Missing skill on one runtime:** set it up there, after a yes, or move those steps to the runtime that has it (H-159, H-078 modified).

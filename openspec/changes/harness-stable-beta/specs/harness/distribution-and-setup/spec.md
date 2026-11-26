@@ -254,7 +254,7 @@ Decided: design.md D50
 - **THEN** the record of the approved state stays as it was
 
 ### Requirement: H-152 The first setup is short: the harness studies the machine and recommends
-The first setup SHALL study the machine before it asks. It SHALL ask only what it cannot find out and what the person must choose, each with a recommended answer and its reason. It SHALL ask at most five questions; every prompt that waits for an answer counts. Other settings keep their defaults. It SHALL write nothing before the last yes, and SHALL never pick a flow for the person.
+The first setup SHALL study the machine before it asks. It SHALL ask only what it cannot find out and what the person must choose, each with a recommended answer and its reason. It SHALL ask at most five questions; every prompt that waits for an answer counts, except prompts the person opens by asking to change a default. It SHALL write nothing before the last yes and never pick a flow for the person.
 
 Source: owner decision 2026-11-26 (review page, item 4): RP4.2, RP4.3
 Decided: design.md D51

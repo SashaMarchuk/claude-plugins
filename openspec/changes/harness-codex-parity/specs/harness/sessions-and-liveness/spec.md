@@ -37,8 +37,8 @@ Decided: design.md D53
 - **WHEN** the flow config names Codex for a step and the readiness check fails for Codex
 - **THEN** H-159 applies
 
-#### Scenario: Execution is not marked experimental after the success path
-- **WHEN** the Codex success path of H-157 has passed for this release
+#### Scenario: Execution is not marked experimental after both release checks
+- **WHEN** the Codex success path and the comparison run of H-157 have passed for this release
 - **THEN** the start output does not mark Codex execution as experimental
 
 ### Requirement: H-158 Terminal control corrects itself and records what it learned

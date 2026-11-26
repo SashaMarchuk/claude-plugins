@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: H-075 Per-step runtime, including Codex for steps with the same result
-Each flow step SHALL be able to name its agent runtime, and any step SHALL be able to run on Codex, configurable with profiles. No runtime name SHALL be hard-coded in engine code; such names live in data files. Execution on Codex SHALL be marked experimental only until the Codex success path of H-157 passes.
+Each flow step SHALL be able to name its agent runtime, and any step SHALL be able to run on Codex, configurable with profiles. No runtime name SHALL be hard-coded in engine code; such names live in data files. Execution on Codex SHALL stay marked experimental until both release checks of H-157 pass.
 
 Source: interview 2026-11-24 R24.5, R24.6; owner decision 2026-11-26 (review page, item 3): RP3.4
 Decided: design.md D37-RUNTIME-1, D53
@@ -16,11 +16,11 @@ Decided: design.md D37-RUNTIME-1, D53
 - **AND** every other step runs on Claude Code
 
 #### Scenario: Execution runs on Codex
-- **WHEN** the flow configuration sets the execution step to run on Codex and the Codex success path of H-157 has passed
+- **WHEN** the flow configuration sets the execution step to run on Codex, and the Codex success path and the comparison run of H-157 have passed
 - **THEN** execution runs on Codex in an interactive session, and the harness does not mark it experimental
 
 #### Scenario: Execution on Codex before the success path passed
-- **WHEN** the flow configuration sets the execution step to run on Codex and the Codex success path of H-157 has not passed yet for this release
+- **WHEN** the flow configuration sets the execution step to run on Codex, and the Codex success path or the comparison run of H-157 has not passed for this release
 - **THEN** the start output marks the step as experimental
 
 ### Requirement: H-078 The same workflow runs on Codex and Claude Code where local setup allows

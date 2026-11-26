@@ -338,7 +338,10 @@ ho_session_launcher_text() {
   printf 'export HO_PROJECT_DIR=%s HO_RUN_DIR=%s HO_RUN_ID=%s\n' "$(ho_q "$HO_PROJECT_DIR")" "$(ho_q "$HO_RUN_DIR")" "$(ho_q "$HO_RUN_ID")"
   printf 'export HO_SESSION_NAME=%s HO_SESSION_ROLE=%s HO_SESSION_ID=%s\n' "$(ho_q "$name")" "$(ho_q "$role")" "$(ho_q "$sid")"
   # H-089 (D37-SESSIONS-2): the mark the liveness hook needs; without it the hook does nothing.
-  printf 'export HO_HOOK_LOG=%s HO_HOOK_EVENTS=%s\n' "$(ho_q "$(ho_live_hook_log)")" "$(ho_q "$(ho_live_hook_events)")"
+  # A config read that fails keeps every event on, never silently none.
+  local hook_events
+  hook_events=$(ho_live_hook_events) || hook_events=$HO_LIVE_HOOK_EVENTS_ALL
+  printf 'export HO_HOOK_LOG=%s HO_HOOK_EVENTS=%s\n' "$(ho_q "$(ho_live_hook_log)")" "$(ho_q "$hook_events")"
   # H-105: before anything slow, the launcher records itself (PID and start time), then reads
   # the close flag. A slot is freed only after its close flag is written and no process of the
   # session is found (lib/slots.sh), so a launcher either counts as alive or starts nothing.

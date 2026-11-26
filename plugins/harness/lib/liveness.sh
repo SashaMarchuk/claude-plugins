@@ -281,6 +281,8 @@ ho_live_hook_events() {
   for e in $HO_LIVE_HOOK_EVENTS_ALL; do
     case " $v " in *" $e "*) out="$out${out:+ }$e" ;; esac
   done
+  [ -n "$out" ] || [ -z "$(ho_cfg '.liveness.hook_events | if type == "array" and length > 0 then "set" else "" end' "")" ] \
+    || printf 'harness: config .liveness.hook_events names none of the seven hook events; the hooks record nothing\n' >&2
   printf '%s\n' "$out"
 }
 
@@ -295,13 +297,18 @@ ho_live_hooks() {
   events=$(ho_live_hook_events 2>/dev/null) || events=$HO_LIVE_HOOK_EVENTS_ALL
   case " $events " in *" PreToolUse "*) case " $events " in *" PostToolUse "*) case " $events " in
     *" PostToolUseFailure "*) tracked=true ;; esac ;; esac ;; esac
-  maxs=$(( $(ho_cfg_int '.liveness.tool_running_max_minutes' 60 2>/dev/null || echo 60) * 60 ))
+  maxs=$(ho_cfg_int '.liveness.tool_running_max_minutes' 60 2>/dev/null) || maxs=60
+  # A whole week at most, so the product never overflows.
+  { [ "${#maxs}" -le 6 ] && [ "$maxs" -le 10080 ]; } 2>/dev/null || maxs=10080
+  maxs=$((maxs * 60))
   if [ "$state" != present ] || [ -z "$sid" ]; then
     jq -cn --arg s "$state" --argjson tr "$tracked" '{hooks: {state: $s, tools_tracked: $tr, events: 0, last_event: null,
       last_event_at: null, last_event_age_seconds: null, open_tools: [], tool_running: false, stop_error: null}, quiet: null}'
     return 0
   fi
-  jq -R -s -c --arg sid "$sid" --argjson now "$(date +%s)" --argjson max "$maxs" --argjson tr "$tracked" \
+  # Lines that do not name the session ID are left out before jq parses anything, so a long
+  # run's shared log costs one pass of grep per session.
+  { grep -F -- "\"$sid\"" "$log" 2>/dev/null || true; } | jq -R -s -c --arg sid "$sid" --argjson now "$(date +%s)" --argjson max "$maxs" --argjson tr "$tracked" \
     --argjson quiet "$HO_LIVE_QUIET_SECONDS" --arg v "$verdict" '
     [split("\n")[] | select(length > 0) | (try fromjson catch null)
       | select(type == "object" and .session_id == $sid and (.t | type) == "number" and (.event | type) == "string")] as $r
@@ -324,7 +331,7 @@ ho_live_hooks() {
         last_event: $last.event, last_event_at: $last.ts, last_event_age_seconds: $age,
         open_tools: $open, tool_running: ($v == "working" and $running), stop_error: $s.stop_error},
        quiet: (if $v != "working" or $last == null then null else ($age >= $quiet and ($running | not)) end)}
-  ' "$log" 2>/dev/null || jq -cn --argjson tr "$tracked" '{hooks: {state: "unreadable", tools_tracked: $tr, events: 0, last_event: null,
+  ' 2>/dev/null || jq -cn --argjson tr "$tracked" '{hooks: {state: "unreadable", tools_tracked: $tr, events: 0, last_event: null,
       last_event_at: null, last_event_age_seconds: null, open_tools: [], tool_running: false, stop_error: null}, quiet: null}'
 }
 

@@ -130,8 +130,8 @@ assert_eq "H-089: the large payload's line holds no tool input" "0" "$(grep -c '
 
 # ---- an early return still reads all of stdin, so the sender never hits a closed pipe ----
 rm -f "$log"
-rc=0; printf '%s' "$big" | env -u HO_HOOK_LOG bash "$script" PreToolUse || rc=$?
-assert_eq "H-089: without the mark a large payload is read whole (the sender sees no broken pipe)" "0" "$rc"
-rc=0; printf '%s' "$big" | HO_HOOK_LOG="$log" HO_HOOK_EVENTS="Stop" bash "$script" PreToolUse || rc=$?
-assert_eq "H-089: a removed event still reads a large payload whole" "0" "$rc"
+rc=$(set +e; printf '%s' "$big" | env -u HO_HOOK_LOG bash "$script" PreToolUse; echo "${PIPESTATUS[0]}${PIPESTATUS[1]}")
+assert_eq "H-089: without the mark a large payload is read whole (the sender sees no broken pipe)" "00" "$rc"
+rc=$(set +e; printf '%s' "$big" | HO_HOOK_LOG="$log" HO_HOOK_EVENTS="Stop" bash "$script" PreToolUse; echo "${PIPESTATUS[0]}${PIPESTATUS[1]}")
+assert_eq "H-089: a removed event still reads a large payload whole" "00" "$rc"
 assert_eq "H-089: neither early return wrote a line" no "$([ -e "$log" ] && echo yes || echo no)"

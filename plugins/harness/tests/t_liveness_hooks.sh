@@ -107,7 +107,7 @@ assert_eq "D37-SESSIONS-2: 'later' goes by line order, not by the time in the li
 : > "$hlog"
 line 1200 "$sid" Stop
 line 10 "11111111-2222-4333-8444-999999999999" PreToolUse toolu_other
-line 5 "${sid%?}0" Stop
+line 5 "ffffffff-ffff-4fff-8fff-ffffffffffff" Stop
 out=$(st w1)
 assert_eq "H-089: another session's open call and fresh events do not hold off this session's quiet flag" "true 1 []" \
   "$(printf '%s' "$out" | jq -r '"\(.quiet) \(.hooks.events) \(.hooks.open_tools | map(.tool_use_id))"')"

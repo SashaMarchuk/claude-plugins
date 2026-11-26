@@ -105,7 +105,7 @@ ho_slot_count() {
 # ho_slot_try <kind> <holder> <op>: one attempt. 0 taken (or already held), 73 full.
 # Prints the freed slots for the ledger.
 ho_slot_try() {
-  local kind=$1 holder=$2 op=$3 dir="$HO_RUN_DIR/slots/$1" limit rc=0 hrec hv
+  local kind=$1 holder=$2 op=$3 dir="$HO_RUN_DIR/slots/$1" limit rc=0 hrec hv st
   limit=$(ho_slot_limit "$kind")
   mkdir -p "$dir" || return 1
   ho_slot_lock_take || return 1
@@ -114,6 +114,12 @@ ho_slot_try() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     [ -f "$dir/$holder.json" ] && exit 0
+    # One stop rule for every kind (worker, heavy, stage), with or without a wait: a stopped run
+    # takes no slot. It is read here, under the lock, at every try, so a stop recorded during a
+    # wait is seen even when the slot frees before the next poll (review of PR #99).
+    st=0
+    ho_stopped || st=$?
+    [ "$st" -eq 1 ] || { echo "harness: the run is stopped (or its stop state is unknown); no slot taken" >&2; exit 75; }
     # The holder is checked again here, under the lock, at every try: a session that was closed
     # or ended while it waited for the slot gets none (review of PR #99).
     hrec="$HO_RUN_DIR/sessions/$holder.json"
@@ -149,13 +155,7 @@ $freed
 EOF_FREED
     case $rc in
       0) ho_ledger_append slot-taken kind "$kind" holder "$holder" op "$op" limit "$(ho_slot_limit "$kind")"; return 0 ;;
-      "$HO_SLOT_NOSLOT")
-        [ "$(date +%s)" -lt "$deadline" ] || return "$HO_SLOT_NOSLOT"
-        # A stop recorded during the wait ends it: nothing starts in a stopped run.
-        local stopped=0
-        ho_stopped || stopped=$?
-        [ "$stopped" -eq 1 ] || { echo "harness: the run is stopped (or its stop state is unknown); the wait for a slot ends" >&2; return 75; }
-        ;;
+      "$HO_SLOT_NOSLOT") [ "$(date +%s)" -lt "$deadline" ] || return "$HO_SLOT_NOSLOT" ;;
       *) return "$rc" ;;
     esac
     sleep 0.5
@@ -184,7 +184,7 @@ usage: harness slot <run-dir> <verb> [args]
   acquire heavy --holder NAME --op TYPE [--wait SECONDS]
   acquire stage:<id> --holder NAME [--wait SECONDS]
                        take the slot; exit 73 when none is free in time (try again later),
-                       75 when the run is stopped during the wait, 65 or 66 when the session
+                       75 when the run is stopped (before or during the wait), 65 or 66 when the session
                        is closed, ends or is gone during the wait (nothing is taken)
   release heavy|stage:<id> --holder NAME
   release worker --holder NAME --force

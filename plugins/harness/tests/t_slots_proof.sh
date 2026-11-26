@@ -45,15 +45,15 @@ assert_eq "H-105: old waiting launches: one launched, two reported no free slot"
   "$(cat "$base/rc-a" "$base/rc-b" "$base/rc-c" | sort -n | tr '\n' ' ' | sed 's/ $//')"
 assert_eq "H-105: old waiting launches: one worker slot is held" 1 "$(ls "$r/slots/worker" | wc -l | tr -d ' ')"
 
-# ---- a slow account command inside the launch command, record older than any window ----
+# ---- a slow account command during the launch, record older than any window ----
 r=$("$h" run new --workers 1)
-# The launch command runs the account command twice: once in its checks, once after the slot
-# take. Only the second run of s1 blocks, until the test removes the hold file.
-acct '[ -n "${HO_SESSION_NAME:-}" ] || { n=$(cat "'"$base"'/acct.n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "'"$base"'/acct.n"; [ "$n" != 2 ] || while [ -e "'"$base"'/hold" ]; do sleep 0.1; done; }; echo FOO=bar'
+# The account command runs in the launch command's check (fast) and in the launcher, after the
+# slot take; the launcher's run blocks until the test removes the hold file. The launch command
+# meanwhile waits in its boot check.
+acct '[ -z "${HO_SESSION_NAME:-}" ] || while [ -e "'"$base"'/hold" ]; do sleep 0.1; done; echo FOO=bar'
 : > "$base/hold"
 (c=0; wl "$r" s1 > "$base/s1.out" 2>&1 || c=$?; echo "$c" > "$base/rc-s1") &
-wait_file "$r/slots/worker/s1.json" || bad "test setup: s1 took no slot" ""
-i=0; while [ "$(cat "$base/acct.n" 2>/dev/null)" != 2 ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+wait_file "$r/sessions/s1.launcher" || bad "test setup: the s1 launcher did not record itself" ""
 age "$r/sessions/s1.json"
 assert_eq "H-105: a launch busy in its account command reads as starting at any age" starting \
   "$("$h" session "$r" status s1 | jq -r .liveness)"
@@ -63,6 +63,7 @@ rm -f "$base/hold"
 wait_file "$base/rc-s1" 300 || bad "test setup: s1 did not return" ""
 assert_eq "H-105: the slow launch still starts its session" 0 "$(cat "$base/rc-s1")"
 assert_eq "H-105: slow account command: cap 1 never shows two worker processes" 1 "$(live_workers "$r" s1 s2)"
+cp "$base/user.orig.json" "$user/config.json"
 
 # ---- the launch command is killed while its launcher is still in the account command ----
 r=$("$h" run new --workers 1)
@@ -265,3 +266,42 @@ wl "$r" c1 >/dev/null
 assert_eq "H-090: a long command line is read whole, so a live worker reads working" working \
   "$(PATH="$base/cutps:$PATH" "$h" session "$r" status c1 | jq -r .liveness)"
 assert_exit "H-105: and its slot is kept" 73 env PATH="$base/cutps:$PATH" "$h" session "$r" launch --role worker --name c2 --cwd "$proj/src" --prompt "$base/prompt.md"
+
+# ---- review round 3 (PR #99) ----
+# A stop gates every slot kind, on a no-wait acquire and during a wait. The test holds the slot
+# lock while it records the stop and frees the slot, so the waiter's next try sees both at once.
+r=$("$h" run new --workers 3)
+wl "$r" s1 >/dev/null
+wl "$r" s2 >/dev/null
+assert_exit "test setup: s1 takes the heavy slot" 0 "$h" slot "$r" acquire heavy --holder s1 --op image-build
+assert_exit "test setup: s1 takes the stage slot" 0 "$h" slot "$r" acquire stage:browser --holder s1
+(c=0; "$h" slot "$r" acquire heavy --holder s2 --op app-build --wait 30 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-sh") &
+(c=0; "$h" slot "$r" acquire stage:browser --holder s2 --wait 30 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-ss") &
+sleep 1.5
+i=0; until mkdir "$r/slots/.lock" 2>/dev/null; do sleep 0.05; i=$((i + 1)); [ $i -lt 200 ] || break; done
+"$h" state "$r" stop "test stop" >/dev/null
+"$h" slot "$r" release heavy --holder s1 >/dev/null
+"$h" slot "$r" release stage:browser --holder s1 >/dev/null
+rm -rf "$r/slots/.lock"
+wait_file "$base/rc-sh" 250 || bad "test setup: the heavy wait did not return" ""
+wait_file "$base/rc-ss" 250 || bad "test setup: the stage wait did not return" ""
+assert_eq "H-107: a stop during a heavy wait gives 75 and no slot, even when the slot frees at once" "75 none" \
+  "$(cat "$base/rc-sh") $([ -f "$r/slots/heavy/s2.json" ] && echo held || echo none)"
+assert_eq "H-107: a stop during a stage wait gives 75 and no slot, even when the slot frees at once" "75 none" \
+  "$(cat "$base/rc-ss") $([ -f "$r/slots/stage-browser/s2.json" ] && echo held || echo none)"
+assert_exit "H-107: a heavy acquire with no wait in a stopped run gives 75" 75 "$h" slot "$r" acquire heavy --holder s2 --op app-build
+assert_exit "H-107: a stage acquire with no wait in a stopped run gives 75" 75 "$h" slot "$r" acquire stage:lint --holder s2
+assert_eq "H-107: a stopped run records no heavy or stage slot" 0 "$(ls "$r/slots/heavy" "$r/slots/stage-browser" "$r/slots/stage-lint" 2>/dev/null | grep -c json || true)"
+
+# The transcript folder is the one the session itself uses: an account command that builds it
+# from $PWD runs in the session's folder, and only once for the launch command's own check.
+cp "$base/user.orig.json" "$base/user.r3.json"
+jq --arg c '[ -n "${HO_SESSION_NAME:-}" ] || echo x >> "'"$base"'/acct-runs"; echo CLAUDE_CONFIG_DIR=$PWD/account-config' \
+  '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: $c}}}' "$base/user.r3.json" > "$user/config.json"
+r=$("$h" run new --workers 3)
+: > "$base/acct-runs"
+HO_FAKE_CLAUDE_TRANSCRIPT=1 wl "$r" p1 >/dev/null
+assert_eq "H-090: the recorded transcript folder is the session's own (\$PWD is the session's folder)" "$proj/src/account-config" "$(jq -r .transcript_root "$r/sessions/p1.json")"
+assert_eq "H-090: that session's transcript is found" present "$("$h" session "$r" status p1 | jq -r .transcript_state)"
+assert_eq "H-090: the launch command runs the account command once (its check), not again for the transcript" 1 "$(wc -l < "$base/acct-runs" | tr -d ' ')"
+cp "$base/user.r3.json" "$user/config.json"

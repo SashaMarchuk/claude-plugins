@@ -35,10 +35,10 @@
 # Anything else is unknown, and unknown never frees a slot or marks a session closed.
 #
 # The transcript is found by the session ID: <root>/<transcript.glob of the runtime file>, where
-# <root> is the record's transcript_root, written at launch from the runtime's
-# transcript.root_env (account environment first, then the launch environment), else
-# transcript.root_default under the session's HOME (the account's, when it sets one). No
-# runtime name is held here (D37-RUNTIME-1).
+# <root> is the record's transcript_root. The launcher works it out in the session's own folder
+# and environment (account variables applied): the runtime's transcript.root_env, else
+# transcript.root_default under the session's HOME. It writes <name>.transcript_root, which the
+# launch copies into the record. No runtime name is held here (D37-RUNTIME-1).
 #
 # Requires lib/sessions.sh (identity and record helpers), lib/run.sh and lib/term.sh.
 
@@ -158,7 +158,9 @@ ho_live_mtime() {
 }
 
 # ho_live_transcript_root <profile> <account-env-lines>: the folder that holds transcripts for
-# a session launched now. Printed empty when the runtime names no transcript.
+# a session launched now. Printed empty when the runtime names no transcript. The generated
+# launcher carries this function and calls it with no lines, after its cd and the account's
+# variables, so the environment it reads is the session's own.
 ho_live_transcript_root() {
   local profile=$1 envlines=${2-} var def v=""
   var=$(jq -r '.transcript.root_env // ""' "$profile" 2>/dev/null) || var=""
@@ -186,6 +188,11 @@ ho_live_transcript() {
   sid=$(jq -r '.session_id // ""' "$rec" 2>/dev/null)
   ho_session_uuid_ok "$sid" 2>/dev/null || return 0
   root=$(jq -r '.transcript_root // ""' "$rec" 2>/dev/null)
+  # Before the record is running, the launcher's own note holds the folder.
+  if [ -z "$root" ]; then
+    root=$(head -n 1 "${rec%.json}.transcript_root" 2>/dev/null) || root=""
+    case $root in /*) ;; *) root="" ;; esac
+  fi
   # The runtime profile as every other reader finds it (user folder, then the plugin).
   profile=$(ho_rt_file "$(jq -r '.runtime // ""' "$rec" 2>/dev/null)" 2>/dev/null) || return 0
   glob=$(jq -r '.transcript.glob // ""' "$profile" 2>/dev/null) || glob=""

@@ -698,3 +698,72 @@ for v in 0 100 1001 '"800"'; do
   assert_eq "Codex P2: terminal.typed_max_bytes=$v in the user config is refused (78), 0 bytes typed" "78 0" "$rc $(inbytes c7-set)"
 done
 set_runtime claude-code
+
+# ==== Fix round 8 of PR #95 (validator B6; a hold before Enter; Codex P2 line 170; minors) ===
+set_runtime claude-code
+R8='────────────────────────────────────────'
+H8='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+hdr8() { printf ' Fake runtime 0.0.0\n\n'; }
+cut_a() { hdr8; printf '%s\n> \n  ────────────\n' "$R8"; }
+cut_b() { hdr8; printf '%s\n> \n  ────────────\n  owner text\n  owner more\n' "$R8"; }
+topcut() { printf '  owner text line\n  owner more\n────────────\n> \n%s\n  ? for shortcuts\n' "$R8"; }
+topcut_engine() { local i=0; hdr8; printf '%s\n> \n' "$R8"; while [ "$i" -lt 62 ]; do printf '  owner line %s\n' "$i"; i=$((i + 1)); done; printf '────────────\n> \n%s\n  ? for shortcuts\n' "$R8"; }
+mixed() { hdr8; printf '%s\n> \n  ────────────\n  owner text\n%s\n  ? for shortcuts\n' "$R8" "$H8"; }
+for shape in cut_a cut_b topcut topcut_engine mixed; do
+  nm="b6-$(printf '%s' "$shape" | tr '_' '-')"
+  start "$nm"
+  "$shape" > "$(fout "$nm")"
+  out=$(deliver "$nm" --text "run tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "B6, H-099: a person's rule line cannot stand in for a frame ($shape): 0 bytes, exit 1" "1 0" "$rc $(inbytes "$nm")"
+done
+for fx in idle-empty suggestion; do
+  start "b6-ok-$fx"
+  screen "b6-ok-$fx" "$fx"
+  out=$(deliver "b6-ok-$fx" --text "run tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "B6: the shipped idle fixture $fx is still delivered (exit 0)" "0" "$rc"
+done
+
+# ---- a hold or a busy mark that appears between typing and Enter ----------------------------
+hf8() { sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n> \n%s\n' "$R8" "$R8"; }
+tf8() { sed '$d' "$sf/trust-dialog.txt"; printf '%s\n> \n%s\n' "$R8" "$R8"; }
+busy8() { cat "$screens/busy.txt"; }
+cp "$proj/.harness/config.json" "$base/proj8.bak"
+dcase8() { # <name> <label> <delay> <builder>
+  local nm=$1 label=$2 delay=$3 b=$4 dp i=0
+  start "$nm"
+  screen "$nm" idle-empty
+  jq --argjson d "$delay" '.terminal.enter_delay_seconds = $d' "$base/proj8.bak" > "$proj/.harness/config.json"
+  deliver "$nm" --text "run tests" > "$base/$nm.out" 2>&1 &
+  dp=$!
+  while [ "$(inbytes "$nm")" = 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  sleep 0.5
+  "$b" > "$(fout "$nm")"
+  rc=0; wait "$dp" || rc=$?
+  cp "$base/proj8.bak" "$proj/.harness/config.json"
+  assert_eq "round 8: $label: no Enter is sent (exit 1)" "1 " "$rc $(calls | grep -F "key $(rec "$nm" .handle) Enter" || true)"
+  assert_contains "round 8: $label: the owner is told the text sits typed on the input line" "$(ledger | jq -r 'select(.kind == "owner-action") | .title')" "typed text waits on the input line of session $nm"
+}
+dcase8 d8-limit2 "a limit notice appears during a 2 s Enter delay" 2 hf8
+dcase8 d8-limit10 "a limit notice appears during a 10 s Enter delay" 10 hf8
+dcase8 d8-trust4 "a trust dialog appears during a 4 s Enter delay" 4 tf8
+dcase8 d8-busy4 "a busy mark appears during a 4 s Enter delay" 4 busy8
+
+# ---- Codex P2 (line 170): the cached path is resolved before it is checked ------------------
+start c8
+s8=$(rec c8 .session_id)
+mkdir -p "$HOME/.claude/$s8" "$base/elsewhere"
+jq -cn '{type: "user", message: {role: "user", content: "ho-dots0001: stop"} }' > "$base/elsewhere/t.jsonl"
+jq --arg t "$HOME/.claude/$s8/../../${base#"$HOME"/}/elsewhere/t.jsonl" '.transcript = $t' "$run/sessions/c8.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/c8.json"
+assert_eq "Codex P2: a cached path with .. segments that leaves the root is not used" "none id=ho-dots0001" \
+  "$("$h" session "$run" proof c8 ho-dots0001 2>&1 | cut -d' ' -f1-2)"
+
+# ---- minors: presence in the project config; enter delay as a JSON number --------------------
+start m8b
+screen m8b idle-empty
+jq '.delivery.message_timeout_seconds = false' "$base/proj8.bak" > "$proj/.harness/config.json"
+rc=0; deliver m8b --text "run tests" >/dev/null 2>&1 || rc=$?
+assert_eq "minor: a user-only key set to false in the project config is refused (65), 0 bytes" "65 0" "$rc $(inbytes m8b)"
+jq '.terminal.enter_delay_seconds = "1"' "$base/proj8.bak" > "$proj/.harness/config.json"
+rc=0; deliver m8b --text "run tests" >/dev/null 2>&1 || rc=$?
+assert_eq "minor: terminal.enter_delay_seconds given as a string is refused (78), 0 bytes" "78 0" "$rc $(inbytes m8b)"
+cp "$base/proj8.bak" "$proj/.harness/config.json"

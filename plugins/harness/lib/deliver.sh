@@ -105,8 +105,9 @@ ho_deliver_exec_path() {
 # terminal.typed_max_bytes (800, 300-1000; 300 leaves room for the pointer line to the file).
 ho_deliver_setting() {
   local path=$1 def=$2 min=$3 max=$4 v
-  v=$(jq -r --arg p "$path" 'if type == "object" then (getpath($p | ltrimstr(".") | split(".")) // null) else null end
-    | if . == null then "" else tostring end' "$HO_PROJECT_DIR/.harness/config.json" 2>/dev/null) || v=set
+  # Presence counts, not truthiness: false or 0 in the project config is refused too.
+  v=$(jq -r --arg p "$path" 'if type == "object" then (try getpath($p | ltrimstr(".") | split(".")) catch null) else null end
+    | if . == null then "" else "set" end' "$HO_PROJECT_DIR/.harness/config.json" 2>/dev/null) || v=set
   if [ -n "$v" ]; then
     printf 'harness: the project config sets %s; it is a delivery safety setting and belongs in the user config %s\n' "${path#.}" "$(ho_user_config)" >&2
     return 65
@@ -160,11 +161,21 @@ ho_deliver_transcript() {
   ho_deliver_outside_project "$root" || return 1
   sid=$(jq -r '.session_id // ""' "$rec")
   ho_session_uuid_ok "$sid" 2>/dev/null || return 1
-  # The cached path counts only inside the root and only when its file name is <id>.jsonl or a
-  # folder on its path is <id>, so it cannot point at another session's transcript.
+  # The cached path is resolved first (".." segments and links of its folders), then it counts
+  # only inside the resolved root and only when its file name is <id>.jsonl or a folder on its
+  # path is <id>, so it cannot point at another session's transcript (Codex review).
+  local rroot cdir
+  rroot=$(cd "$root" 2>/dev/null && pwd -P) || return 1
   cached=$(jq -r '.transcript // ""' "$rec")
   case $cached in
-    "$root"/*)
+    /*)
+      cdir=$(cd "$(dirname "$cached")" 2>/dev/null && pwd -P) || cdir=""
+      [ -n "$cdir" ] && cached="$cdir/$(basename "$cached")" || cached=""
+      ;;
+    *) cached="" ;;
+  esac
+  case $cached in
+    "$rroot"/*)
       # Whole name parts only: the file is <id>.jsonl, or a folder on the way is <id>.
       if [ "$(basename "$cached")" = "$sid.jsonl" ] || case "/$(dirname "$cached")/" in */"$sid"/*) true ;; *) false ;; esac; then
         [ -f "$cached" ] && [ ! -L "$cached" ] && [ -r "$cached" ] && { printf '%s\n' "$cached"; return 0; }
@@ -247,34 +258,29 @@ ho_deliver_scan() {
 #     a hold. If the reader cannot run, the screen reads as unknown.
 #   - The input line is a line that starts with a prompt prefix right below a rule line. More
 #     than one such line reads as a draft.
-#   - The box ends at the LAST rule line of the whole capture below the input line, with no
-#     line cap. No closing rule line reads as a draft.
+#   - The box ends at the LAST line of the whole capture below the input line that equals the
+#     opening frame line (the rule line right above the input line) byte for byte, with no line
+#     cap. A rule line of another width or character is the person's text. With no equal line
+#     the box is not closed and reads as a draft (round 8, B6).
+#   - The lines above the opening frame are read by the screen reader once more, so a hold
+#     above a box that already holds typed text is still a hold (the check before Enter).
 #   - The box is empty only if the input line holds no text (dim suggested text in the
 #     runtime's suggestion style aside) and every other line inside the box is blank. Any other
 #     text inside the box, a rule line included, is the person's text: a draft.
 #   - A backend that keeps no colours (iTerm2) cannot tell suggested text from typed text, so
 #     any text after the prompt there is a draft.
-# For the check before Enter, "draft <text>" carries the box text, its lines joined.
+# For the check before Enter, "draft <text>" carries the box text, its lines joined. With the
+# third argument "reread", a first line "busy" or "idle" tells whether a busy mark shows.
 ho_deliver_screen() {
-  local rec=$1 profile=$2 cap plain esc rc sgr k kend i n line raw text part mark p pfx="" prefixes marks cand=0 csi
+  local rec=$1 profile=$2 mode=${3-} cap plain esc rc sgr k kend i n line raw text part mark p pfx="" prefixes marks cand=0 csi top busy=""
   esc=$(printf '\033')
   csi="$esc\\[[0-?]*[ -/]*[@-~]"
   cap=$(HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec") ho_term_capture "$(jq -r '.handle // ""' "$rec")" \
     "$(jq -r '.term_tag // ""' "$rec")" "$(jq -r '.session_id // ""' "$rec")" 60 styled 2>/dev/null) || { echo "unknown the screen could not be read"; return 0; }
   plain=$(printf '%s\n' "$cap" | LC_ALL=C sed -E "s|$csi||g")
   case $plain in *"$esc"*) echo "unknown the screen holds escape codes that cannot be read"; return 0 ;; esac
-  # The screen reader, on the same plain capture. The capture file lives in the run's screen
-  # folder only while it is read; a trap removes it if this step is stopped.
-  local sdir class
-  sdir="$HO_RUN_DIR/screen"
-  mkdir -p "$sdir" && chmod 700 "$sdir" 2>/dev/null || true
-  HO_DELIVER_CFILE=$(umask 077 && mktemp "$sdir/.deliver.XXXXXX" 2>/dev/null) || { echo "unknown the screen reader could not run"; return 0; }
-  trap 'rm -f "$HO_DELIVER_CFILE"' EXIT HUP INT TERM
-  printf '%s\n' "$plain" > "$HO_DELIVER_CFILE"
-  unset HO_SCREEN_SELFTEST
-  class=$(ho_screen_classify "$HO_DELIVER_CFILE" "$profile" 2>/dev/null) || class=unknown
-  rm -f "$HO_DELIVER_CFILE"
-  trap - EXIT HUP INT TERM
+  local class
+  class=$(ho_deliver_classify "$profile" "$plain")
   case $class in
     none) ;;
     limit | trust | password) echo "hold $class"; return 0 ;;
@@ -328,14 +334,39 @@ EOF_PFX2
     return 0
   fi
   [ "$cand" -eq 1 ] || { echo "draft (more than one input line on the screen)"; return 0; }
-  # The box ends at the last rule line below the input line, anywhere in the capture.
+  # The box ends at the last line below the input line that equals the opening frame line
+  # (the rule line right above it) byte for byte. A rule line of another width or another
+  # character, typed by the person, is no frame; with no equal line the box is not closed and
+  # reads as a draft (validator B6).
+  top=${P[k - 1]}
   kend=-1
   i=$((k + 1))
   while [ "$i" -lt "$n" ]; do
-    ho_deliver_rule "${P[i]}" "$rc" && kend=$i
+    [ "${P[i]}" != "$top" ] || kend=$i
     i=$((i + 1))
   done
-  [ "$kend" -gt "$k" ] || { echo "draft (no closing frame)"; return 0; }
+  [ "$kend" -gt "$k" ] || { echo "draft (no closing frame equal to the opening frame)"; return 0; }
+  # The lines above the opening frame go to the screen reader once more: a hold shown above a
+  # box that already holds typed text reads as later text in the whole capture, but not here.
+  if [ "$k" -ge 2 ]; then
+    class=$(ho_deliver_classify "$profile" "$(i=0; while [ "$i" -lt $((k - 1)) ]; do printf '%s\n' "${P[i]}"; i=$((i + 1)); done)")
+    case $class in
+      none) ;;
+      limit | trust | password) echo "hold $class"; return 0 ;;
+      *) echo "unknown the screen reader gave no answer"; return 0 ;;
+    esac
+  fi
+  # A busy mark above the box.
+  i=0
+  while [ "$i" -lt "$k" ] && [ -z "$busy" ]; do
+    while IFS= read -r mark; do
+      [ -n "$mark" ] || continue
+      case ${P[i]} in *"$mark"*) busy=$mark; break ;; esac
+    done <<EOF_BUSY
+$marks
+EOF_BUSY
+    i=$((i + 1))
+  done
   # The input line: dim suggested text aside, then the prompt prefix off.
   raw=${R[k]-}
   [ -z "$sgr" ] || raw=$(printf '%s\n' "$raw" | LC_ALL=C sed -E "s/$esc\\[${sgr}m[^$esc]*($esc\\[(0|22)?m|\$)//g")
@@ -349,18 +380,28 @@ EOF_PFX2
     text="$text$part"
     i=$((i + 1))
   done
+  # In "reread" mode (the check before Enter) the first line says whether a busy mark shows.
+  [ "$mode" != reread ] || { [ -n "$busy" ] && echo busy || echo idle; }
   [ -z "$text" ] || { echo "draft $text"; return 0; }
-  i=0
-  while [ "$i" -lt "$k" ]; do
-    while IFS= read -r mark; do
-      [ -n "$mark" ] || continue
-      case ${P[i]} in *"$mark"*) echo "busy $mark"; return 0 ;; esac
-    done <<EOF_BUSY
-$marks
-EOF_BUSY
-    i=$((i + 1))
-  done
+  [ -z "$busy" ] || { echo "busy $busy"; return 0; }
   echo "empty"
+}
+
+# ho_deliver_classify <profile> <plain-text>: the engine's screen reader on that text, with the
+# pattern file of the given runtime. The text lives in the run's screen folder only while it is
+# read; a trap removes it if this step is stopped. Prints the class word, or "unknown".
+ho_deliver_classify() {
+  local profile=$1 sdir class
+  sdir="$HO_RUN_DIR/screen"
+  mkdir -p "$sdir" && chmod 700 "$sdir" 2>/dev/null || true
+  HO_DELIVER_CFILE=$(umask 077 && mktemp "$sdir/.deliver.XXXXXX" 2>/dev/null) || { echo unknown; return 0; }
+  trap 'rm -f "$HO_DELIVER_CFILE"' EXIT HUP INT TERM
+  printf '%s\n' "$2" > "$HO_DELIVER_CFILE"
+  unset HO_SCREEN_SELFTEST
+  class=$(ho_screen_classify "$HO_DELIVER_CFILE" "$profile" 2>/dev/null) || class=unknown
+  rm -f "$HO_DELIVER_CFILE"
+  trap - EXIT HUP INT TERM
+  printf '%s\n' "$class"
 }
 
 # ho_deliver_rule <line> <rule-char>: 0 when the line is only rule characters (at least three)
@@ -665,7 +706,23 @@ ho_session_deliver() {
   sleep "$delay"
   # Enter goes only when the input line holds exactly the typed text and nothing more: a key
   # pressed or a dialog opened in between gets no Enter (D42g).
-  screen=$(ho_deliver_screen "$rec" "$profile")
+  screen=$(ho_deliver_screen "$rec" "$profile" reread)
+  local rbusy=""
+  case $screen in
+    busy"
+"* | idle"
+"*) rbusy=${screen%%"
+"*}; screen=${screen#*"
+"} ;;
+  esac
+  # A hold, or a busy mark on a delivery that is not a forced stop, gets no Enter; the typed
+  # text stays on the input line, which the owner is told (validator, round 8).
+  if [ "${screen%% *}" = hold ] || { [ "$rbusy" = busy ] && [ "$force" -eq 0 ]; }; then
+    ho_ledger_append owner-action title "typed text waits on the input line of session $name" \
+      why "a ${screen#hold } hold or a busy mark appeared before Enter; instruction $id was typed and no Enter was sent" \
+      command "harness session $HO_RUN_DIR list" verify "the input line of session $name is cleared or sent by the owner"
+    ho_deliver_not "$id" "$name" "the screen changed before Enter ($([ "${screen%% *}" = hold ] && echo "${screen}" || echo busy)); no Enter was sent, and the typed text sits on the input line" "" screen "${screen%% *}" || return 1
+  fi
   if ! ho_deliver_line_is "$screen" "$line"; then
     ho_deliver_not "$id" "$name" "the input line did not hold exactly the typed text before Enter; no Enter was sent, and the typed text may still sit on the input line" "" screen "${screen%% *}" || return 1
   fi

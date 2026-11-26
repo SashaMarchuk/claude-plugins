@@ -104,12 +104,12 @@ ho_term_open() {
   "ho_term_${backend}_open" "$group" "$title" "$launcher" "$owner" "$sid"
 }
 
-# ho_term_enter_delay: terminal.enter_delay_seconds as a whole number from 0 to 10. A
-# non-number or a larger value is refused (78) before anything is typed, so a config value
+# ho_term_enter_delay: terminal.enter_delay_seconds as a JSON number, whole, from 0 to 10. A
+# string, a non-number or a larger value is refused (78) before anything is typed, so a config value
 # cannot hold a send open for long (Codex review, PR #95).
 ho_term_enter_delay() {
   local v
-  v=$(ho_cfg '.terminal.enter_delay_seconds' 2) || return 78
+  v=$(ho_cfg '.terminal.enter_delay_seconds | if . == null then null elif type == "number" then tostring else "x" end' 2) || return 78
   case $v in '' | *[!0-9]*) v=x ;; esac
   if [ "$v" = x ] || [ "${#v}" -gt 2 ] || [ "$((10#$v))" -gt 10 ]; then
     echo "harness: terminal.enter_delay_seconds must be a whole number from 0 to 10" >&2

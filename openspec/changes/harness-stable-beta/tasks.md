@@ -133,7 +133,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 20a.2 Check after each terminal action: exact check, second sample, cheap checker role; an unclear answer fails; a model answer never allows typing (H-148; D46)
 - [ ] 20a.3 Confidence log by terminal, runtime and operating system version, and the light, medium and deep check levels (H-149; D47)
 - [ ] 20a.4 `models.json` with the four roles for each runtime; a step, check or chain names a role (H-150; D48)
-- [ ] 20a.5 Offer to run printed install steps after a yes in an attended start; never in an unattended one; project install steps never offered (H-073; D49)
+- [ ] 20a.5 After the owner confirms OPEN-RP-1: offer to run printed install steps after a yes in an attended start; never in an unattended one; project install steps never offered (H-073; D49)
 - [ ] 20a.6 Machine fingerprint, its digest in the local selection, block, confirm and note classes, and `/harness:config --recheck` (H-151; D50)
 - [ ] 20a.7 Scan-first setup with at most five questions (H-152; D51)
 - [ ] 20a.8 Readiness check: the read-only `harness doctor` command and the skill; blind naming test for its name (H-154; D52)

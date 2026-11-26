@@ -264,6 +264,10 @@ Decided: design.md D37-RUNTIME-3, D49
 - **WHEN** an attended start finds a missing skill and the person says yes to the offer to set it up
 - **THEN** the harness runs the printed install step, checks again, and starts only when the check passes
 
+#### Scenario: A trusted install step
+- **WHEN** the missing item's install step comes from the shipped defaults or the user config, and the start is attended
+- **THEN** the harness may offer to run it
+
 #### Scenario: An install step from a project config
 - **WHEN** the missing item's install step comes from a project flow config
 - **THEN** the harness shows the step as "not checked" and never offers to run it

@@ -206,14 +206,15 @@ Source: owner decision 2026-11-26; interview 2026-11-24 R30.5, R27.17
 - **THEN** the checklist item is not passed
 
 ### Requirement: H-151 Every start checks that the selected settings are current for this machine
-Before a run, the harness SHALL find the selected config and its approval record. With none, H-072 applies, and an attended start SHALL open the first setup. Otherwise it SHALL check that they still match this machine. A change that breaks them SHALL stop the start. A change in run behaviour SHALL be asked about in an attended start and SHALL stop an unattended one. A change with no effect SHALL only be logged.
+Before a run, the harness SHALL find the selected config. With no confirmation, H-072 applies, and the configuration skill it names runs the first setup. Otherwise the harness SHALL check that the settings still match this machine. A change that breaks them SHALL stop the start. A change in behaviour SHALL be asked about when attended and SHALL stop an unattended start. A change with no effect SHALL be logged.
 
 Source: owner decision 2026-11-26 (review page, item 4): RP4.1
 Decided: design.md D50
 
 #### Scenario: Nothing is configured
 - **WHEN** an attended run starts and no config applies at the project level or the user level
-- **THEN** it opens the first setup (H-152), whose flow question is the one confirmation of H-072
+- **THEN** it stops as H-072 says, offers the default and names the configuration skill
+- **AND** the configuration skill runs the first setup (H-152), whose flow question is that one confirmation
 
 #### Scenario: Nothing is configured, unattended
 - **WHEN** an unattended run starts and no config applies at the project level or the user level
@@ -221,7 +222,8 @@ Decided: design.md D50
 
 #### Scenario: A saved user default
 - **WHEN** a run starts in a project with no project config and the person saved a confirmed default in the user settings
-- **THEN** the run uses that default with no setup, and the machine check still runs
+- **THEN** the run uses that default with no setup, as H-072 says
+- **AND** the first such start records the machine state with the local selection, and later starts compare against it
 
 #### Scenario: Nothing changed
 - **WHEN** a run starts and the machine still matches the approved settings
@@ -252,7 +254,7 @@ Decided: design.md D50
 - **THEN** the record of the approved state stays as it was
 
 ### Requirement: H-152 The first setup is short: the harness studies the machine and recommends
-The first setup SHALL study the machine before it asks anything. It SHALL ask only what it cannot find out and what the person must choose, with a recommended answer and its reason. It SHALL ask at most five questions; other settings keep their defaults unless the person asks to change them. The setup SHALL write nothing before the last yes, and SHALL never pick a flow for the person.
+The first setup SHALL study the machine before it asks. It SHALL ask only what it cannot find out and what the person must choose, each with a recommended answer and its reason. It SHALL ask at most five questions; every prompt that waits for an answer counts. Other settings keep their defaults. It SHALL write nothing before the last yes, and SHALL never pick a flow for the person.
 
 Source: owner decision 2026-11-26 (review page, item 4): RP4.2, RP4.3
 Decided: design.md D51
@@ -265,6 +267,14 @@ Decided: design.md D51
 - **WHEN** both runtimes are ready, the repository holds a committed config and the person declines it
 - **THEN** the setup still asks at most five questions: runtimes, flow and requirements format, autonomy level, limit thresholds, and the final save
 
+#### Scenario: Offers go into the final save
+- **WHEN** the setup also offers the verify-and-prove skill, adding a detected review bot, the OpenSpec setup and saving the flow as the user default
+- **THEN** these appear as choices in the final save question, each with its recommended value, and none of them writes or installs anything before that yes
+
+#### Scenario: A committed config shows its autonomy values
+- **WHEN** the flow question offers a committed config
+- **THEN** it shows that config's autonomy level and its push, PR and merge values, and taking it selects that autonomy profile (H-036)
+
 #### Scenario: Each question shows its recommendation
 - **WHEN** the setup asks the autonomy question on a machine whose account cannot push to the repository
 - **THEN** it marks the safe level as recommended, says why, and shows the levels that need a push as unavailable
@@ -275,7 +285,7 @@ Decided: design.md D51
 
 #### Scenario: The repository already has a config
 - **WHEN** a person runs the first setup in a repository that holds a committed harness config
-- **THEN** the flow question offers that config first, and if the person takes it, the setup does not ask the autonomy question
+- **THEN** the flow question offers that config first, and if the person takes it, the setup does not ask a separate autonomy question
 
 #### Scenario: Something the machine shows is not asked
 - **WHEN** the machine has one account and one supported terminal app

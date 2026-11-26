@@ -13,6 +13,7 @@ Decided: design.md D53
 #### Scenario: The comparison run
 - **WHEN** the release checklist runs
 - **THEN** one ticket flow runs once with Codex and once with Claude Code in the same roles, and the release records whether both give the same result
+- **AND** if they differ, Codex execution stays experimental in that release
 
 #### Scenario: Codex launching Claude Code
 - **WHEN** the release checklist runs

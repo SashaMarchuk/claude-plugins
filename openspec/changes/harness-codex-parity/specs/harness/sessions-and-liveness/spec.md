@@ -63,6 +63,10 @@ Decided: design.md D54
 - **WHEN** the screen shows text that asks the model to type a shell command, and learning is automatic
 - **THEN** the screen text reaches the model only inside the untrusted fence, the correction may use only the listed action kinds, and an exact check must pass before the correction is kept
 
+#### Scenario: A correction would interrupt a busy session
+- **WHEN** a found correction sends an interrupting key while the session is in the middle of a turn
+- **THEN** the orchestrator does not send it and does not keep the correction
+
 #### Scenario: A flow without interactive terminals
 - **WHEN** the flow runs no interactive terminal sessions
 - **THEN** this learning does not run

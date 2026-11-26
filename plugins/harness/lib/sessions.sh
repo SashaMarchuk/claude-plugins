@@ -38,6 +38,9 @@ usage: harness session <run-dir> <verb> [args]
                                  when the worker cap stays reached
   close <name>        ask the session to exit, wait for its exact process to end; never forced
   list                one line per session: name role status pid session-id handle
+  deliver <name> (--text T | --file F) [--id ID] [--force-send]
+                      send one instruction: message first, typing as a checked fallback
+  proof <name> <id>   whether the session's transcript proves that instruction delivered
   status [name]       liveness facts, one JSON line per session (working, starting, dead,
                       closed, unknown); a silent session with a live process reads as working
   read <name> transcript|screen [--lines N]
@@ -636,9 +639,9 @@ ho_session_launch_one() {
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg account "$acct_name" \
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
-    --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" \
+    --arg rpath "$cmdpath" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
-      runtime: $runtime, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
+      runtime: $runtime, runtime_path: $rpath, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
       transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
@@ -893,6 +896,8 @@ ho_session_main() {
     launch) ho_session_launch "$@" || rc=$? ;;
     close) ho_session_close "$@" || rc=$? ;;
     list) ho_session_list ;;
+    deliver) ho_session_deliver "$@" || rc=$? ;;
+    proof) ho_session_proof "$@" || rc=$? ;;
     status) ho_live_status "$@" || rc=$? ;;
     read) ho_live_read "$@" || rc=$? ;;
     *) ho_session_usage; rc=64 ;;

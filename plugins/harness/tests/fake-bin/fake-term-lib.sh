@@ -27,3 +27,27 @@ ft_start() {
   HO_FAKE_TERM_HANDLE=$h HO_FAKE_TERM_DIR=$ft_dir nohup sh -c "$2" > "$f.out" 2>&1 < /dev/null &
   printf '%s\n' "$!" > "$f.pid"
 }
+# ft_screen <handle>: the session's screen. Text typed after the last Enter shows on the input
+# line (the last line that starts with ">"), after a draft and in place of dim suggested text,
+# as a terminal echoes it. HO_FAKE_TERM_ECHO_EXTRA is shown after it too, as if someone typed
+# a key between the engine's typing and its check.
+ft_screen() {
+  local f p=""
+  f=$(ft_file "$1")
+  if [ -s "$f.in" ] && [ -n "$(tail -c 1 "$f.in" | tr -d '\n')" ]; then
+    p=$(tail -n 1 "$f.in" | sed 's/<0x[0-9a-f][0-9a-f]>//g; s/<ESC>//g')
+  fi
+  [ -z "$p" ] || p="$p${HO_FAKE_TERM_ECHO_EXTRA:-}"
+  FT_P=$p awk -v e="$(printf '\033')" '
+    { l[NR] = $0 }
+    /^>( |$)/ { k = NR }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (i == k && ENVIRON["FT_P"] != "") {
+          if (index(l[i], e "[2m")) print "> " ENVIRON["FT_P"]
+          else if (l[i] == ">") print "> " ENVIRON["FT_P"]
+          else print l[i] ENVIRON["FT_P"]
+        } else print l[i]
+      }
+    }' "$f.out"
+}

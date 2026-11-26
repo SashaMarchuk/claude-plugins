@@ -47,12 +47,14 @@
 # may hold one too (for example a contraction), so it would reject the real line.
 HO_SCREEN_PROSE='(["`]|^[>*#+-][ 	]|^[0-9]+[.)][ 	])'
 
-# ho_screen_profile_data: the pattern data the runtime profile names, or exit 78.
+# ho_screen_profile_data [<profile>]: the pattern data the runtime profile names, or exit 78.
+# Without <profile>, the profile of runtime.main; delivery passes the profile of the session's
+# own runtime (PR #95 review).
 # The patterns live in their own file, because that file holds the words a session shows on
 # its screen: nothing else needs to be opened to read the profile (field note I2).
 ho_screen_profile_data() {
-  local f name data
-  f=$(ho_runtime_profile) || return 78
+  local f=${1-} name data
+  [ -n "$f" ] || f=$(ho_runtime_profile) || return 78
   name=$(jq -r '.screen_file // "" | strings' "$f" 2>/dev/null || true)
   case $name in
     '' | */* | *[!a-z0-9.-]* | .*) ;;
@@ -199,20 +201,20 @@ ho_screen_selftest() {
   return 70
 }
 
-# ho_screen_classify <capture-file>: print one word and nothing else.
+# ho_screen_classify <capture-file> [<runtime-profile>]: print one word and nothing else.
 #   limit | trust | password  a shape was recognised (the first in profile order)
 #   none                      the screen holds text and no shape
 #   unknown                   the capture cannot be read, holds no text, or there is no data
 # Exit 0 when the result is decided (including "none"), 66 for an unreadable or empty
 # capture, 78 when the profile holds no screen patterns, 70 when the match could not run.
 ho_screen_classify() {
-  local file=${1-} data n i shape rc
+  local file=${1-} profile=${2-} data n i shape rc
   if [ -z "$file" ] || [ ! -f "$file" ] || [ ! -r "$file" ]; then
     echo unknown
     printf 'harness: cannot read the screen capture %s\n' "${file:-(no file)}" >&2
     return 66
   fi
-  data=$(ho_screen_profile_data) || { echo unknown; return 78; }
+  data=$(ho_screen_profile_data "$profile") || { echo unknown; return 78; }
   ho_screen_selftest "$data" || { echo unknown; return 70; }
   n=$(printf '%s' "$data" | jq '.shapes | length')
   i=0

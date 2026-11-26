@@ -304,4 +304,10 @@ HO_FAKE_CLAUDE_TRANSCRIPT=1 wl "$r" p1 >/dev/null
 assert_eq "H-090: the recorded transcript folder is the session's own (\$PWD is the session's folder)" "$proj/src/account-config" "$(jq -r .transcript_root "$r/sessions/p1.json")"
 assert_eq "H-090: that session's transcript is found" present "$("$h" session "$r" status p1 | jq -r .transcript_state)"
 assert_eq "H-090: the launch command runs the account command once (its check), not again for the transcript" 1 "$(wc -l < "$base/acct-runs" | tr -d ' ')"
+# The split between liveness and delivery (PR #95): liveness reads this folder inside the
+# project, but delivery refuses a transcript folder inside the project or a worktree, because a
+# record or a note there could be planted. Its proof finds no transcript and sends nothing.
+rc=0; o=$("$h" session "$r" proof p1 ho-split0001 2>&1) || rc=$?
+assert_eq "H-090, H-101: delivery refuses a transcript folder inside the project that liveness reads (exit 1)" "1" "$rc"
+assert_contains "H-101: the refusal says no transcript was found for delivery" "$o" "no transcript of session p1"
 cp "$base/user.r3.json" "$user/config.json"

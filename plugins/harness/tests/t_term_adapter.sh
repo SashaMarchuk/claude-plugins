@@ -38,6 +38,34 @@ for backend in tmux iterm2; do
   assert_eq "$t: send types the text, then a separate Enter; key presses one key" "/exit
 <ESC>" "$(cat "$f1.in")"
   assert_eq "$t: nothing reaches the other session" "" "$(cat "$HO_FAKE_TERM_DIR/$(printf '%s' "$h2" | tr -c 'A-Za-z0-9-' '_').in")"
+  # Control bytes (a runtime's send-now chord, D37-LIFECYCLE-4) and the styled capture (H-099).
+  : > "$f1.in"
+  ho_term_bytes "$h1" "$o1" "$s1" 24 19
+  assert_eq "$t: bytes sends each control byte, in order" "<0x18><0x13>" "$(cat "$f1.in")"
+  assert_exit "$t: a byte outside 1-31 is refused" 65 ho_term_bytes "$h1" "$o1" "$s1" 65
+  : > "$f1.in"
+  assert_exit "$t: minor 12: byte 10 (line feed) is refused" 65 ho_term_bytes "$h1" "$o1" "$s1" 24 10
+  assert_exit "$t: minor 12: byte 13 (carriage return) is refused" 65 ho_term_bytes "$h1" "$o1" "$s1" 13
+  assert_eq "$t: minor 12: a refused set sends no byte at all" "" "$(cat "$f1.in")"
+  assert_exit "$t: bytes to a session tagged with another owner is refused" 66 ho_term_bytes "$h1" "$o2" "$s1" 24
+  printf '> \033[2mdim\033[0m\n' > "$f1.out"
+  case $backend in
+    tmux) want=$(printf '> \033[2mdim\033[0m') ;;
+    *) want='> dim' ;;
+  esac
+  assert_eq "$t: a styled capture keeps colour codes where the backend has them" "$want" "$(ho_term_capture "$h1" "$o1" "$s1" 5 styled)"
+  assert_eq "$t: a plain capture has no colour codes" "> dim" "$(ho_term_capture "$h1" "$o1" "$s1" 5)"
+  : > "$f1.in"
+  ho_term_type "$h1" "$o1" "$s1" "/exit"
+  assert_eq "$t: type types the text and sends no Enter" "/exit" "$(cat "$f1.in")"
+  assert_exit "$t: type to a session tagged with another owner is refused" 66 ho_term_type "$h1" "$o2" "$s1" "/exit"
+  : > "$f1.in"
+  # Codex P2 (PR #95, round 4): an Enter delay above 10 s, or not a number, is refused (78)
+  # before anything is typed.
+  jq '.terminal.enter_delay_seconds = 11' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+  assert_exit "$t: an Enter delay above 10 s is refused (78)" 78 ho_term_send "$h1" "$o1" "$s1" "/exit"
+  assert_eq "$t: with a refused Enter delay nothing is typed" "" "$(cat "$f1.in")"
+  set_app "$backend"
   # The owner tag: a call for another owner, or with no usable owner, does nothing.
   f2="$HO_FAKE_TERM_DIR/$(printf '%s' "$h2" | tr -c 'A-Za-z0-9-' '_')"
   before=$(wc -l < "$HO_FAKE_TERM_DIR/calls.log")

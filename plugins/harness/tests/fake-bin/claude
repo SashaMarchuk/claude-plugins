@@ -9,9 +9,19 @@
 # HO_FAKE_CLAUDE_SHOW_ENV=<NAME>: also log "env NAME=<value>".
 # HO_FAKE_CLAUDE_ON_EXIT=<shell command>: run just before it leaves on "/exit".
 # HO_FAKE_CLAUDE_TRANSCRIPT=1: also write a transcript line (see below).
+# HO_FAKE_CLAUDE_VERSION=<v>: what --version prints first (default 0.0.0).
+# With HO_FAKE_CLAUDE_HOLD=exit as well, HO_FAKE_CLAUDE_TRANSCRIPT=1 keeps that transcript going at
+# ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<cwd with non-alphanumerics as ->/<session>.jsonl.
+# Each whole typed line becomes a "user" record. While <h>.busy exists in the fake terminal
+# folder, a line is queued instead ("queue-operation" enqueue); the queue is released as
+# "queued_command" attachments when the bytes 0x18 0x13 arrive (the send-now chord) or when
+# <h>.busy is removed. HO_FAKE_CLAUDE_NOISE=1 adds unrelated "assistant" records all the time.
+# HO_FAKE_CLAUDE_DEAF=1 keeps the transcript but records nothing that is typed.
 set -euo pipefail
 if [ "${1:-}" = "--version" ]; then
-  echo "0.0.0 (fake claude)"
+  # HO_FAKE_CLAUDE_VERSION_SLEEP=<s>: answer --version only after that many seconds.
+  [ -z "${HO_FAKE_CLAUDE_VERSION_SLEEP:-}" ] || sleep "$HO_FAKE_CLAUDE_VERSION_SLEEP"
+  echo "${HO_FAKE_CLAUDE_VERSION:-0.0.0} (fake claude)"
   exit 0
 fi
 log=${HO_FAKE_CLAUDE_LOG:-$HOME/fake-claude.log}
@@ -69,11 +79,68 @@ exit_line() {
   done < "$1"
   return 1
 }
+# ---- transcript (HO_FAKE_CLAUDE_TRANSCRIPT=1) ----
+tr_file=""
+tr_lines=0 tr_chords=0 tr_tick=0
+tr_pending=""
+if [ "${HO_FAKE_CLAUDE_TRANSCRIPT:-}" = 1 ]; then
+  sid="" prev=""
+  for a in "$@"; do
+    case $prev in --session-id | --resume) sid=$a ;; esac
+    prev=$a
+  done
+  tr_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$(pwd -P)" | tr -c 'A-Za-z0-9' '-')/$sid.jsonl"
+  mkdir -p "$(dirname "$tr_file")"
+  : >> "$tr_file"
+fi
+tr_add() { jq -cn "$@" >> "$tr_file"; }
+tr_release() {
+  local l
+  [ -n "$tr_pending" ] || return 0
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    tr_add --arg c "$l" '{type: "attachment", attachment: {type: "queued_command", prompt: $c, humanTurn: true} }'
+    tr_add --arg c "$l" '{type: "queue-operation", operation: "remove", content: $c}'
+  done <<EOF_Q
+$tr_pending
+EOF_Q
+  tr_pending=""
+}
+# tr_step <in-file>: act on what arrived since the last step.
+tr_step() {
+  local raw n i l busy
+  busy="${1%.in}.busy"
+  raw=$(cat "$1" 2>/dev/null || true)
+  n=$(printf '%s' "$raw" | { grep -o '<0x18><0x13>' || true; } | wc -l | tr -d ' ')
+  if [ "$n" -gt "$tr_chords" ]; then tr_chords=$n; tr_release; fi
+  [ -e "$busy" ] || tr_release
+  n=0
+  while IFS= read -r l; do
+    n=$((n + 1))
+    [ "$n" -gt "$tr_lines" ] || continue
+    tr_lines=$n
+    l=$(printf '%s' "$l" | sed 's/<0x[0-9a-f][0-9a-f]>//g; s/<ESC>//g')
+    [ -n "$l" ] && [ "$l" != /exit ] || continue
+    [ "${HO_FAKE_CLAUDE_DEAF:-}" != 1 ] || continue
+    if [ -e "$busy" ]; then
+      tr_add --arg c "$l" '{type: "queue-operation", operation: "enqueue", content: $c}'
+      tr_pending="$tr_pending$l
+"
+    else
+      tr_add --arg c "$l" '{type: "user", message: {role: "user", content: $c} }'
+    fi
+  done < "$1"
+  if [ "${HO_FAKE_CLAUDE_NOISE:-}" = 1 ]; then
+    tr_tick=$((tr_tick + 1))
+    [ $((tr_tick % 3)) -ne 0 ] || tr_add --arg t "still working, step $tr_tick" '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: $t}]} }'
+  fi
+}
 case ${HO_FAKE_CLAUDE_HOLD:-} in
   exit | ignore)
     in="${HO_FAKE_TERM_DIR:-$HOME/fake-term}/$(printf '%s' "${HO_FAKE_TERM_HANDLE:-none}" | tr -c 'A-Za-z0-9-' '_').in"
     end=$(( $(date +%s) + ${HO_FAKE_CLAUDE_HOLD_MAX:-20} ))
     while [ "$(date +%s)" -lt "$end" ]; do
+      [ -z "$tr_file" ] || [ ! -f "$in" ] || tr_step "$in"
       if [ "$HO_FAKE_CLAUDE_HOLD" = exit ] && [ -f "$in" ] && exit_line "$in"; then
         [ -z "${HO_FAKE_CLAUDE_ON_EXIT:-}" ] || sh -c "$HO_FAKE_CLAUDE_ON_EXIT"
         exit 0

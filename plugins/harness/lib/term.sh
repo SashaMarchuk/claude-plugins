@@ -18,15 +18,21 @@
 #                                         launcher, tag it with run, owner and session ID;
 #                                         print the handle
 #   ho_term_send <handle> <owner> <sid> <text>  type short control text, then a separate Enter
+#   ho_term_type <handle> <owner> <sid> <text>  type short control text, no Enter (the caller
+#                                         reads the input line again before ho_term_key enter)
 #   ho_term_key <handle> <owner> <sid> enter|escape   press one key
-#   ho_term_capture <handle> <owner> <sid> [lines]    print the tail of the session's screen
+#   ho_term_bytes <handle> <owner> <sid> <code>...    send control bytes (1-31, not 10 or 13)
+#   ho_term_capture <handle> <owner> <sid> [lines] [styled]  print the tail of the session's
+#                                         screen; "styled" keeps the colour codes where the
+#                                         backend has them (tmux), so dim suggested text can be
+#                                         told apart from typed text (H-099)
 #   ho_term_close <handle> <owner> <sid>  close that one tab or pane (its process must be gone)
 #   ho_term_probe                         check that the backend can be driven
 #
 # Return codes: 0 ok, 64 usage, 65 refused value, 66 handle not found or not tagged with this
 # run, owner and session ID, 70 terminal failed.
 # Settings: terminal.app = auto | iterm2 | tmux (default auto); terminal.enter_delay_seconds
-# (default 2, as in 0.6.0) between typed text and its Enter. Needs HO_RUN_DIR and HO_RUN_ID.
+# (default 2, as in 0.6.0; a whole number from 0 to 10) between typed text and its Enter. Needs HO_RUN_DIR and HO_RUN_ID.
 
 # Values embedded into AppleScript or a tmux command are checked against a small character
 # set instead of being escaped.
@@ -98,12 +104,35 @@ ho_term_open() {
   "ho_term_${backend}_open" "$group" "$title" "$launcher" "$owner" "$sid"
 }
 
+# ho_term_enter_delay: terminal.enter_delay_seconds as a JSON number, whole, from 0 to 10. A
+# string, a non-number or a larger value is refused (78) before anything is typed, so a config value
+# cannot hold a send open for long (PR #95 review).
+ho_term_enter_delay() {
+  local v
+  v=$(ho_cfg '.terminal.enter_delay_seconds | if . == null then null elif type == "number" then tostring else "x" end' 2) || return 78
+  case $v in '' | *[!0-9]*) v=x ;; esac
+  if [ "$v" = x ] || [ "${#v}" -gt 2 ] || [ "$((10#$v))" -gt 10 ]; then
+    echo "harness: terminal.enter_delay_seconds must be a whole number from 0 to 10" >&2
+    return 78
+  fi
+  printf '%s\n' "$((10#$v))"
+}
+
 ho_term_send() {
   local h=${1-} owner=${2-} sid=${3-} text=${4-} backend
   ho_term_safe "$h" && ho_term_owner_ok "$owner" && ho_term_owner_ok "$sid" || return 65
   ho_term_text_ok "$text" || return 65
+  ho_term_enter_delay >/dev/null || return 78
   backend=$(ho_term_backend) || return $?
   "ho_term_${backend}_send" "$h" "$owner" "$sid" "$text"
+}
+
+ho_term_type() {
+  local h=${1-} owner=${2-} sid=${3-} text=${4-} backend
+  ho_term_safe "$h" && ho_term_owner_ok "$owner" && ho_term_owner_ok "$sid" || return 65
+  ho_term_text_ok "$text" || return 65
+  backend=$(ho_term_backend) || return $?
+  "ho_term_${backend}_type" "$h" "$owner" "$sid" "$text"
 }
 
 ho_term_key() {
@@ -114,12 +143,32 @@ ho_term_key() {
   "ho_term_${backend}_key" "$h" "$owner" "$sid" "$key"
 }
 
+# ho_term_bytes: control bytes only (for example a runtime's send-now chord). The byte values
+# come from runtime data; the adapter holds no key name (D37-LIFECYCLE-4).
+ho_term_bytes() {
+  local h=${1-} owner=${2-} sid=${3-} b backend
+  ho_term_safe "$h" && ho_term_owner_ok "$owner" && ho_term_owner_ok "$sid" || return 65
+  shift 3 2>/dev/null || return 64
+  [ $# -gt 0 ] || { echo "harness: bytes needs at least one code" >&2; return 64; }
+  for b in "$@"; do
+    case $b in '' | *[!0-9]* | 0*) echo "harness: control byte must be 1-31: $b" >&2; return 65 ;; esac
+    [ "$b" -ge 1 ] && [ "$b" -le 31 ] || { echo "harness: control byte must be 1-31: $b" >&2; return 65; }
+    # 10 and 13 act as Enter: never sent as a control byte (minor 12 of the PR #95 review).
+    [ "$b" -ne 10 ] && [ "$b" -ne 13 ] || { echo "harness: control byte $b (line feed or carriage return) is refused" >&2; return 65; }
+  done
+  backend=$(ho_term_backend) || return $?
+  for b in "$@"; do
+    "ho_term_${backend}_byte" "$h" "$owner" "$sid" "$b" || return $?
+  done
+}
+
 ho_term_capture() {
-  local h=${1-} owner=${2-} sid=${3-} lines=${4:-40} backend
+  local h=${1-} owner=${2-} sid=${3-} lines=${4:-40} styled=${5-} backend
   ho_term_safe "$h" && ho_term_owner_ok "$owner" && ho_term_owner_ok "$sid" || return 65
   case $lines in '' | *[!0-9]*) echo "harness: lines must be a number" >&2; return 64 ;; esac
+  case $styled in '' | styled) ;; *) echo "harness: capture mode must be styled or empty" >&2; return 64 ;; esac
   backend=$(ho_term_backend) || return $?
-  "ho_term_${backend}_capture" "$h" "$owner" "$sid" "$lines"
+  "ho_term_${backend}_capture" "$h" "$owner" "$sid" "$lines" "$styled"
 }
 
 ho_term_close() {
@@ -343,9 +392,15 @@ OSA
   printf '%s\n' "$r"
 }
 
+ho_term_iterm2_type() {
+  ho_term_iterm2_do "$1" "$2" "$3" "write text \"$4\" newline NO" >/dev/null
+}
+
 ho_term_iterm2_send() {
-  ho_term_iterm2_do "$1" "$2" "$3" "write text \"$4\" newline NO" >/dev/null || return $?
-  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
+  ho_term_iterm2_type "$1" "$2" "$3" "$4" || return $?
+  local d
+  d=$(ho_term_enter_delay) || return 78
+  sleep "$d"
   ho_term_iterm2_key "$1" "$2" "$3" enter
 }
 
@@ -356,6 +411,11 @@ ho_term_iterm2_key() {
   esac
 }
 
+ho_term_iterm2_byte() {
+  ho_term_iterm2_do "$1" "$2" "$3" "write text (ASCII character $4) newline NO" >/dev/null
+}
+
+# iTerm2 "contents" has no colours, so a styled capture is a plain one there.
 ho_term_iterm2_capture() {
   local out
   out=$(ho_term_iterm2_do "$1" "$2" "$3" 'return contents') || return $?
@@ -416,11 +476,23 @@ ho_term_tmux_open() {
   printf '%s\n' "$h"
 }
 
-ho_term_tmux_send() {
+ho_term_tmux_type() {
   ho_term_tmux_if "$1" "$HO_TMUX_OWNER_FMT" "$1/$(ho_term_tmux_session)/$2/$3" "send-keys -t $1 -l '$4'" >/dev/null \
     || { ho_term_tmux_refused "$1" "$2" "$3"; return 66; }
-  sleep "$(ho_cfg_int '.terminal.enter_delay_seconds' 2)"
+}
+
+ho_term_tmux_send() {
+  ho_term_tmux_type "$1" "$2" "$3" "$4" || return $?
+  local d
+  d=$(ho_term_enter_delay) || return 78
+  sleep "$d"
   ho_term_tmux_key "$1" "$2" "$3" enter
+}
+
+# A byte goes as one hex key (send-keys -H, tmux 3.0 or later), so it is never read as a key name.
+ho_term_tmux_byte() {
+  ho_term_tmux_if "$1" "$HO_TMUX_OWNER_FMT" "$1/$(ho_term_tmux_session)/$2/$3" "send-keys -t $1 -H $(printf '%02x' "$4")" >/dev/null \
+    || { ho_term_tmux_refused "$1" "$2" "$3"; return 66; }
 }
 
 ho_term_tmux_key() {
@@ -433,8 +505,9 @@ ho_term_tmux_key() {
 # Capture reads under the same check, in one tmux command. A screen that shows only the refusal
 # marker reads as a refusal, which is the safe side.
 ho_term_tmux_capture() {
-  local out
-  out=$(ho_term_tmux_if "$1" "$HO_TMUX_OWNER_FMT" "$1/$(ho_term_tmux_session)/$2/$3" "capture-pane -p -t $1") \
+  local out e=""
+  [ "${5-}" != styled ] || e="-e "
+  out=$(ho_term_tmux_if "$1" "$HO_TMUX_OWNER_FMT" "$1/$(ho_term_tmux_session)/$2/$3" "capture-pane ${e}-p -t $1") \
     || { ho_term_tmux_refused "$1" "$2" "$3"; return 66; }
   printf '%s\n' "$out" | tail -n "$4"
 }

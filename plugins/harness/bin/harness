@@ -28,6 +28,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/term.sh"
 # shellcheck source=../lib/sessions.sh
 . "$HO_ROOT/lib/sessions.sh"
+# shellcheck source=../lib/deliver.sh
+. "$HO_ROOT/lib/deliver.sh"
 # shellcheck source=../lib/liveness.sh
 . "$HO_ROOT/lib/liveness.sh"
 # shellcheck source=../lib/slots.sh
@@ -53,7 +55,7 @@ verbs:
   config     config get <jq-path> [default] | config get --int <jq-path> <default> | config check
   run        run new [--workers N]: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
-  session    session <run-dir> launch|close|list|status|read: sessions and their liveness
+  session    session <run-dir> launch|close|list|status|read|deliver|proof: sessions, their liveness and instructions
   slot       slot <run-dir> acquire|release|list|limits|heavy-ops|heavy-add: engine-enforced limits
   loop       loop <run-dir> integration|ready|verdict|merge|status: the engine-checked merge
   flow       flows: list | check | steps | plan | preflight <flow> | copy <flow> <new> | render <flow> <role> ...

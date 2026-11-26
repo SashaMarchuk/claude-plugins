@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Fake "message between sessions" sender for the delivery tests (H-101). A test runtime
+# profile names it in message.argv as: fake-msg <session-id> <instruction-id> <text-file>.
+# It logs each call to $HO_FAKE_MSG_LOG (default $HOME/fake-msg.log) and acts by
+# HO_FAKE_MSG_MODE:
+#   deliver  the target transcript records the text as a user turn; exit 0
+#   noise    the transcript grows with unrelated assistant text only; exit 0
+#   other    a user turn that carries another instruction id; exit 0
+#   silent   nothing is written; exit 0
+#   queue    the transcript records the text as queued (an enqueue record); exit 0
+#   dequeue  queued, then removed from the queue without being taken; exit 0
+#   fail     nothing is written; exit 1
+#   deliver-fail  the user turn is written, then exit 1
+#   deliver-hang  the user turn is written, then it hangs (the engine's timeout ends it)
+#   slow-fail     exits 1 at once; a background writer adds the user turn 0.7 s later (its
+#                 PID goes to $HO_FAKE_MSG_PIDS, so the test stops it by exact PID)
+#   unreadable-fail  the user turn is written, the transcript is made unreadable, exit 1
+#   queue-fail    an enqueue record is written, then exit 1
+#   term-ignore   it ignores SIGTERM and sleeps 15 s (the engine must use SIGKILL)
+#   signal-exit   writes nothing and ends by its own SIGKILL (exit 137)
+# The transcript is found as $HOME/.claude/projects/*/<session-id>.jsonl.
+set -euo pipefail
+# The engine runs a message command with a fixed system PATH; the tests name where jq is.
+command -v jq > /dev/null 2>&1 || PATH="$PATH:${HO_FAKE_TOOLS_PATH:-}"
+sid=${1:?session id}
+id=${2:?instruction id}
+file=${3:?text file}
+printf '%s\t%s\t%s\n' "$sid" "$id" "$file" >> "${HO_FAKE_MSG_LOG:-$HOME/fake-msg.log}"
+tr=""
+for f in "$HOME"/.claude/projects/*/"$sid.jsonl"; do
+  [ -f "$f" ] && tr=$f
+done
+case ${HO_FAKE_MSG_MODE:-deliver} in
+  deliver)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "user", message: {role: "user", content: $c} }' >> "$tr"
+    ;;
+  noise)
+    [ -n "$tr" ] || exit 1
+    jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "unrelated progress"}]} }' >> "$tr"
+    ;;
+  other)
+    [ -n "$tr" ] || exit 1
+    jq -cn '{type: "user", message: {role: "user", content: "ho-00000000: another instruction"} }' >> "$tr"
+    ;;
+  silent) ;;
+  queue | dequeue)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "queue-operation", operation: "enqueue", content: $c}' >> "$tr"
+    [ "$HO_FAKE_MSG_MODE" = queue ] || jq -cn --arg c "$(cat "$file")" '{type: "queue-operation", operation: "remove", content: $c}' >> "$tr"
+    ;;
+  fail) exit 1 ;;
+  slow-fail)
+    [ -n "$tr" ] || exit 1
+    ( sleep 0.7; jq -cn --arg c "$(cat "$file")" '{type: "user", message: {role: "user", content: $c} }' >> "$tr" ) > /dev/null 2>&1 < /dev/null &
+    printf '%s\n' "$!" >> "${HO_FAKE_MSG_PIDS:-$HOME/fake-msg.pids}"
+    exit 1
+    ;;
+  unreadable-fail)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "user", message: {role: "user", content: $c} }' >> "$tr"
+    chmod 200 "$tr"
+    exit 1
+    ;;
+  queue-fail)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "queue-operation", operation: "enqueue", content: $c}' >> "$tr"
+    exit 1
+    ;;
+  signal-exit) kill -KILL $$ ;;
+  term-ignore)
+    printf '%s\n' "$$" > "${HO_FAKE_MSG_PIDS:-$HOME/fake-msg.pids}.term"
+    trap '' TERM
+    exec sleep 15
+    ;;
+  deliver-fail | deliver-hang)
+    [ -n "$tr" ] || exit 1
+    jq -cn --arg c "$(cat "$file")" '{type: "user", message: {role: "user", content: $c} }' >> "$tr"
+    [ "$HO_FAKE_MSG_MODE" = deliver-fail ] && exit 1
+    exec sleep 60
+    ;;
+  *) exit 2 ;;
+esac

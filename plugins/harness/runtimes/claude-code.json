@@ -98,11 +98,45 @@
   ],
   "install": "install Claude Code (https://docs.claude.com/en/docs/claude-code/setup), then log in with: claude auth login",
   "exit_command": "/exit",
+  "_comment_delivery": "Instruction delivery (H-101, H-099, H-137; design S8-24, D42f, D42g, D37-LIFECYCLE-4). message.argv: a command that posts one instruction to the session as a message between sessions; null means no script route is known, so the engine goes straight to the typed fallback (the orchestrator session sends its own messages with the runtime's message tool and asks the engine only for the proof). Placeholders: {session_id}, {instruction_id}, {text_file}. transcript: where the session transcript is and which records prove delivery; the format is internal to the runtime and changes between versions. screen: what an idle session with an empty input line looks like; any other screen gets nothing typed. force_send: the queued-message send-now chord as control bytes, and the lowest runtime version that knows it.",
+  "message": {
+    "argv": null
+  },
+  "screen": {
+    "rule_char": "─",
+    "prompt_prefixes": [
+      "> ",
+      "❯ "
+    ],
+    "busy_marks": [
+      "esc to interrupt"
+    ],
+    "suggestion_sgr": "2"
+  },
+  "force_send": {
+    "bytes": [
+      24,
+      19
+    ],
+    "min_version": "2.1.275"
+  },
   "transcript": {
     "_comment": "Where a session's transcript is found by its session ID (H-090). root_env names the variable that moves the folder (account environment first, then the launch environment); root_default is used otherwise, with {home} for HOME. glob is relative to the root.",
     "root_env": "CLAUDE_CONFIG_DIR",
     "root_default": "{home}/.claude",
-    "glob": "projects/*/{session_id}.jsonl"
+    "glob": "projects/*/{session_id}.jsonl",
+    "user_types": [
+      "user"
+    ],
+    "reply_types": [
+      "assistant"
+    ],
+    "delivered_attachments": [
+      "queued_command"
+    ],
+    "queue_type": "queue-operation",
+    "queue_enqueue": "enqueue",
+    "queue_remove": "remove"
   },
   "screen_file": "claude-code.screen.json",
   "trust": {

@@ -822,7 +822,7 @@ set_runtime claude-code
 set_wait 2
 real="$HO_TESTS_DIR/fixtures/screens-real"
 rscreen() { cat "$real/$2.txt" > "$(fout "$1")"; }
-for fx in idle-full idle-status idle-box-only wide-idle-full; do
+for fx in idle-full idle-status idle-box-only wide-idle-full idle-notification; do
   start "r104-$fx"
   rscreen "r104-$fx" "$fx"
   out=$(deliver "r104-$fx" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
@@ -836,7 +836,8 @@ for fx in draft-one-line draft-multi-line draft-separator-only busy-draft; do
   assert_contains "#104, H-099: the real draft ($fx) is reported as the user's text" "$out" "input line holds text typed by the user"
   assert_eq "#104, H-099: no Enter key reached the session ($fx)" "" "$(calls | grep -F "key $(rec "r104-$fx" .handle) Enter" || true)"
 done
-for fx in busy-full busy-status wide-busy-full; do
+# busy-cut-before-hint: the status line is cut before the busy hint; the dim prompt still shows it.
+for fx in busy-full busy-status wide-busy-full busy-cut-before-hint; do
   start "r104-$fx"
   rscreen "r104-$fx" "$fx"
   out=$(deliver "r104-$fx" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
@@ -855,3 +856,9 @@ for tl in idle-full draft-one-line busy-full; do
   hold_case "r104-h-trust-$tl" "a hold (trust-dialog) above the real box ($tl)" rhold trust-dialog "$tl" 0
   hold_case "r104-h-pass-$tl" "a hold (password-prompt) above the real box ($tl)" rhold password-prompt "$tl" 0
 done
+# A hold above the runtime's notification line, which is glued to the top rule of the box.
+rntail() { awk -v e="$(printf '\033')" 'index($0, e "[38;5;244m─") == 1 && !t { print prev; t = 1 } t { print } { prev = $0 }' "$real/idle-notification.txt"; }
+rnhold() { local n; n=$(awk 'END { print NR }' "$sf/$1.txt"); rhead; head -n "$((n - $2))" "$sf/$1.txt"; rntail; }
+hold_case r104-hn-limit "a hold (limit-notice-plain) above the notification line and the real box" rnhold limit-notice-plain 1
+hold_case r104-hn-limit-glued "a hold (limit-notice-plain, glued) above the notification line and the real box" rnhold limit-notice-plain 2
+hold_case r104-hn-trust "a hold (trust-dialog) above the notification line and the real box" rnhold trust-dialog 0

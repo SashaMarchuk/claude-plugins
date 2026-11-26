@@ -99,6 +99,20 @@ assert_eq "#104: status lines under a notice with no input box do not count as t
 assert_eq "#104: status lines between a notice and the box are not the status area" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
 { head_of idle-full; sed '$d' "$fix/limit-notice-plain.txt"; printf 'Later the session went on with other work.\n\n'; tail_of idle-full; } > "$base/real.txt"
 assert_eq "#104: a notice with later prose above the real box does not match" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
+# A notification line of the runtime, right-aligned and glued to the top rule of the box, is
+# part of the runtime's tail too. The notice may sit right above it or one blank line above.
+ntail() { plain "$real/idle-notification.txt" | awk '/^────/ && !t { print prev; t = 1 } t { print } { prev = $0 }'; }
+nsplice() { local n; n=$(awk 'END { print NR }' "$fix/$1.txt"); head_of idle-full; head -n "$((n - $2))" "$fix/$1.txt"; ntail; }
+ncls() { nsplice "$@" > "$base/real.txt"; "$h" screen "$run" classify "$base/real.txt" 2>/dev/null; }
+for d in 1 2; do
+  assert_eq "#104, H-113: limit-notice-plain.txt (last $d lines dropped) above the notification line and the real box is recognised" "limit" "$(ncls limit-notice-plain "$d")"
+done
+assert_eq "#104, H-099: trust-dialog.txt above the notification line and the real box is recognised" "trust" "$(ncls trust-dialog 0)"
+assert_eq "#104, H-099: password-prompt.txt above the notification line and the real box is recognised" "password" "$(ncls password-prompt 0)"
+for f in "$fix"/n-*.txt; do
+  f=$(basename "$f" .txt)
+  assert_eq "#104 (F1, I2): $f.txt above the notification line and the real box does not match" "none" "$(ncls "$f" 1)"
+done
 # The real screens themselves hold no shape.
 for f in "$real"/*.txt; do
   plain "$f" > "$base/real.txt"

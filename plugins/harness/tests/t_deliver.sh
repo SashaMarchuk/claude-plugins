@@ -351,8 +351,9 @@ mkdir -p "$base/evil"
 printf '#!/bin/sh\n: > "%s/evil-ran"\necho 9.9.9\n' "$base" > "$base/evil/claude"
 chmod 700 "$base/evil/claude"
 # A positive force-send passes through the queue: a longer wait, as for the other force-sends.
-# With 2 s the wait could end before the fake took the queued line (a timing flake, PR #105).
-set_wait 10
+# With 2 s the wait could end before the fake took the queued line (a timing flake, PR #105);
+# with 10 s it still failed under heavy load. The wait ends as soon as the proof shows.
+set_wait 30
 out=$(PATH="$base/evil:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver v9 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 set_wait 2
 assert_eq "Codex P2: a claude found first on PATH after launch is never run" "no" "$([ -e "$base/evil-ran" ] && echo yes || echo no)"
@@ -435,7 +436,9 @@ screen z4 idle-empty
 t0=$(date +%s)
 out=$(HO_FAKE_MSG_MODE=term-ignore deliver z4 --text "run tests" 2>&1) && rc=0 || rc=$?
 el=$(( $(date +%s) - t0 ))
-assert_eq "N4: deliver returns within the timeout plus the grace and the proof wait (at most 7 s)" "yes" "$([ "$el" -le 7 ] && echo yes || echo "no (${el}s)")"
+# The bound proves the SIGKILL: the command would sleep 15 s. 12 s leaves room for a loaded
+# machine (it was 7 s, and took 9 s under load; PR #105 review round 2).
+assert_eq "N4: deliver returns within the timeout plus the grace and the proof wait (at most 12 s)" "yes" "$([ "$el" -le 12 ] && echo yes || echo "no (${el}s)")"
 tp=$(cat "$base/extra.pids.term" 2>/dev/null || true)
 assert_eq "N4: the command that ignored SIGTERM is gone" "no" "$([ -n "$tp" ] && alive "$tp" && echo yes || echo no)"
 assert_eq "N4: a stopped command is not followed by typing (0 bytes)" "0" "$(inbytes z4)"
@@ -551,7 +554,7 @@ IC=$(printf '\033[39m')
 sf="$HO_TESTS_DIR/fixtures/screen"
 # frame <fixture>: the fixture without its last line (a bare prompt or a frame end), then a
 # framed empty prompt, as the idle screen shows it.
-frame() { sed '$d' "$sf/$1.txt"; printf '%s\n> \n%s\n' "$R6" "$R6"; }
+frame() { sed '$d' "$sf/$1.txt"; printf '%s\n%s> \n%s\n' "$R6" "$IC" "$R6"; }
 hold_case() { # <name> <label> <screen-builder...>
   local nm=$1 label=$2
   shift 2
@@ -560,13 +563,16 @@ hold_case() { # <name> <label> <screen-builder...>
   out=$(deliver "$nm" --text "run tests" 2>&1) && rc=0 || rc=$?
   assert_eq "B4, D42g: $label: 0 bytes typed, no Enter (exit 1)" "1 0" "$rc $(inbytes "$nm")"
   assert_eq "B4, D42g: $label: no Enter key reached the session" "" "$(calls | grep -F "key $(rec "$nm" .handle) Enter" || true)"
+  # HC_HOLD=1: the screen shows the idle colour, so the refusal must name the hold itself,
+  # not "idle is not proven" (PR #105 review round 2, m4).
+  [ "${HC_HOLD:-}" != 1 ] || assert_contains "B4: $label: refused because of the hold" "$out" "hold (D42g)"
 }
 for fx in limit-notice-plain limit-notice-short limit-notice-contraction; do
-  hold_case "h-$fx" "a limit notice above a framed empty prompt ($fx)" frame "$fx"
+  HC_HOLD=1 hold_case "h-$fx" "a limit notice above a framed empty prompt ($fx)" frame "$fx"
 done
-hold_case h-trust "a trust dialog above a framed empty prompt" frame trust-dialog
+HC_HOLD=1 hold_case h-trust "a trust dialog above a framed empty prompt" frame trust-dialog
 pw() { cat "$screens/idle-empty.txt"; tail -n 1 "$sf/password-prompt.txt"; }
-hold_case h-pass "the idle screen with a password prompt line below it" pw
+HC_HOLD=1 hold_case h-pass "the idle screen with a password prompt line below it" pw
 assert_contains "B4: the report names the hold" "$out" "hold"
 # No chord on a hold, with --force-send on a busy session.
 start h-chord
@@ -658,7 +664,7 @@ jq '.shapes |= map(select(.id == "password"))' "$plug/runtimes/claude-code.scree
 jq '.screen_file = "other.screen.json"' "$plug/runtimes/claude-code.json" > "$plug/runtimes/claude-other.json"
 set_runtime claude-code
 start c7-own
-{ sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n> \n%s\n' "$R7" "$R7"; } > "$(fout c7-own)"
+{ sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n%s> \n%s\n' "$R7" "$IC" "$R7"; } > "$(fout c7-own)"
 set_runtime claude-other
 out=$(deliver c7-own --text "run tests" 2>&1) && rc=0 || rc=$?
 assert_eq "minor 3: a hold is read with the pattern file of the session's runtime, not runtime.main (0 bytes)" "1 0" "$rc $(inbytes c7-own)"
@@ -667,7 +673,7 @@ set_runtime claude-code
 # ---- minor 6: every CSI code is stripped before the screen is read ----------------------------
 E7=$(printf '\033')
 start c7-csi
-{ sed '$d' "$sf/limit-notice-plain.txt" | sed "s/^/${E7}[2K${E7}[38:2::255:0:0m/; s/\$/${E7}[0m/"; printf '%s\n> \n%s\n' "$R7" "$R7"; } > "$(fout c7-csi)"
+{ sed '$d' "$sf/limit-notice-plain.txt" | sed "s/^/${E7}[2K${E7}[38:2::255:0:0m/; s/\$/${E7}[0m/"; printf '%s\n%s> \n%s\n' "$R7" "$IC" "$R7"; } > "$(fout c7-csi)"
 out=$(deliver c7-csi --text "run tests" 2>&1) && rc=0 || rc=$?
 assert_eq "minor 6: a hold wrapped in colon-form and non-colour CSI codes is still a hold (0 bytes)" "1 0" "$rc $(inbytes c7-csi)"
 start c7-esc
@@ -732,8 +738,8 @@ for fx in idle-empty suggestion; do
 done
 
 # ---- a hold or a busy mark that appears between typing and Enter ----------------------------
-hf8() { sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n> \n%s\n' "$R8" "$R8"; }
-tf8() { sed '$d' "$sf/trust-dialog.txt"; printf '%s\n> \n%s\n' "$R8" "$R8"; }
+hf8() { sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n%s> \n%s\n' "$R8" "$IC" "$R8"; }
+tf8() { sed '$d' "$sf/trust-dialog.txt"; printf '%s\n%s> \n%s\n' "$R8" "$IC" "$R8"; }
 busy8() { cat "$screens/busy.txt"; }
 cp "$proj/.harness/config.json" "$base/proj8.bak"
 dcase8() { # <name> <label> <delay> <builder>
@@ -813,10 +819,12 @@ screen d9-ver busy
 : > "$(fbusy d9-ver)"
 set_wait 10
 t0=$(date +%s)
-out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 HO_FAKE_CLAUDE_VERSION_SLEEP=20 deliver d9-ver --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 HO_FAKE_CLAUDE_VERSION_SLEEP=60 deliver d9-ver --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 el=$(( $(date +%s) - t0 ))
 set_wait 2
-assert_eq "Codex P2: a version check that hangs is stopped; deliver returns within the bound (at most 16 s)" "yes" "$([ "$el" -le 16 ] && echo yes || echo "no (${el}s)")"
+# The version check would hang 60 s; returning within 40 s proves it was stopped, with room
+# for a loaded machine (the bound was 16 s against a 20 s hang, and took 20 s under load).
+assert_eq "Codex P2: a version check that hangs is stopped; deliver returns within the bound (at most 40 s)" "yes" "$([ "$el" -le 40 ] && echo yes || echo "no (${el}s)")"
 assert_eq "Codex P2: with the version unknown no chord is sent" "" "$(calls | grep "byte $(rec d9-ver .handle) " || true)"
 assert_contains "Codex P2: the skipped chord names the unknown version" "$(ledger | grep -F deliver-force-send | tail -n 1)" "unknown"
 

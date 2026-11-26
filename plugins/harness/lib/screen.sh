@@ -41,9 +41,11 @@
 #   only in this order: status lines with no box, or between a block and the box, are text.
 #   The status area (ho_screen_status_area): the line right under the box may have the
 #   status_first_line shape (the runtime's or the user's own status line); every other line
-#   must have one of the status_lines shapes. A data file without them reads as before. Then
-#   at most one line at the end that has the profile's notification_line shape (a
-#   right-aligned line of the runtime, glued to the top rule of the box) is set aside too. Known limit: a faithful paste of the notice as the last
+#   must have one of the status_lines shapes. A data file without them reads as before. Only
+#   when that tail is found, one line glued to the top rule of the box is set aside too, if it
+#   is the runtime's notification line (ho_screen_notification): the notification_line shape,
+#   and right-aligned, so it ends within 3 columns of the rule's right end. Without a closed
+#   box nothing is set aside (PR #105 review round 2). Known limit: a faithful paste of the notice as the last
 #   block of the screen cannot be told from the notice itself by text. That is bounded, not
 #   closed: nothing is typed, and the wait it leads to is recorded once and ends on STOP.
 #
@@ -111,9 +113,10 @@ ho_screen_shape_match() {
   HO_SC_STATUS_FIRST=$(printf '%s' "$frames" | jq -r '.status_first_line // "" | strings')
   HO_SC_STATUS_LINES=$(printf '%s' "$frames" | jq -r '[.status_lines // [] | .[] | strings | "(" + . + ")"] | join("|")')
   HO_SC_NOTIFICATION_LINE=$(printf '%s' "$frames" | jq -r '.notification_line // "" | strings')
+  HO_SC_CONT=$(printf '[\200-\277]')
   HO_SC_PROSE=$HO_SCREEN_PROSE
   export HO_SC_ANCHOR HO_SC_COMPANION HO_SC_BLOCK_ABOVE HO_SC_LAST_ONLY \
-    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_NOTIFICATION_LINE HO_SC_PROSE
+    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_NOTIFICATION_LINE HO_SC_CONT HO_SC_PROSE
   LC_ALL=C awk '
     BEGIN {
       anchor = ENVIRON["HO_SC_ANCHOR"]
@@ -127,11 +130,20 @@ ho_screen_shape_match() {
       status_first = ENVIRON["HO_SC_STATUS_FIRST"]
       status_lines = ENVIRON["HO_SC_STATUS_LINES"]
       notification_line = ENVIRON["HO_SC_NOTIFICATION_LINE"]
+      cont = ENVIRON["HO_SC_CONT"]
       prose = ENVIRON["HO_SC_PROSE"]
     }
     function trim(s) { sub(/\r$/, "", s); sub(/[ \t]+$/, "", s); return s }
     function blank(s) { return trim(s) == "" }
     function framed(s) { return s ~ frame_start }
+    # width: the characters of a line (UTF-8 continuation bytes are not counted).
+    function width(s,  t) { t = s; gsub(cont, "", t); return length(t) }
+    # notice_line: the runtime notification line, right-aligned to the frame line under it.
+    function notice_line(s, fr,  w, fw) {
+      if (notification_line == "" || s !~ notification_line) return 0
+      w = width(s); fw = width(fr)
+      return w <= fw && w >= fw - 3
+    }
     function core(s,  t) {
       t = trim(s)
       if (framed(t)) {
@@ -152,6 +164,7 @@ ho_screen_shape_match() {
       # The runtime tail: the last input line with a frame line right above it, a frame line
       # as the next non-blank line below it (an empty box), and below that only status lines
       # and blank lines. The lines from the opening frame down are set aside.
+      boxed = 0
       if (status_first != "" || status_lines != "") {
         for (p = n; p >= 2; p--) {
           if (blank(raw[p]) || trim(raw[p]) !~ input_box) continue
@@ -168,13 +181,11 @@ ho_screen_shape_match() {
             tail_ok = 0
             break
           }
-          if (tail_ok) n = p - 2
+          if (tail_ok) { n = p - 2; boxed = 1 }
           break
         }
       }
-      if (notification_line != "") {
-        if (n >= 1 && !blank(raw[n]) && trim(raw[n]) ~ notification_line) n--
-      }
+      if (boxed && n >= 1 && !blank(raw[n]) && notice_line(trim(raw[n]), trim(raw[n + 1]))) n--
       if (n < NR) {
         last = 0
         for (i = 1; i <= n; i++) if (!blank(raw[i])) last = i
@@ -223,7 +234,7 @@ ho_screen_shape_match() {
       exit 1
     }' "$file" 2>/dev/null || rc=$?
   unset HO_SC_ANCHOR HO_SC_COMPANION HO_SC_BLOCK_ABOVE HO_SC_LAST_ONLY \
-    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_NOTIFICATION_LINE HO_SC_PROSE
+    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_NOTIFICATION_LINE HO_SC_CONT HO_SC_PROSE
   case $rc in 0 | 1 | 3) return "$rc" ;; esac
   return 70
 }
@@ -252,6 +263,29 @@ ho_screen_status_area() {
   unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
   case $rc in 0 | 1) return "$rc" ;; esac
   return 70
+}
+
+# ho_screen_notification <data-json> <line> <frame-line>: 0 when <line>, glued right above
+# <frame-line> (the top rule of a closed input box), is the runtime's notification line: the
+# notification_line shape, ending within 3 columns of the rule's right end. 1 otherwise.
+# Delivery uses it for the lines above the box; the classifier applies the same rule inline.
+ho_screen_notification() {
+  local pat rc=0
+  pat=$(printf '%s' "$1" | jq -r '.notification_line // "" | strings')
+  [ -n "$pat" ] || return 1
+  HO_SC_NOTIFICATION_LINE=$pat HO_SC_CONT=$(printf '[\200-\277]') LC_ALL=C awk -v want=2 '
+    BEGIN { pat = ENVIRON["HO_SC_NOTIFICATION_LINE"]; cont = ENVIRON["HO_SC_CONT"] }
+    function width(s,  t) { t = s; gsub(cont, "", t); return length(t) }
+    { sub(/\r$/, ""); sub(/[ \t]+$/, ""); l[NR] = $0 }
+    END {
+      if (NR != want || l[1] == "" || l[1] !~ pat) exit 1
+      w = width(l[1]); fw = width(l[2])
+      exit (w <= fw && w >= fw - 3) ? 0 : 1
+    }' 2>/dev/null <<EOF_NOTE || rc=$?
+$2
+$3
+EOF_NOTE
+  return "$rc"
 }
 
 # ho_screen_selftest <frames-json>: before the first match, check that this awk runs the

@@ -393,8 +393,16 @@ EOF_PFX2
   fi
   # The lines above the opening frame go to the screen reader once more: a hold shown above a
   # box that already holds typed text reads as later text in the whole capture, but not here.
-  if [ "$k" -ge 2 ]; then
-    class=$(ho_deliver_classify "$profile" "$(i=0; while [ "$i" -lt $((k - 1)) ]; do printf '%s\n' "${P[i]}"; i=$((i + 1)); done)")
+  # The runtime's notification line glued to the top rule is not session text (round 2).
+  local above=$((k - 1))
+  if [ "$above" -ge 1 ] && [ -n "${P[above - 1]}" ]; then
+    local ndata
+    if ndata=$(ho_screen_profile_data "$profile" 2>/dev/null) && ho_screen_notification "$ndata" "${P[above - 1]}" "${P[above]}"; then
+      above=$((above - 1))
+    fi
+  fi
+  if [ "$above" -ge 1 ]; then
+    class=$(ho_deliver_classify "$profile" "$(i=0; while [ "$i" -lt "$above" ]; do printf '%s\n' "${P[i]}"; i=$((i + 1)); done)")
     case $class in
       none) ;;
       limit | trust | password) echo "hold $class"; return 0 ;;

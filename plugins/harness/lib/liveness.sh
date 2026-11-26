@@ -186,7 +186,8 @@ ho_live_transcript() {
   sid=$(jq -r '.session_id // ""' "$rec" 2>/dev/null)
   ho_session_uuid_ok "$sid" 2>/dev/null || return 0
   root=$(jq -r '.transcript_root // ""' "$rec" 2>/dev/null)
-  profile="$HO_ROOT/runtimes/$(jq -r '.runtime // ""' "$rec" 2>/dev/null).json"
+  # The runtime profile as every other reader finds it (user folder, then the plugin).
+  profile=$(ho_rt_file "$(jq -r '.runtime // ""' "$rec" 2>/dev/null)" 2>/dev/null) || return 0
   glob=$(jq -r '.transcript.glob // ""' "$profile" 2>/dev/null) || glob=""
   [ -n "$root" ] && [ -n "$glob" ] && [ -d "$root" ] || return 0
   case $glob in *..* | /*) return 0 ;; esac

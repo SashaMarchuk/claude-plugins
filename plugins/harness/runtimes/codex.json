@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 2,
+  "_comment": "Runtime profile for Codex (D30, D31, D37-RUNTIME-2). Interactive Codex sessions are not in the beta, so every step on Codex runs without a terminal through codex exec. A review step runs with the read-only sandbox and returns its verdict like any other runtime. Execution on Codex runs only where a flow names it, and stays experimental and untested until a comparison run gives the same result. Placeholders as in claude-code.json. Checked against codex exec --help: exec, resume, -m, --sandbox and the bypass flag. Not yet exercised by a real run: skill_call, session_log, limits and skill_paths. agent_paths follows where the GSD installer writes Codex agents (<CODEX_HOME>/agents/<name>.toml); not yet exercised by a real run.",
+  "title": "Codex",
+  "command": "codex",
+  "modes": [
+    "noninteractive"
+  ],
+  "noninteractive": {
+    "argv": [
+      "exec"
+    ],
+    "resume": [
+      "exec",
+      "resume",
+      "{session_id}"
+    ],
+    "model": [
+      "-m",
+      "{model}"
+    ],
+    "prompt": [
+      "{prompt}"
+    ]
+  },
+  "permissions": {
+    "bypass": [
+      "--dangerously-bypass-approvals-and-sandbox"
+    ],
+    "auto": [
+      "--sandbox",
+      "workspace-write"
+    ]
+  },
+  "sandbox": {
+    "read-only": [
+      "--sandbox",
+      "read-only"
+    ]
+  },
+  "skill_call": "${skill}",
+  "config_dir": {
+    "env": "CODEX_HOME",
+    "default": "{home}/.codex"
+  },
+  "session_log": "{config_dir}/sessions/<date>/rollout-<time>-<session id>.jsonl",
+  "limits": "The /status screen of an interactive Codex session shows the plan's usage limits; codex exec does not report them.",
+  "capabilities": {
+    "hooks": true,
+    "session_messages": false
+  },
+  "check": {
+    "argv": [
+      "login",
+      "status"
+    ],
+    "timeout_seconds": 20
+  },
+  "skill_paths": [
+    "{config_dir}/skills/{skill}/SKILL.md",
+    "{config_dir}/prompts/{skill}.md"
+  ],
+  "agent_paths": [
+    "{config_dir}/agents/{agent}.toml"
+  ],
+  "install": "install Codex with: npm install -g @openai/codex, then log in with: codex login",
+  "exit_command": "/quit"
+}

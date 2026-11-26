@@ -1,8 +1,8 @@
 ## ADDED Requirements
 
-### Requirement: H-104 Worker cap set before launch or per project, default 1
-The owner SHALL set the number of tickets that run in parallel, either before a run starts or in the project configuration. The default SHALL be 1, and the minimum SHALL be 1. The harness SHALL ship no recommended maximum, because every machine differs.
-Source: interview 2026-11-24 R21.1
+### Requirement: H-104 Worker cap set before launch, per user or per project, default 1
+The owner SHALL set the number of tickets that run in parallel: before a run starts, in the user configuration, or in the project configuration. The default, and the value the plugin recommends to a new user, SHALL be 1. The minimum SHALL be 1. The harness SHALL ship no maximum, because every machine differs; an owner with a stronger machine raises the cap in their own configuration.
+Source: interview 2026-11-24 R21.1; owner decision 2026-11-26 (task 0.6)
 
 #### Scenario: No cap is configured
 - **WHEN** a run starts and neither the launch options nor the project configuration set a worker cap
@@ -15,6 +15,10 @@ Source: interview 2026-11-24 R21.1
 #### Scenario: The owner sets the cap for a project
 - **WHEN** the project configuration sets a worker cap of 2 and nothing is set at launch
 - **THEN** the harness uses 2 as the cap for runs in that project
+
+#### Scenario: The owner raises the cap for all his projects
+- **WHEN** the user configuration sets a worker cap of 5 and neither the launch options nor the project configuration set one
+- **THEN** the harness uses 5 as the cap for that owner's runs
 
 ### Requirement: H-105 The worker cap is never exceeded
 The harness MUST NOT run more worker sessions at once than the worker cap. A detailed check SHALL run before every worker start to prevent it. The way the check is enforced, including two starts at the same moment, is an agent decision (see design.md D26a).

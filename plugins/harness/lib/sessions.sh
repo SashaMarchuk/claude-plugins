@@ -46,6 +46,8 @@ usage: harness session <run-dir> <verb> [args]
   read <name> transcript|screen [--lines N]
                       the tail of the session's transcript or screen, fenced as untrusted;
                       reads only, never types
+  hooks-check         the start check: name hooks in the settings sessions load that have no
+                      time limit or one above the maximum; never edits them (D42l)
 USAGE
 }
 
@@ -905,6 +907,7 @@ ho_session_main() {
     proof) ho_session_proof "$@" || rc=$? ;;
     status) ho_live_status "$@" || rc=$? ;;
     read) ho_live_read "$@" || rc=$? ;;
+    hooks-check) ho_live_hooks_check "$@" || rc=$? ;;
     *) ho_session_usage; rc=64 ;;
   esac
   exit "$rc"

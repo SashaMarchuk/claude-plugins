@@ -135,3 +135,10 @@ assert_eq "H-089: without the mark a large payload is read whole (the sender see
 rc=$(set +e; printf '%s' "$big" | HO_HOOK_LOG="$log" HO_HOOK_EVENTS="Stop" bash "$script" PreToolUse; echo "${PIPESTATUS[0]}${PIPESTATUS[1]}")
 assert_eq "H-089: a removed event still reads a large payload whole" "00" "$rc"
 assert_eq "H-089: neither early return wrote a line" no "$([ -e "$log" ] && echo yes || echo no)"
+
+# ---- the StopFailure field holds an error type only, never failure text ----
+rm -f "$log"
+jq -cn --arg sid "$sid" --arg s "$secret" '{session_id: $sid, hook_event_name: "StopFailure", error: ("429 Too Many Requests " + $s)}' \
+  | HO_HOOK_LOG="$log" bash "$script" StopFailure
+assert_eq "H-089 (D37-SESSIONS-2): an error that is not a short type word is stored as unknown" "unknown 0" \
+  "$(jq -r .error "$log") $(grep -c "$secret" "$log" || true)"

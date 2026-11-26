@@ -335,6 +335,59 @@ ho_live_hooks() {
       last_event_at: null, last_event_age_seconds: null, open_tools: [], tool_running: false, stop_error: null}, quiet: null}'
 }
 
+# harness session <run-dir> hooks-check: the start check of D42l (H-089). It reads the settings
+# files the sessions will load (the runtime profile's hooks_settings) and names every hook with
+# no time limit, or one above preflight.hook_timeout_max_seconds (default 10), in one attention
+# notice on stderr, with one owner-action line in the run ledger. It never edits a settings
+# file. preflight.hooks is warn (default: exit 0) or stop (exit 69 when a hook is named). Hook
+# command text goes to the notice only, never to the ledger. A file that cannot be read is
+# named too (field note I1). The harness's own hook is declared in the plugin, not in these.
+ho_live_hooks_check() {
+  local mode max profile cdir_env cdir_def cdir pat f found="" n=0 unread="" lines
+  mode=$(ho_cfg '.preflight.hooks' warn) || exit $?
+  case $mode in warn | stop) ;; *) printf 'harness: config preflight.hooks must be warn or stop, not %s\n' "$mode" >&2; exit "$HO_EXIT_CONFIG" ;; esac
+  max=$(ho_cfg_int '.preflight.hook_timeout_max_seconds' 10) || exit $?
+  profile=$(ho_runtime_profile) || exit $?
+  cdir_env=$(jq -r '.config_dir.env // ""' "$profile")
+  cdir_def=$(jq -r '.config_dir.default // ""' "$profile")
+  case $cdir_env in '' | *[!A-Z0-9_]*) cdir="" ;; *) cdir=$(printenv "$cdir_env" 2>/dev/null || true) ;; esac
+  [ -n "$cdir" ] || cdir=${cdir_def//\{home\}/$HOME}
+  while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    f=${pat//\{config_dir\}/$cdir}
+    f=${f//\{project\}/$HO_PROJECT_DIR}
+    case $f in /*) ;; *) continue ;; esac
+    [ -e "$f" ] || continue
+    if ! lines=$(jq -r --argjson max "$max" '(.hooks // {}) | to_entries[] | .key as $e | (.value // [])[] | (.hooks // [])[]
+        | select((.timeout | type) != "number" or .timeout > $max)
+        | "\($e) \((.command // .url // .type // "?") | tostring | gsub("[[:cntrl:]]"; " ") | .[0:80]) (timeout \(.timeout // "none"))"' "$f" 2>/dev/null); then
+      unread="$unread  $f: cannot be read as JSON; its hooks were not checked"$'\n'
+      continue
+    fi
+    while IFS= read -r l; do
+      [ -n "$l" ] || continue
+      found="$found  $f: $l"$'\n'
+      n=$((n + 1))
+    done <<EOF_L
+$lines
+EOF_L
+  done <<EOF_P
+$(jq -r '.hooks_settings // [] | .[] | strings' "$profile")
+EOF_P
+  [ -z "$unread" ] || printf 'harness: attention: settings that the sessions load could not be read:\n%s' "$unread" >&2
+  if [ "$n" -eq 0 ]; then
+    echo "hooks OK"
+    return 0
+  fi
+  printf 'harness: attention: %s hook(s) in the settings that the sessions will load have no time limit or one above %s s (design D42l); a hook that hangs can hold a session:\n%s' "$n" "$max" "$found" >&2
+  ho_ledger_append owner-action title "hooks without a time limit" \
+    why "$n hook(s) in the settings the sessions load have no time limit or one above $max s (D42l)" \
+    command "add a \"timeout\" of at most $max to each hook named by: harness session <run> hooks-check" \
+    verify "harness session <run> hooks-check prints hooks OK"
+  [ "$mode" = stop ] && return 69
+  return 0
+}
+
 # ho_live_status_one <record>: one JSON line of facts. A running record whose process is gone
 # turns "dead" here, once, with one ledger line (H-090: the record is kept current, D42h).
 ho_live_status_one() {

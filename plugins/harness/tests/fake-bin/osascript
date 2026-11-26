@@ -168,7 +168,8 @@ case $script in
         ft_log "osascript send-text $h $text"
         printf '%s' "$text" >> "$f.in"
         ;;
-      *'return (contents of s)'*) ft_log "osascript capture $h"; cat "$f.out"; exit 0 ;;
+      # iTerm2 "contents" holds no colour codes, so the fake removes them too (PR #105).
+      *'return (contents of s)'*) ft_log "osascript capture $h"; sed "s/$(printf '\033')\[[0-9;]*m//g" "$f.out"; exit 0 ;;
       *'tell s to close'*) ft_log "osascript close $h"; : > "$f.closed" ;;
       *) exit 2 ;;
     esac

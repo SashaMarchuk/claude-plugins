@@ -113,6 +113,11 @@ for f in "$fix"/n-*.txt; do
   f=$(basename "$f" .txt)
   assert_eq "#104 (F1, I2): $f.txt above the notification line and the real box does not match" "none" "$(ncls "$f" 1)"
 done
+# M2 (PR #105 review): under the box only status shapes count. A plain line with two leading
+# spaces after the status lines keeps the tail as text, so the notice above is not the last
+# block of the screen.
+{ head_of idle-full; sed '$d' "$fix/limit-notice-plain.txt"; tail_of idle-full; printf '  Neutral text that only starts with two spaces.\n'; } > "$base/real.txt"
+assert_eq "#104 M2: a two-space text line under the status area keeps the tail as text" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
 # The real screens themselves hold no shape.
 for f in "$real"/*.txt; do
   plain "$f" > "$base/real.txt"

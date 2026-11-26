@@ -41,7 +41,7 @@ ft_screen() {
   [ -z "$p" ] || p="$p${HO_FAKE_TERM_ECHO_EXTRA:-}"
   FT_P=$p awk -v e="$(printf '\033')" '
     { l[NR] = $0; s = $0; gsub(e "\\[[0-9;]*m", "", s) }
-    /^>( |$)/ { k = NR }
+    s ~ /^>( |$)/ { k = NR }
     index(s, "\342\235\257") == 1 { k = NR }
     END {
       for (i = 1; i <= NR; i++) {

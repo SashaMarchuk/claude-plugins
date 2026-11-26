@@ -51,6 +51,17 @@ lines:
   not saved here. The tests splice the fixtures of `../screen` into these files by script.
   The real limit notice is still the deferred check of issue #82.
 
+## What the readers need from these shapes (PR #105 review round 1)
+
+- Delivery types only when idle is proven: the prompt shows the idle colour. A missing busy
+  mark proves nothing, because a narrow pane can cut the busy hint off.
+- So a capture without colour codes never gets typed text. **On iTerm2 delivery never types**:
+  the iTerm2 backend returns plain text, so idle cannot be proven there. Sessions run in tmux by
+  default (D42b); on iTerm2 the message route is the only route.
+- Under the box only status-area lines may sit: the line right under the box (the runtime's
+  or the user's own status line), the permission-mode line, the shortcuts hint and the agent
+  list. Any other line there gets nothing typed.
+
 ## Not covered
 
 - A tip card of the runtime (a few lines with numbered answers) can sit right above the

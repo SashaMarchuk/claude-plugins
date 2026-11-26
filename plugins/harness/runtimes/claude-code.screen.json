@@ -1,9 +1,10 @@
 {
-  "_comment": "Recognition data for lib/screen.sh (H-113, H-099). Anchor and companion patterns are matched against the lower-cased line, with the frame and the padding removed, and they must match the whole line. The alternatives come from the 0.6.0 watch patterns, which is the only part of that watch the rebuild keeps. There is no typed reaction to any of these shapes.",
+  "_comment": "Recognition data for lib/screen.sh (H-113, H-099). Anchor and companion patterns are matched against the lower-cased line, with the frame and the padding removed, and they must match the whole line. The alternatives come from the 0.6.0 watch patterns, which is the only part of that watch the rebuild keeps. There is no typed reaction to any of these shapes. The input line may end with a no-break space, as the real prompt does. status_line is the shape of a line of the status area under the input box (the status lines and the agent list): two spaces, then text. It is a shape, not words; issue #104.",
   "frame_start": "^(╭|╮|╰|╯|│|─)",
   "frame_end": "(│)$",
   "frame_only": "^[╭╮╰╯│─ ]*$",
-  "input_box": "^[│ ]*(>|❯)[ │]*$",
+  "input_box": "^[│ ]*(>|❯)([ │]| )*$",
+  "status_line": "^  [^ ]",
   "shapes": [
     {
       "id": "password",

@@ -287,6 +287,9 @@ ho_deliver_scan() {
 #     text inside the box, a rule line included, is the person's text: a draft.
 #   - A backend that keeps no colours (iTerm2) cannot tell suggested text from typed text, so
 #     any text after the prompt there is a draft.
+#   - A busy mark counts above the box and in the runtime's status area under it (issue #104).
+#     On a narrow pane the status line is cut short with "…": a cut part after the last " · "
+#     that is the start of a busy mark counts as that mark.
 # For the check before Enter, "draft <text>" carries the box text, its lines joined. With the
 # third argument "reread", a first line "busy" or "idle" tells whether a busy mark shows.
 ho_deliver_screen() {
@@ -383,6 +386,27 @@ EOF_PFX2
     done <<EOF_BUSY
 $marks
 EOF_BUSY
+    i=$((i + 1))
+  done
+  # A busy mark under the box, whole or cut short with "…" (issue #104).
+  i=$((kend + 1))
+  while [ "$i" -lt "$n" ] && [ -z "$busy" ]; do
+    line=${P[i]}
+    line=${line%"${line##*[! ]}"}
+    while IFS= read -r mark; do
+      [ -n "$mark" ] || continue
+      case $line in *"$mark"*) busy=$mark; break ;; esac
+      case $line in
+        *"…")
+          part=${line%"…"}
+          part=${part##*" · "}
+          part=${part#"${part%%[! ]*}"}
+          if [ -n "$part" ]; then case $mark in "$part"*) busy=$mark; break ;; esac; fi
+          ;;
+      esac
+    done <<EOF_BUSY2
+$marks
+EOF_BUSY2
     i=$((i + 1))
   done
   # The input line: dim suggested text aside, then the prompt prefix off.

@@ -106,7 +106,8 @@
     "rule_char": "─",
     "prompt_prefixes": [
       "> ",
-      "❯ "
+      "❯ ",
+      "❯ "
     ],
     "busy_marks": [
       "esc to interrupt"

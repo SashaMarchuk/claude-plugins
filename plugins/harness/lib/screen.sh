@@ -33,7 +33,13 @@
 #   that goes on afterwards misses). Where the line above the block must be blank, the
 #   candidate must also open its block, with only frame lines above it inside the block, so
 #   a notice wrapped into a paragraph of the session's own prose misses. A box draws its own
-#   boundary, so a boxed notice or dialog needs no blank line above it. Known limit: a faithful paste of the notice as the last
+#   boundary, so a boxed notice or dialog needs no blank line above it.
+#   The runtime's own tail (issue #104): when the capture ends with a closed, empty input box
+#   (a frame line, the input line, a frame line) and under it only lines of the profile's
+#   status_line shape (the runtime's status lines and agent list) and blank lines, that tail
+#   is set aside first, and the rules above read the lines above the box. The tail counts
+#   only in this order: status lines with no box, or between a block and the box, are text.
+#   A data file without status_line reads as before. Known limit: a faithful paste of the notice as the last
 #   block of the screen cannot be told from the notice itself by text. That is bounded, not
 #   closed: nothing is typed, and the wait it leads to is recorded once and ends on STOP.
 #
@@ -98,9 +104,10 @@ ho_screen_shape_match() {
   HO_SC_FRAME_END=$(printf '%s' "$frames" | jq -r '.frame_end')
   HO_SC_FRAME_ONLY=$(printf '%s' "$frames" | jq -r '.frame_only')
   HO_SC_INPUT_BOX=$(printf '%s' "$frames" | jq -r '.input_box')
+  HO_SC_STATUS_LINE=$(printf '%s' "$frames" | jq -r '.status_line // "" | strings')
   HO_SC_PROSE=$HO_SCREEN_PROSE
   export HO_SC_ANCHOR HO_SC_COMPANION HO_SC_BLOCK_ABOVE HO_SC_LAST_ONLY \
-    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_PROSE
+    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_LINE HO_SC_PROSE
   LC_ALL=C awk '
     BEGIN {
       anchor = ENVIRON["HO_SC_ANCHOR"]
@@ -111,6 +118,7 @@ ho_screen_shape_match() {
       frame_end = ENVIRON["HO_SC_FRAME_END"]
       frame_only = ENVIRON["HO_SC_FRAME_ONLY"]
       input_box = ENVIRON["HO_SC_INPUT_BOX"]
+      status_line = ENVIRON["HO_SC_STATUS_LINE"]
       prose = ENVIRON["HO_SC_PROSE"]
     }
     function trim(s) { sub(/\r$/, "", s); sub(/[ \t]+$/, "", s); return s }
@@ -133,6 +141,27 @@ ho_screen_shape_match() {
       last = 0
       for (i = 1; i <= n; i++) if (!blank(raw[i])) last = i
       if (last == 0) exit 3
+      # The runtime tail: the last input line with a frame line right above it, a frame line
+      # as the next non-blank line below it (an empty box), and below that only status lines
+      # and blank lines. The lines from the opening frame down are set aside.
+      if (status_line != "") {
+        for (p = n; p >= 2; p--) {
+          if (blank(raw[p]) || trim(raw[p]) !~ input_box) continue
+          if (blank(raw[p - 1]) || trim(raw[p - 1]) !~ frame_only) break
+          q = p + 1
+          while (q <= n && blank(raw[q])) q++
+          if (q > n || trim(raw[q]) !~ frame_only) break
+          tail_ok = 1
+          for (j = q + 1; j <= n; j++) if (!blank(raw[j]) && trim(raw[j]) !~ status_line) { tail_ok = 0; break }
+          if (tail_ok) {
+            n = p - 2
+            last = 0
+            for (i = 1; i <= n; i++) if (!blank(raw[i])) last = i
+            if (last == 0) exit 1
+          }
+          break
+        }
+      }
       for (i = 1; i <= n; i++) {
         line = trim(raw[i])
         if (blank(line)) continue
@@ -176,7 +205,7 @@ ho_screen_shape_match() {
       exit 1
     }' "$file" 2>/dev/null || rc=$?
   unset HO_SC_ANCHOR HO_SC_COMPANION HO_SC_BLOCK_ABOVE HO_SC_LAST_ONLY \
-    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_PROSE
+    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_LINE HO_SC_PROSE
   case $rc in 0 | 1 | 3) return "$rc" ;; esac
   return 70
 }

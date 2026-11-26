@@ -126,7 +126,7 @@ ho_in_judge() {
   fi
   timeout=$(ho_in_seconds readiness_timeout_seconds 300 10 1800) || return 0
   sid=$(ho_session_new_id)
-  tmpl="$HO_ROOT/prompts/readiness.md"
+  tmpl="$HO_ROOT/templates/readiness-prompt.md"
   ticket=$(ho_tickets show "$id") || { ho_in_err "cannot read ticket $id for the readiness check"; return 0; }
   prompt=$(
     while IFS= read -r line || [ -n "$line" ]; do
@@ -175,7 +175,7 @@ ho_in_judge() {
 # ---- one pickup ------------------------------------------------------------------------------
 HO_IN_NEXT_STEP="A person with write access should check the ticket and set the ready label again."
 
-# ho_in_refuse <id> <from> <reason>: -> needs-review with one status comment.
+# ho_in_review <id> <from> <reason>: -> needs-review with one status comment.
 ho_in_review() {
   ho_tk_gh_set_state "$1" needs-review || return 1
   ho_tk_status_comment "$1" orchestrator "$2" needs-review "$3" "$HO_IN_NEXT_STEP" || return 1
@@ -192,6 +192,8 @@ ho_in_pickup() {
       [ -z "$ready" ] || { ridx=${ready%% *}; login=${ready#* }; }
       [ -z "$blocked" ] || bidx=${blocked%% *}
     fi
+    # A login of an unexpected shape is no login: read-only, and it never reaches a path or the ledger.
+    ho_tk_login_ok "$login" || login=""
   else
     # Local tickets: whoever can write the ticket folder can write the repository.
     state=ready login=local
@@ -207,9 +209,8 @@ ho_in_pickup() {
       echo "unblocked $id"
     else
       ho_tk_gh_set_state "$id" blocked || return 1
-      ho_tk_status_comment "$id" orchestrator blocked blocked \
-        "the ready label was removed: the person who set it has no confirmed write access, or the label is older than the block" \
-        "Only a person with write access can unblock the ticket, by setting the ready label." || return 1
+      printf 'Reason: the person who set the ready label has no confirmed write access, or the label is older than the block.\nNext: Only a person with write access can unblock the ticket, by setting the ready label.\n' |
+        ho_tk_post "$id" orchestrator status "ready label removed, still blocked" - from blocked to blocked || return 1
       ho_ledger_append unblock-refused ticket "$id" by "${login:-unknown}"
       echo "kept-blocked $id"
       return 1

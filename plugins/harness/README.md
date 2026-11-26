@@ -5,7 +5,7 @@ This branch holds the stable-beta rebuild of the harness plugin. The 0.6.0 engin
 ## Engine entry point
 
 The engine has one entry script: `bin/harness <verb> [args]`.
-Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state`, `tickets`, `session`, `slot`, `flow` and `loop`.
+Current verbs are `version`, `help`, `selftest`, `config`, `run`, `state`, `tickets`, `intake`, `session`, `slot`, `flow`, `loop` and `screen`.
 Run `bin/harness help` for the list.
 
 ## Ticket queue
@@ -17,6 +17,22 @@ Every state change leaves exactly one state label.
 Ticket titles, bodies and comments are printed only inside the untrusted fence.
 A report is always a new comment; no comment is edited or deleted.
 Settings: `HO_TICKETS_SOURCE` (`local` or `github`), `HO_TICKETS_REPO`, `HO_TICKETS_DIR`, `HO_STATE_PREFIX` (default `harness`), `HO_TICKET_LOCK_WAIT` and `HO_TICKET_LOCK_STALE`.
+
+- **Comment format.** Every comment the harness writes has one form (H-025, D13): a visible first line `**<role>: <event>**`, a short body, and a hidden machine line `<!-- harness:v1 {...} -->` as the last line. The machine line is trusted only on a comment from the harness's own account, which is the signed-in tracker account; if that account cannot be read, no machine line is trusted. A body line that looks like a machine line gets a visible `[text] ` prefix. `comments <id>` prints what the engine reads back: the platform login, whether the comment is the harness's own, the author (an own comment's `author` field wins, H-034) and the machine fields.
+- **Questions.** `ask <id> <file>` posts the questions as one numbered comment and moves the ticket to `blocked` (H-032). Inside a session it records the question in the run ledger, and the next intake tick closes that session gracefully.
+- **Steps.** `step <id> <step> <result>` records a finished step with its result, `commit:<sha>` or `file:<path>`. `resume <id> --repo <dir> <steps...>` prints the first step whose record is missing or whose result does not exist (H-028, D2).
+- **Unblock.** `unblock <id>` returns a blocked ticket to `ready` only for a signed-in account with write access (H-031). On GitHub a person unblocks by setting the ready label; the intake tick checks who set it.
+- **Structure.** `template` prints the four headings the plugin writes: Outcome, Scope, Acceptance criteria, Checks (D6). `/harness:add` grills first, then creates the ticket through `tickets add` (H-005, H-006, H-015).
+
+## Intake
+
+`bin/harness intake <run-dir> tick|poll|interval` takes labelled tickets into work. A script polls, not a model (D4).
+
+- **Trigger.** Only the ready label puts a ticket into work (H-002). The trigger author is the actor of the newest `labeled` event for that label.
+- **Order at pickup (D2).** First the write-access check: `write`, `maintain` or `admin` passes; triage, read, an unknown person or a failed query counts as read-only, and the ticket moves to `needs-review` with one status comment (H-008, H-009, H-011). A configured target repository (`tickets.target_repos`) that the ticket text names needs the same access (D37-INTAKE-9). A bot is judged by its own access, with no allow-list, until OPEN-INTAKE-1 is answered. Then the claim and its comment. Then the readiness check.
+- **Readiness.** At every pickup the main runtime judges the fenced ticket text, read-only and without a terminal, against `tickets.required_content` (default: outcome, done-check, scope; H-012, H-013, D6). The verdict goes to the run ledger. Ready prints `start <id>` for the orchestrator. Not ready posts the judge's questions as numbered items and blocks the ticket. A verdict that cannot be read moves the ticket to `needs-review`. The judge's command line comes from the runtime profile, never from a config.
+- **Unblock.** A writer's ready label on a blocked ticket, newer than its blocked label, unblocks it. Any other ready label on a blocked ticket is removed, and the ticket stays blocked.
+- **Timing.** `tickets.poll_seconds` (default 60, minimum 30; anything else exits 78). Each tracker error doubles the wait, up to 15 minutes; a good poll resets it. The time of the last poll is the modification time of `<run>/intake/poll.json`. `tickets.readiness_timeout_seconds` (300, 10 to 1800) limits the judge.
 
 ## Variable names
 

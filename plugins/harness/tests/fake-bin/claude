@@ -8,8 +8,9 @@
 # HO_FAKE_CLAUDE_FAIL_AFTER seconds.
 # HO_FAKE_CLAUDE_SHOW_ENV=<NAME>: also log "env NAME=<value>".
 # HO_FAKE_CLAUDE_ON_EXIT=<shell command>: run just before it leaves on "/exit".
+# HO_FAKE_CLAUDE_TRANSCRIPT=1: also write a transcript line (see below).
 # HO_FAKE_CLAUDE_VERSION=<v>: what --version prints first (default 0.0.0).
-# HO_FAKE_CLAUDE_TRANSCRIPT=1 (with HO_FAKE_CLAUDE_HOLD=exit): keep a transcript JSONL at
+# With HO_FAKE_CLAUDE_HOLD=exit as well, HO_FAKE_CLAUDE_TRANSCRIPT=1 keeps that transcript going at
 # ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<cwd with non-alphanumerics as ->/<session>.jsonl.
 # Each whole typed line becomes a "user" record. While <h>.busy exists in the fake terminal
 # folder, a line is queued instead ("queue-operation" enqueue); the queue is released as
@@ -30,6 +31,20 @@ printf '%s\n' "$line" >> "$log"
 if [ -n "${HO_FAKE_CLAUDE_SHOW_ENV:-}" ]; then
   printf 'env %s=%s\n' "$HO_FAKE_CLAUDE_SHOW_ENV" "$(printenv "$HO_FAKE_CLAUDE_SHOW_ENV" || true)" >> "$log"
 fi
+# HO_FAKE_CLAUDE_TRANSCRIPT=1: write one line to the transcript Claude Code would keep for this
+# session: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<working folder, each other byte as ->/<id>.jsonl
+if [ "${HO_FAKE_CLAUDE_TRANSCRIPT:-}" = 1 ]; then
+  prev="" fsid=""
+  for a in "$@"; do
+    case $prev in --session-id | --resume) fsid=$a ;; esac
+    prev=$a
+  done
+  if [ -n "$fsid" ]; then
+    tdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+    mkdir -p "$tdir"
+    printf '{"type":"user","sessionId":"%s","message":"fake turn"}\n' "$fsid" >> "$tdir/$fsid.jsonl"
+  fi
+fi
 if [ -n "${HO_FAKE_CLAUDE_FAIL_MODEL:-}" ]; then
   prev=""
   for a in "$@"; do
@@ -39,6 +54,16 @@ if [ -n "${HO_FAKE_CLAUDE_FAIL_MODEL:-}" ]; then
     fi
     prev=$a
   done
+fi
+# "auth status" answers like the real CLI: JSON with "loggedIn", exit 0 when logged in and
+# exit 1 when not. HO_FAKE_CLAUDE_LOGGED_OUT=1 logs out; =lie prints false but exits 0.
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+  [ -z "${HO_FAKE_CLAUDE_SLEEP:-}" ] || sleep "$HO_FAKE_CLAUDE_SLEEP"
+  case ${HO_FAKE_CLAUDE_LOGGED_OUT:-} in
+    1) printf '{\n  "loggedIn": false\n}\n'; exit 1 ;;
+    lie) printf '{\n  "loggedIn": false\n}\n'; exit 0 ;;
+    *) printf '{\n  "loggedIn": true\n}\n'; exit 0 ;;
+  esac
 fi
 if [ -n "${HO_FAKE_CLAUDE_STDOUT:-}" ]; then
   printf '%s\n' "$HO_FAKE_CLAUDE_STDOUT"

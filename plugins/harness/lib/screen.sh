@@ -336,7 +336,7 @@ ho_screen_trust_lock() {
 ho_screen_trust_unlock() { rm -rf "$HO_SCREEN_TRUST_LOCK"; }
 
 # ho_screen_pretrust <dir>: trust <dir> for the runtime before a session starts there.
-# Consent first (PR #97 review, the Codex security finding): the person must already have
+# Consent first (PR #97 review, a security finding): the person must already have
 # trusted the project folder in the runtime, in the state file the session will use. That is
 # the one interactive consent this needs; the repository itself is the untrusted side, so
 # "inside the project" alone is not consent. With it, a folder inside the project, or in a

@@ -106,7 +106,7 @@ ho_term_open() {
 
 # ho_term_enter_delay: terminal.enter_delay_seconds as a JSON number, whole, from 0 to 10. A
 # string, a non-number or a larger value is refused (78) before anything is typed, so a config value
-# cannot hold a send open for long (Codex review, PR #95).
+# cannot hold a send open for long (PR #95 review).
 ho_term_enter_delay() {
   local v
   v=$(ho_cfg '.terminal.enter_delay_seconds | if . == null then null elif type == "number" then tostring else "x" end' 2) || return 78

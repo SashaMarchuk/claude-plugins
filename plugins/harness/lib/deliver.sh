@@ -43,7 +43,8 @@
 # 64 usage, 65 refused, 66 no such session of this run, 78 runtime data missing or a setting
 # out of range.
 #
-# Requires lib/run.sh, lib/config.sh, lib/files.sh, lib/term.sh, lib/sessions.sh and lib/screen.sh.
+# Requires lib/run.sh, lib/config.sh, lib/files.sh, lib/term.sh, lib/sessions.sh, lib/screen.sh and
+# lib/runtime.sh.
 
 HO_DELIVER_MAX_TEXT=65536
 
@@ -86,7 +87,7 @@ ho_deliver_outside_project() {
 # ho_deliver_exec_path <program>: the PATH for a program that delivery runs (the version check
 # and the message command): the fixed system folders and the program's own folder, never a
 # folder of the project or a worktree, and never the caller's PATH. So a "#!/usr/bin/env bash"
-# line cannot pick up an interpreter planted in a project folder (Codex review, PR #95). The
+# line cannot pick up an interpreter planted in a project folder (PR #95 review). The
 # launch's own PATH is a separate matter (issue #91).
 ho_deliver_exec_path() {
   local d p=/usr/bin:/bin:/usr/sbin:/sbin
@@ -136,8 +137,9 @@ ho_deliver_profile() {
   local name f
   name=$(jq -r '.runtime // ""' "$1")
   case $name in '' | *[!a-z0-9-]*) printf 'harness: the record names no usable runtime: %s\n' "$name" >&2; return 78 ;; esac
-  f="$HO_ROOT/runtimes/$name.json"
-  [ -f "$f" ] && jq -e '(.transcript.glob | type == "string") and (.screen.prompt_prefixes | type == "array")' "$f" >/dev/null 2>&1 || {
+  # The same lookup as the launch (the user's runtimes folder, then the shipped one).
+  f=$(ho_rt_file "$name" 2>/dev/null) || f=""
+  [ -n "$f" ] && [ -f "$f" ] && jq -e '(.transcript.glob | type == "string") and (.screen.prompt_prefixes | type == "array")' "$f" >/dev/null 2>&1 || {
     printf 'harness: runtime file %s has no transcript or screen data for delivery\n' "$f" >&2
     return 78
   }
@@ -146,7 +148,7 @@ ho_deliver_profile() {
 
 # ho_deliver_transcript <record> <profile>: the session's transcript file, found by its session
 # ID under the config folder the launch recorded (transcript_root). Delivery never runs the
-# account command (Codex review, PR #95). The recorded folder is checked again as the launch
+# account command (PR #95 review). The recorded folder is checked again as the launch
 # made it: an absolute path with no line break, and a folder. The file found must be a regular,
 # readable file inside it. The path is kept in the record once found.
 ho_deliver_transcript() {
@@ -163,7 +165,7 @@ ho_deliver_transcript() {
   ho_session_uuid_ok "$sid" 2>/dev/null || return 1
   # The cached path is resolved first (".." segments and links of its folders), then it counts
   # only inside the resolved root and only when its file name is <id>.jsonl or a folder on its
-  # path is <id>, so it cannot point at another session's transcript (Codex review).
+  # path is <id>, so it cannot point at another session's transcript (PR #95 review).
   local rroot cdir
   rroot=$(cd "$root" 2>/dev/null && pwd -P) || return 1
   cached=$(jq -r '.transcript // ""' "$rec")
@@ -444,7 +446,7 @@ ho_deliver_chord() {
   want=$(jq -r '.force_send.min_version // ""' "$profile")
   [ -n "$bytes" ] && [ -n "$want" ] || { ho_ledger_append deliver-force-send id "$id" result skipped reason "the runtime data names no usable send-now chord"; return 1; }
   # The version comes from the runtime the launch checked and recorded, checked again here;
-  # never from a PATH lookup, which a folder the project controls could win (Codex review).
+  # never from a PATH lookup, which a folder the project controls could win (PR #95 review).
   cmd=$(jq -r '.runtime_path // ""' "$rec")
   case $cmd in /*) ;; *) cmd="" ;; esac
   if [ -n "$cmd" ] && { [ ! -x "$cmd" ] || ! ho_session_runtime_path_ok "$cmd" 2>/dev/null; }; then cmd=""; fi
@@ -494,7 +496,7 @@ ho_deliver_wait() {
 # The command runs in its own process group. On timeout, and also after a non-zero exit (for
 # what is left of the group), the group gets SIGTERM, a grace of
 # delivery.message_kill_grace_seconds (default 2), then SIGKILL, so the call returns within the
-# timeout plus the grace (Codex review, validator N4). Only that exact group is signalled, and
+# timeout plus the grace (PR #95 review, validator N4). Only that exact group is signalled, and
 # the shell's own notice of a stopped job is not printed.
 ho_deliver_message() {
   local profile=$1 rec=$2 id=$3 file=$4 sid el pid deadline grace cmd rc=0

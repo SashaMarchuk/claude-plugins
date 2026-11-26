@@ -4,6 +4,8 @@
 # H-137 (a byte limit for typed text; longer text through a file). Design S8-24, D42f, D42g,
 # D37-LIFECYCLE-4 (the send-now chord is runtime data). The screens are fixture files.
 . "$HO_TESTS_DIR/sessions-setup.sh"
+# This file launches many sessions in one run: a run of its own with a worker cap that fits.
+run=$("$h" run new --workers 300)
 
 # A copy of the plugin, so a test runtime can name a message command (runtime data lives in
 # the plugin's runtimes/ folder). Engine code is the same files.
@@ -401,7 +403,7 @@ out=$(HO_FAKE_MSG_MODE=slow-fail deliver z1 --text "run tests" 2>&1) && rc=0 || 
 sleep 1.5
 z1id=$(printf '%s' "$out" | sed -n 's/.*id=\(ho-[0-9a-f]*\).*/\1/p')
 assert_eq "N1, H-101: a slow writer inside the stopped group: delivered once, never twice (exit 0, 1 copy)" "0 1" \
-  "$rc $(jq -r 'select(.type == "user") | .message.content | strings' "$(trof z1)" | grep -c -F "$z1id: " || true)"
+  "$rc $(jq -r 'select(.type == "user") | .message | objects | .content | strings' "$(trof z1)" | grep -c -F "$z1id: " || true)"
 # ---- N2: a transcript unreadable after the command: unknown, not sent again, clean output ---
 start z2
 screen z2 idle-empty

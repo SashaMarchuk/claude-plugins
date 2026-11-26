@@ -1,7 +1,12 @@
 {
   "schemaVersion": 2,
-  "_comment": "Launch data for one runtime (design D37-RUNTIME-1: engine code holds no runtime name). Only the fields the session launcher and graceful close need; full runtime profiles come later (tasks.md 19.1). In argv lists, {session_id}, {model} and {title} are filled in by the engine; {prompt} becomes the prompt file's text when the session starts.",
+  "_comment": "Runtime profile (D31, D37-RUNTIME-2): all the data the engine needs about one tool; engine code holds no runtime name (D37-RUNTIME-1). A user may add or replace a profile in <user dir>/runtimes/; a project never can (D37-FLOW-8). In argv lists, {session_id}, {model} and {title} are filled in by the engine; {prompt} becomes the prompt file's text when the session starts. In path patterns, {home}, {config_dir}, {skill}, {plugin} and {name} are filled in. Checked against claude --help: -p, --session-id, --resume, --permission-mode (plan is read-only) and auth status. Not yet exercised by a real run: skill_call, session_log, limits and plugin_skill_paths. agent_paths is the agents folder of the config folder.",
+  "title": "Claude Code",
   "command": "claude",
+  "modes": [
+    "interactive",
+    "noninteractive"
+  ],
   "argv": {
     "new": [
       "--session-id",
@@ -18,6 +23,21 @@
     "title": [
       "-n",
       "{title}"
+    ],
+    "prompt": [
+      "{prompt}"
+    ]
+  },
+  "noninteractive": {
+    "argv": [
+      "-p",
+      "--session-id",
+      "{session_id}"
+    ],
+    "resume": [
+      "-p",
+      "--resume",
+      "{session_id}"
     ],
     "prompt": [
       "{prompt}"
@@ -40,27 +60,47 @@
       "dontAsk"
     ]
   },
+  "sandbox": {
+    "read-only": [
+      "--permission-mode",
+      "plan"
+    ]
+  },
+  "skill_call": "/{skill}",
+  "config_dir": {
+    "env": "CLAUDE_CONFIG_DIR",
+    "default": "{home}/.claude"
+  },
+  "session_log": "{config_dir}/projects/<project folder>/<session id>.jsonl",
+  "limits": "The subscription usage endpoint gives five_hour and seven_day utilization with their reset times.",
+  "capabilities": {
+    "hooks": true,
+    "session_messages": true
+  },
+  "check": {
+    "argv": [
+      "auth",
+      "status"
+    ],
+    "expect": "\"loggedIn\": *true",
+    "timeout_seconds": 20
+  },
+  "skill_paths": [
+    "{config_dir}/skills/{skill}/SKILL.md",
+    "{config_dir}/commands/{skill}.md"
+  ],
+  "plugin_skill_paths": [
+    "{config_dir}/plugins/cache/*/{plugin}/*/skills/{name}/SKILL.md",
+    "{config_dir}/plugins/cache/*/{plugin}/*/commands/{name}.md"
+  ],
+  "agent_paths": [
+    "{config_dir}/agents/{agent}.md"
+  ],
+  "install": "install Claude Code (https://docs.claude.com/en/docs/claude-code/setup), then log in with: claude auth login",
   "exit_command": "/exit",
   "_comment_delivery": "Instruction delivery (H-101, H-099, H-137; design S8-24, D42f, D42g, D37-LIFECYCLE-4). message.argv: a command that posts one instruction to the session as a message between sessions; null means no script route is known, so the engine goes straight to the typed fallback (the orchestrator session sends its own messages with the runtime's message tool and asks the engine only for the proof). Placeholders: {session_id}, {instruction_id}, {text_file}. transcript: where the session transcript is and which records prove delivery; the format is internal to the runtime and changes between versions. screen: what an idle session with an empty input line looks like; any other screen gets nothing typed. force_send: the queued-message send-now chord as control bytes, and the lowest runtime version that knows it.",
   "message": {
     "argv": null
-  },
-  "transcript": {
-    "root_env": "CLAUDE_CONFIG_DIR",
-    "default_root": ".claude",
-    "glob": "projects/*/{session_id}.jsonl",
-    "user_types": [
-      "user"
-    ],
-    "reply_types": [
-      "assistant"
-    ],
-    "delivered_attachments": [
-      "queued_command"
-    ],
-    "queue_type": "queue-operation",
-    "queue_enqueue": "enqueue",
-    "queue_remove": "remove"
   },
   "screen": {
     "rule_char": "─",
@@ -79,6 +119,24 @@
       19
     ],
     "min_version": "2.1.275"
+  },
+  "transcript": {
+    "_comment": "Where a session's transcript is found by its session ID (H-090). root_env names the variable that moves the folder (account environment first, then the launch environment); root_default is used otherwise, with {home} for HOME. glob is relative to the root.",
+    "root_env": "CLAUDE_CONFIG_DIR",
+    "root_default": "{home}/.claude",
+    "glob": "projects/*/{session_id}.jsonl",
+    "user_types": [
+      "user"
+    ],
+    "reply_types": [
+      "assistant"
+    ],
+    "delivered_attachments": [
+      "queued_command"
+    ],
+    "queue_type": "queue-operation",
+    "queue_enqueue": "enqueue",
+    "queue_remove": "remove"
   },
   "screen_file": "claude-code.screen.json",
   "trust": {

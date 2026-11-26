@@ -229,3 +229,62 @@ Source: interview 2026-11-24 R15.12; D37-VERIFICATION-5
 #### Scenario: Ignore is set
 - **WHEN** the user has set the harness to ignore external review and an external code-review system comments on a pull request
 - **THEN** the harness does not act on those comments
+
+### Requirement: H-145 After a pull request opens, the harness checks whether the repository has an automatic reviewer
+When the harness opens a pull request, it SHALL check whether the repository has an automatic reviewer: a bot that reviewed or commented on recent pull requests of that repository, such as Codex, CodeRabbit or Claude. This SHALL hold for every flow: GSD, superpowers, the Matt Pocock skills or a custom flow. A detected bot SHALL decide only the wait, not trust (H-061).
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.1, RP3.2
+Decided: design.md D44
+
+#### Scenario: Codex reviewed the recent pull requests
+- **WHEN** the harness opens a pull request in a repository where a Codex review bot reviewed most recent pull requests
+- **THEN** the harness records Codex as the repository's automatic reviewer
+
+#### Scenario: Any flow
+- **WHEN** a custom flow opens a pull request
+- **THEN** the same check runs as for GSD
+
+#### Scenario: A detected bot that is not approved
+- **WHEN** the detected bot is not in the project's list of approved review bots
+- **THEN** the harness waits for it, shows its comments to a human and does not apply them (H-061, H-062)
+- **AND** the configuration skill offers to add the bot to the list, which takes effect only after the person's yes
+
+### Requirement: H-146 The harness waits for a detected reviewer and then reacts
+When the repository has an automatic reviewer, the harness SHALL wait for its result before the review-comments step reads the comments, and then react to them (H-061). The wait SHALL end when the reviewer finishes, when no sign of a start comes within a first limit, or at a total limit. Both limits SHALL be configurable, with researched defaults.
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.1, RP3.3
+Decided: design.md D44
+
+#### Scenario: The reviewer finishes
+- **WHEN** the reviewer posts its review within the limits
+- **THEN** the review-comments step reads it and the harness reacts to it
+
+#### Scenario: The reviewer never starts
+- **WHEN** no sign of a start comes from the reviewer within the first limit
+- **THEN** the harness writes one line in the ticket thread and goes on without that review
+
+#### Scenario: The reviewer starts but does not finish
+- **WHEN** the reviewer showed a start but posted no result within the total limit
+- **THEN** the harness goes on, records that the review did not arrive, and moves the ticket to needs-review before any merge
+
+#### Scenario: A fix is pushed
+- **WHEN** the harness pushes a fix after a review and the reviewer reviews new commits in this repository
+- **THEN** the harness waits for the reviewer again on the new commit
+
+### Requirement: H-147 With no detected reviewer, the harness still waits a short fixed time
+When the repository has no detected automatic reviewer, the harness SHALL still wait a short fixed time after it opens a pull request, and SHALL then read any review comments before it goes on. The time SHALL be configurable, with a researched default that is short enough for active work.
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.2, RP3.3
+Decided: design.md D45
+
+#### Scenario: No reviewer, nothing arrives
+- **WHEN** the repository has no detected reviewer and no comment arrives within the fixed wait
+- **THEN** the harness goes on after the wait
+
+#### Scenario: A first bot review arrives in a repository with no history
+- **WHEN** the repository has no detected reviewer and a bot review arrives within the fixed wait
+- **THEN** the harness handles it as H-061 says, and the next check detects the bot as the repository's reviewer
+
+#### Scenario: The user sets another wait
+- **WHEN** the user sets the fixed wait to zero
+- **THEN** the harness does not wait

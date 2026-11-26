@@ -127,6 +127,18 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 20.4 `/harness:feedback`: an issue without labels in the plugin's own repository, with technical context and no private data, shown in full and sent only after a yes; verify a no sends nothing (H-140; D43)
 - [ ] 20.5 Release checklist file in the plugin repository: automated tests, real terminals and the main success flow (H-141, H-142, H-143)
 
+## 20a. Owner review-page answers (2026-11-26)
+
+- [ ] 20a.1 Detect the repository's automatic reviewer from recent pull requests; wait with a first-signal limit and a total limit; a short fixed wait when there is none; offer to list a detected bot (H-145, H-146, H-147; D44, D45)
+- [ ] 20a.2 Check after each terminal action: exact check, second sample, cheap checker role; an unclear answer fails; a model answer never allows typing (H-148; D46)
+- [ ] 20a.3 Confidence log by terminal, runtime and operating system version, and the light, medium and deep check levels (H-149; D47)
+- [ ] 20a.4 `models.json` with the four roles for each runtime; a step, check or chain names a role (H-150; D48)
+- [ ] 20a.5 Offer to run printed install steps after a yes in an attended start; never in an unattended one; project install steps never offered (H-073; D49)
+- [ ] 20a.6 Machine fingerprint, its digest in the local selection, block, confirm and note classes, and `/harness:config --recheck` (H-151; D50)
+- [ ] 20a.7 Scan-first setup with at most five questions (H-152; D51)
+- [ ] 20a.8 Readiness check: the read-only `harness doctor` command and the skill; blind naming test for its name (H-154; D52)
+- [ ] 20a.9 Setup evaluation: machine-state fixtures, pass criteria, one mutant per criterion, three runs per state (H-153; D51)
+
 ## 21. Evaluation programme
 
 - [ ] 21.1 Isolation self-test of the eval lane; verify the installed 0.6.0 and its data are unchanged (R27.14, R27.15)
@@ -140,6 +152,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 21.9 Verify the main success flow works end to end, as the release checklist states it (H-143; R30.5, R27.17)
 - [ ] 21.10 Real-terminal acceptance before release: run the iTerm2 backend once on the real app, from launch to close, together with the two trials of 17.2, and log the result; until then the backend counts as tested against fakes only (H-142; D42n; issue #78)
 - [ ] 21.11 Run the release checklist in full and record the results for the release PR (H-141)
+- [ ] 21.12 Run the setup evaluation and record its result for the release PR (H-153)
 
 ## 22. Release
 

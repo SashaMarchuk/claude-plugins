@@ -433,3 +433,53 @@ Source: owner message 2026-11-25 (iTerm2 incident); D37-SESSIONS-5; D42k
 #### Scenario: The configuration changes during a run
 - **WHEN** the account label of a role changes in the configuration while a run is active
 - **THEN** sessions that already exist keep their recorded label, and only new sessions use the new one
+
+### Requirement: H-148 Every terminal action is checked after it is done, with a cheap model where no exact proof exists
+After each action on a session's terminal, the harness SHALL check that the result is what it expected, with an exact check first. Where no exact check gives an answer, a model in the cheap checker role (H-150) SHALL read the screen. A model answer alone SHALL NOT allow typing into a session or closing it. An unclear answer SHALL count as a failed check.
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.9
+Decided: design.md D46
+
+#### Scenario: Delivery is proven exactly
+- **WHEN** the harness delivers an instruction and the session's transcript records it
+- **THEN** the check passes without a model call
+
+#### Scenario: No exact proof, the cheap checker confirms
+- **WHEN** the harness launches a session and no exact check can prove that the session is ready for input
+- **THEN** a model in the cheap checker role reads the screen
+- **AND** the harness records its answer and the screen it read
+
+#### Scenario: The cheap checker is unsure
+- **WHEN** the cheap checker cannot say whether the action worked
+- **THEN** the check counts as failed, and the harness handles it as a failed action (H-091)
+
+#### Scenario: A model answer never allows typing by itself
+- **WHEN** the cheap checker reads a session as idle but the exact checks of H-099 say busy or unknown
+- **THEN** the harness types nothing
+
+#### Scenario: No model name in the check
+- **WHEN** the user maps the cheap checker role to another model
+- **THEN** the check uses that model, and no engine code changes
+
+### Requirement: H-149 A confidence log by version sets how deep the checks go
+The harness SHALL log which terminal actions worked for each combination of terminal app version, runtime version and operating system. A new combination SHALL get the deepest checks. The first run of a day SHALL get more checks than later runs that day. A known-good combination SHALL get light checks. A failed light check SHALL bring back the deep checks.
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.10
+Decided: design.md D47
+
+#### Scenario: A new version combination
+- **WHEN** the runtime updates and the harness launches its first session with the new version
+- **THEN** it runs the deep checks for every action of that session
+- **AND** it records each result under the new combination
+
+#### Scenario: A known-good combination later the same day
+- **WHEN** a combination already passed the deep checks today and the harness delivers another instruction
+- **THEN** it runs only the light checks
+
+#### Scenario: A light check fails
+- **WHEN** a light check fails or is unclear on a known-good combination
+- **THEN** the combination is marked suspect and the next actions get the deep checks again
+
+#### Scenario: The first run of a new day
+- **WHEN** a combination is known-good from an earlier day and no run used it today
+- **THEN** the first session of the day gets the medium checks

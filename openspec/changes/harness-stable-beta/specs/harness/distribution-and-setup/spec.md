@@ -204,3 +204,120 @@ Source: owner decision 2026-11-26; interview 2026-11-24 R30.5, R27.17
 #### Scenario: The merge is not confirmed
 - **WHEN** the run reports a merge and git does not show the change in the target branch
 - **THEN** the checklist item is not passed
+
+### Requirement: H-151 Every start checks that the settings profile is current for this machine
+Before a run, the harness SHALL find the settings profile it will use, and SHALL start the first setup if there is none. It SHALL check that the profile still matches this machine. A change that breaks the settings SHALL stop the start. A change in how the run behaves SHALL be asked about in an attended start and SHALL stop an unattended one. A change with no effect SHALL only be logged.
+
+Source: owner decision 2026-11-26 (review page, item 4): RP4.1
+Decided: design.md D50
+
+#### Scenario: No profile
+- **WHEN** a run starts in a project with no settings profile on this machine
+- **THEN** an attended start opens the first setup, and an unattended start stops with an attention notice
+
+#### Scenario: Nothing changed
+- **WHEN** a run starts and the machine still matches the approved profile
+- **THEN** the run starts and asks nothing
+
+#### Scenario: A runtime the plan uses is logged out
+- **WHEN** a run starts and a runtime that a step uses is no longer logged in
+- **THEN** the run stops before any worker starts and names the runtime with its login step
+
+#### Scenario: A flow system version changed
+- **WHEN** an attended run starts and the flow system was updated for one runtime since the approval
+- **THEN** the harness shows the change, runs the readiness check (H-154) and asks one yes before it records the new state
+
+#### Scenario: An unattended start finds a change that needs a yes
+- **WHEN** a restart after a crash finds a change that needs the person's yes
+- **THEN** it stops with an attention notice that names the change, and it asks nothing
+
+#### Scenario: A patch update only
+- **WHEN** a run starts and only a patch version of a runtime changed
+- **THEN** the harness writes one log line and the run starts
+
+#### Scenario: What the start compares
+- **WHEN** a run starts with an approved profile
+- **THEN** it compares the runtimes and their logins, the accounts that roles use, the flow system for each runtime, the terminal backends and the repository access with the approved state
+
+#### Scenario: The approved state changes only after a yes
+- **WHEN** the start finds a change and nobody says yes to it
+- **THEN** the record of the approved state stays as it was
+
+### Requirement: H-152 The first setup is short: the harness studies the machine and recommends
+The first setup SHALL study the machine before it asks anything. It SHALL ask only what it cannot find out and what the person must choose, and SHALL show a recommended answer with its reason. A default user SHALL answer at most five questions. The setup SHALL write nothing before the last yes, and SHALL never pick a flow for the person.
+
+Source: owner decision 2026-11-26 (review page, item 4): RP4.2, RP4.3
+Decided: design.md D51
+
+#### Scenario: A machine with one runtime
+- **WHEN** a person runs the first setup on a machine with only Claude Code logged in and no harness config in the repository
+- **THEN** the setup asks at most four questions: the flow and requirements format, the autonomy level, the limit thresholds, and the final save
+
+#### Scenario: The repository already has a config
+- **WHEN** a person runs the first setup in a repository that holds a committed harness config
+- **THEN** the setup first asks whether to use it, and if yes it does not ask the flow or the autonomy questions
+
+#### Scenario: Something the machine shows is not asked
+- **WHEN** the machine has one account and one supported terminal app
+- **THEN** the setup asks neither about the account nor about the terminal
+
+#### Scenario: The default flow is not installed
+- **WHEN** the shipped default flow system is not installed for the main runtime
+- **THEN** the setup still offers it, marks it "not installed" with its install step, and names a flow that runs now
+
+#### Scenario: The person stops halfway
+- **WHEN** the person leaves the setup before the last yes
+- **THEN** no file is written
+
+### Requirement: H-153 A separate evaluation proves the setup flow before release
+The plugin SHALL have an evaluation of the setup flow over a fixed set of machine states, run before every release. For each state it SHALL check the number of questions, that nothing the machine shows is asked, that no default is wrong, and that nothing is installed or written without a yes.
+
+Source: owner decision 2026-11-26 (review page, item 4): RP4.3
+Decided: design.md D51
+
+#### Scenario: The evaluation runs before a release
+- **WHEN** the release checklist (H-141) runs
+- **THEN** the setup evaluation runs over every machine state and its result goes into the release PR
+
+#### Scenario: A setup asks what it could detect
+- **WHEN** a change makes the setup ask which terminal app to use on a machine with one supported terminal app
+- **THEN** the evaluation fails
+
+#### Scenario: A setup installs without a yes
+- **WHEN** a change makes the setup run an install command before the person's yes
+- **THEN** the evaluation fails
+
+#### Scenario: The machine states
+- **WHEN** the setup evaluation is built
+- **THEN** it covers at least a fresh machine, Claude Code only, Codex only, both runtimes, a flow system for one runtime only, a stale profile after an upgrade, several accounts and no tracker access
+
+#### Scenario: An unattended start waits for an answer
+- **WHEN** a change makes an unattended start wait for an answer
+- **THEN** the evaluation fails
+
+### Requirement: H-154 A readiness check skill tells whether the settings can work
+The plugin SHALL provide a readiness check skill, separate from the configuration skill and the project setup skill. It SHALL check whether the chosen settings can work on this machine, for every runtime and account the plan uses. It SHALL show one verdict and every missing item with its install step. Its scripted part SHALL be a read-only engine command that the start check also runs.
+
+Source: owner decision 2026-11-26 (review page, item 4): RP4.4
+Decided: design.md D52
+
+#### Scenario: GSD is set up for both runtimes
+- **WHEN** the plan runs GSD steps on Claude Code and on Codex, and GSD is installed for both at the same version
+- **THEN** the verdict is ready
+
+#### Scenario: GSD versions differ
+- **WHEN** GSD is installed for both runtimes at different versions
+- **THEN** the verdict is ready with notes, and the note names the older runtime and its update step
+
+#### Scenario: A step's command is unknown for a runtime
+- **WHEN** the check cannot confirm the form in which Codex calls a step's command
+- **THEN** it reports that item as unknown, not as ready
+
+#### Scenario: The setup ends with the check
+- **WHEN** the first setup reaches its last step
+- **THEN** it runs the readiness check on the chosen plan before it asks the final save question
+
+#### Scenario: The start check uses the same command
+- **WHEN** a run starts
+- **THEN** the start check runs the read-only part of the readiness check and stops on a missing item
+

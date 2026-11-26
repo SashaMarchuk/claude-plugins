@@ -926,3 +926,13 @@ hold_case rr1-m1-limit-whole "M1: a whole limit notice between the real box and 
 # M2: a line with two leading spaces is not the status area unless it has a status shape.
 prose2() { rbox; printf '  Neutral text that only starts with two spaces.\n'; rstatus; }
 hold_case rr1-m2-prose "M2: a two-space text line between the real box and its status lines" prose2
+# PR #105 review round 2: a stale hold, then a later indented line glued to the top rule, then
+# the real box: no hold, so the continue message is delivered.
+rlater() { local n; n=$(awk 'END { print NR }' "$sf/$1.txt"); rhead; head -n "$((n - $2))" "$sf/$1.txt"; printf '%*sThis is example output, not an active hold.\n' "$3" ''; rtail idle-full; }
+start rr2-stale
+rlater limit-notice-plain 1 10 > "$(fout rr2-stale)"
+out=$(deliver rr2-stale --text "continue" 2>&1) && rc=0 || rc=$?
+assert_eq "PR #105 round 2: a stale notice, then a later line indented 10 above the real box: no hold, delivered (exit 0)" "0" "$rc"
+# A plain two-space line right under the box is not the status line: nothing is typed.
+under1() { rbox; printf '  Neutral text that only starts with two spaces.\n'; }
+hold_case rr2-under "PR #105 round 2: a plain two-space line right under the real box" under1

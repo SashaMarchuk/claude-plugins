@@ -118,6 +118,24 @@ done
 # block of the screen.
 { head_of idle-full; sed '$d' "$fix/limit-notice-plain.txt"; tail_of idle-full; printf '  Neutral text that only starts with two spaces.\n'; } > "$base/real.txt"
 assert_eq "#104 M2: a two-space text line under the status area keeps the tail as text" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
+# PR #105 review round 2 (Codex P2 on a834cb9): a stale hold followed by one deeply indented
+# later line is no hold, with or without the real box under it. An indented line is set aside
+# only as the runtime's notification line: right-aligned and glued to the top rule of a closed
+# box, never without a box.
+later() { printf '%*sThis is example output, not an active hold.\n' "$1" ''; }
+for fx in limit-notice-plain:1 trust-dialog:0 password-prompt:0; do
+  f=${fx%:*} d=${fx#*:}
+  for ind in 10 24 40; do
+    n=$(awk 'END { print NR }' "$fix/$f.txt")
+    { head_of idle-full; head -n "$((n - d))" "$fix/$f.txt"; later "$ind"; } > "$base/real.txt"
+    assert_eq "PR #105 round 2: $f.txt, then a later line indented $ind, no box: no hold" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
+    { head_of idle-full; head -n "$((n - d))" "$fix/$f.txt"; later "$ind"; tail_of idle-full; } > "$base/real.txt"
+    assert_eq "PR #105 round 2: $f.txt, then a later line indented $ind, then the real box: no hold" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
+  done
+done
+# The line right under the box counts as the status line only with the real status line shape.
+{ head_of idle-full; sed '$d' "$fix/limit-notice-plain.txt"; tail_of idle-box-only; printf '  Neutral text that only starts with two spaces.\n'; } > "$base/real.txt"
+assert_eq "PR #105 round 2: a plain two-space line right under the box is not the status line" "none" "$("$h" screen "$run" classify "$base/real.txt" 2>/dev/null)"
 # The real screens themselves hold no shape.
 for f in "$real"/*.txt; do
   plain "$f" > "$base/real.txt"

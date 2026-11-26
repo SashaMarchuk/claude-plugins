@@ -19,6 +19,8 @@
 # HO_FAKE_CLAUDE_DEAF=1 keeps the transcript but records nothing that is typed.
 set -euo pipefail
 if [ "${1:-}" = "--version" ]; then
+  # HO_FAKE_CLAUDE_VERSION_SLEEP=<s>: answer --version only after that many seconds.
+  [ -z "${HO_FAKE_CLAUDE_VERSION_SLEEP:-}" ] || sleep "$HO_FAKE_CLAUDE_VERSION_SLEEP"
   echo "${HO_FAKE_CLAUDE_VERSION:-0.0.0} (fake claude)"
   exit 0
 fi

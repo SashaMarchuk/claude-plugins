@@ -769,3 +769,47 @@ jq '.terminal.enter_delay_seconds = "1"' "$base/proj8.bak" > "$proj/.harness/con
 rc=0; deliver m8b --text "run tests" >/dev/null 2>&1 || rc=$?
 assert_eq "minor: terminal.enter_delay_seconds given as a string is refused (78), 0 bytes" "78 0" "$rc $(inbytes m8b)"
 cp "$base/proj8.bak" "$proj/.harness/config.json"
+
+# ==== Fix round 9 of PR #95 (validator B7; Codex P2 lines 191 and 454) =========================
+set_runtime claude-code
+# ---- B7: the owner-action line of the busy branch holds no screen text -----------------------
+start d9-busy
+screen d9-busy idle-empty
+jq '.terminal.enter_delay_seconds = 4' "$base/proj8.bak" > "$proj/.harness/config.json"
+HO_FAKE_TERM_ECHO_EXTRA=ZKEYZ deliver d9-busy --text "run tests PAYLOADZ" > "$base/d9.out" 2>&1 &
+d9=$!
+i=0; while [ "$(inbytes d9-busy)" = 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+sleep 0.5
+busy8 > "$(fout d9-busy)"
+rc=0; wait "$d9" || rc=$?
+cp "$base/proj8.bak" "$proj/.harness/config.json"
+oa=$(ledger | jq -c 'select(.kind == "owner-action" and (.title | contains("d9-busy")))')
+assert_eq "B7: a busy mark before Enter gives no Enter and one owner-action line" "1 1" "$rc $(printf '%s\n' "$oa" | grep -c . || true)"
+assert_eq "B7: the whole owner-action line holds neither the instruction text nor a typed key" "" "$(printf '%s\n' "$oa" | grep -e PAYLOADZ -e ZKEYZ || true)"
+assert_eq "B7: no ledger line of that delivery holds the instruction text or a typed key" "" "$(ledger | grep -F d9-busy | grep -e PAYLOADZ -e ZKEYZ || true)"
+
+# ---- Codex P2 (line 191): no linked folder below the transcript root -------------------------
+start d9-link
+s9=$(rec d9-link .session_id)
+mkdir -p "$base/elsewhere9/x"
+jq -cn '{type: "user", message: {role: "user", content: "ho-link0001: stop"} }' > "$base/elsewhere9/x/$s9.jsonl"
+rm -f "$(trof d9-link)"
+ln -s "$base/elsewhere9/x" "$HOME/.claude/projects/aaa-linked"
+jq 'del(.transcript)' "$run/sessions/d9-link.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/d9-link.json"
+rc=0; o=$("$h" session "$run" proof d9-link ho-link0001 2>&1) || rc=$?
+assert_eq "Codex P2: a linked folder below the transcript root cannot forge a proof (exit 1)" "1" "$rc"
+assert_eq "Codex P2: no delivered line through the linked folder" "" "$(printf '%s' "$o" | grep '^delivered' || true)"
+rm -f "$HOME/.claude/projects/aaa-linked"
+
+# ---- Codex P2 (line 454): the version check has a time bound --------------------------------
+start d9-ver
+screen d9-ver busy
+: > "$(fbusy d9-ver)"
+set_wait 10
+t0=$(date +%s)
+out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 HO_FAKE_CLAUDE_VERSION_SLEEP=20 deliver d9-ver --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+el=$(( $(date +%s) - t0 ))
+set_wait 2
+assert_eq "Codex P2: a version check that hangs is stopped; deliver returns within the bound (at most 16 s)" "yes" "$([ "$el" -le 16 ] && echo yes || echo "no (${el}s)")"
+assert_eq "Codex P2: with the version unknown no chord is sent" "" "$(calls | grep "byte $(rec d9-ver .handle) " || true)"
+assert_contains "Codex P2: the skipped chord names the unknown version" "$(ledger | grep -F deliver-force-send | tail -n 1)" "unknown"

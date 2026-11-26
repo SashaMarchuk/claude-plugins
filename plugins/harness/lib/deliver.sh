@@ -188,11 +188,27 @@ ho_deliver_transcript() {
   glob=${glob//\{session_id\}/$sid}
   for f in "$root"/$glob; do
     [ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ] || continue
+    # No folder below the root may be a link: a linked folder could lead to a planted
+    # transcript (PR #95 review). The root itself was checked above.
+    ho_deliver_no_link_below "$root" "$f" || continue
     ho_session_set "$rec" '.transcript = $t' --arg t "$f" >/dev/null 2>&1 || true
     printf '%s\n' "$f"
     return 0
   done
   return 1
+}
+
+# ho_deliver_no_link_below <root> <path>: 0 when no folder between <root> and <path> is a link.
+ho_deliver_no_link_below() {
+  local p=$1 rest=${2#"$1"/} part
+  [ "$rest" != "$2" ] || return 1
+  while :; do
+    case $rest in */*) ;; *) return 0 ;; esac
+    part=${rest%%/*}
+    rest=${rest#*/}
+    p="$p/$part"
+    [ ! -L "$p" ] || return 1
+  done
 }
 
 ho_deliver_size() { { wc -c < "$1"; } 2>/dev/null | tr -d ' '; }
@@ -417,6 +433,32 @@ ho_deliver_rule() {
   [ -z "$t" ]
 }
 
+# ho_deliver_version_of <runtime-path>: the first word of "<runtime> --version", run with the
+# fixed PATH in its own process group; after 5 s the group gets SIGTERM, the grace, then
+# SIGKILL, and nothing is printed.
+ho_deliver_version_of() {
+  local cmd=$1 out pid deadline rc=0
+  out=$(umask 077 && mktemp "$HO_RUN_DIR/logs/.version.XXXXXX" 2>/dev/null) || return 0
+  set -m
+  PATH=$(ho_deliver_exec_path "$cmd") "$cmd" --version < /dev/null > "$out" 2>/dev/null &
+  pid=$!
+  set +m
+  deadline=$(( $(date +%s) + 5 ))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      ho_deliver_stop_group "$pid"
+      { wait "$pid"; } 2>/dev/null || true
+      rm -f "$out"
+      return 0
+    fi
+    sleep 0.1
+  done
+  { wait "$pid"; } 2>/dev/null || rc=$?
+  [ "$rc" -eq 0 ] && /usr/bin/awk 'NR == 1 { print $1 }' "$out"
+  rm -f "$out"
+  return 0
+}
+
 # ho_deliver_version_ge <have> <want>: 0 when the dotted version <have> is at least <want>.
 ho_deliver_version_ge() {
   /usr/bin/awk -v a="$1" -v b="$2" 'BEGIN {
@@ -451,7 +493,9 @@ ho_deliver_chord() {
   case $cmd in /*) ;; *) cmd="" ;; esac
   if [ -n "$cmd" ] && { [ ! -x "$cmd" ] || ! ho_session_runtime_path_ok "$cmd" 2>/dev/null; }; then cmd=""; fi
   have=""
-  [ -z "$cmd" ] || have=$(PATH=$(ho_deliver_exec_path "$cmd") "$cmd" --version 2>/dev/null < /dev/null | /usr/bin/awk 'NR == 1 { print $1 }')
+  # The version check runs in its own process group under a time limit of 5 s, like the
+  # message command; on a timeout the version is unknown and no chord is sent (PR #95 review).
+  [ -z "$cmd" ] || have=$(ho_deliver_version_of "$cmd")
   case $have in '' | *[!0-9.]*) have="" ;; esac
   if [ -z "$have" ] || ! ho_deliver_version_ge "$have" "$want"; then
     ho_ledger_append deliver-force-send id "$id" result skipped reason "runtime version ${have:-unknown} is below $want"
@@ -720,10 +764,13 @@ ho_session_deliver() {
   # A hold, or a busy mark on a delivery that is not a forced stop, gets no Enter; the typed
   # text stays on the input line, which the owner is told (validator, round 8).
   if [ "${screen%% *}" = hold ] || { [ "$rbusy" = busy ] && [ "$force" -eq 0 ]; }; then
+    # The ledger gets a fixed phrase and the class word only, never screen text (round 9, B7).
+    local seen="a busy mark"
+    case $screen in "hold limit" | "hold trust" | "hold password") seen="a ${screen#hold } hold" ;; esac
     ho_ledger_append owner-action title "typed text waits on the input line of session $name" \
-      why "a ${screen#hold } hold or a busy mark appeared before Enter; instruction $id was typed and no Enter was sent" \
+      why "$seen appeared before Enter; instruction $id was typed and no Enter was sent" \
       command "harness session $HO_RUN_DIR list" verify "the input line of session $name is cleared or sent by the owner"
-    ho_deliver_not "$id" "$name" "the screen changed before Enter ($([ "${screen%% *}" = hold ] && echo "${screen}" || echo busy)); no Enter was sent, and the typed text sits on the input line" "" screen "${screen%% *}" || return 1
+    ho_deliver_not "$id" "$name" "the screen changed before Enter ($seen); no Enter was sent, and the typed text sits on the input line" "" screen "${screen%% *}" || return 1
   fi
   if ! ho_deliver_line_is "$screen" "$line"; then
     ho_deliver_not "$id" "$name" "the input line did not hold exactly the typed text before Enter; no Enter was sent, and the typed text may still sit on the input line" "" screen "${screen%% *}" || return 1

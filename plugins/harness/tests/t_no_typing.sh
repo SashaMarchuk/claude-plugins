@@ -5,6 +5,13 @@
 # second screen read, and the send-now chord of a hard stop (D37-LIFECYCLE-4). No key is
 # pressed anywhere else, and no other code talks to a terminal app directly.
 
+# The three checked typing calls of delivery (H-101), each allowed as this exact line only.
+ALLOW_TYPE='  HO_TERM_BACKEND=$backend ho_term_type "$h" "$tag" "$sid" "$line" 2>/dev/null || rc=$?'
+ALLOW_ENTER='  HO_TERM_BACKEND=$backend ho_term_key "$h" "$tag" "$sid" enter 2>/dev/null || rc=$?'
+ALLOW_CHORD="  HO_TERM_BACKEND=\$(jq -r '.backend // \"\"' \"\$rec\") ho_term_bytes \"\$(jq -r '.handle // \"\"' \"\$rec\")\" \\"
+# allowed_count <root> <line>: how many times that exact line appears in engine code.
+allowed_count() { cat "$1"/bin/* "$1"/lib/*.sh | grep -c -x -F -e "$2" || true; }
+
 # scan <root>: print "<file>:<line>:<function>: <text>" for every typing call outside the allowed
 # place, then "scanned <n>" with the number of files read.
 scan() {
@@ -24,14 +31,17 @@ scan() {
         }' "$f"
       continue
     fi
-    awk -v file="${f#"$root"/}" '
+    ALLOW_TYPE=$ALLOW_TYPE ALLOW_ENTER=$ALLOW_ENTER ALLOW_CHORD=$ALLOW_CHORD awk -v file="${f#"$root"/}" '
+      BEGIN { ALLOW_TYPE = ENVIRON["ALLOW_TYPE"]; ALLOW_ENTER = ENVIRON["ALLOW_ENTER"]; ALLOW_CHORD = ENVIRON["ALLOW_CHORD"] }
       /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/ { fn = $0; sub(/\(\).*/, "", fn) }
       /^[ \t]*#/ { next }
       /ho_term_send|ho_term_key|ho_term_type|ho_term_bytes|ho_term_[a-z0-9]+_(send|key|type|byte)|send-keys|keystroke|write text|osascript|tmux / {
         if (fn == "ho_session_close" && $0 ~ /ho_term_send "\$handle" "\$tag" "\$sid" "\$exitcmd"/) next
-        if (fn == "ho_session_deliver" && $0 ~ /ho_term_type "\$h" "\$tag" "\$sid" "\$line"/) next
-        if (fn == "ho_session_deliver" && $0 ~ /ho_term_key "\$h" "\$tag" "\$sid" enter/) next
-        if (fn == "ho_deliver_chord" && $0 ~ /ho_term_bytes "\$\(jq -r/) next
+        # Each allowed line is matched as a whole line, so a second call after ";" on it is
+        # caught; the counts below make sure each allowed line exists exactly once.
+        if (fn == "ho_session_deliver" && $0 == ALLOW_TYPE) next
+        if (fn == "ho_session_deliver" && $0 == ALLOW_ENTER) next
+        if (fn == "ho_deliver_chord" && $0 == ALLOW_CHORD) next
         printf "%s:%d:%s: %s\n", file, NR, fn, $0
       }' "$f"
   done
@@ -42,11 +52,31 @@ out=$(scan "$HO_PLUGIN_ROOT")
 files=$(printf '%s\n' "$out" | sed -n 's/^scanned //p')
 if [ "${files:-0}" -ge 10 ]; then ok "H-099: the typing scan read every engine file ($files)"; else bad "H-099: the typing scan read every engine file" "$files"; fi
 assert_eq "H-099: no code path types or presses a key into a session, except the exit command of close" "" "$(printf '%s\n' "$out" | grep -v '^scanned ' || true)"
+for a in "$ALLOW_TYPE" "$ALLOW_ENTER" "$ALLOW_CHORD"; do
+  assert_eq "H-099, H-101: each allowed delivery typing line exists exactly once: $(printf '%s' "$a" | cut -c1-60)" 1 "$(allowed_count "$HO_PLUGIN_ROOT" "$a")"
+done
 assert_eq "H-099: the close path is the only caller of ho_term_send" 1 "$(cat "$HO_PLUGIN_ROOT"/bin/* "$HO_PLUGIN_ROOT"/lib/*.sh | grep -v '^[[:space:]]*#' | grep -c 'ho_term_send "\$handle"' || true)"
 assert_eq "Rebuild drop list: no stall rule, nudge or wake-up in engine code" "" \
   "$(cat "$HO_PLUGIN_ROOT"/bin/* "$HO_PLUGIN_ROOT"/lib/*.sh | grep -v '^[[:space:]]*#' | grep -iwE 'stall|stalled|nudge|nudged|wake|waking|wake-up' || true)"
 
 # The scan catches a planted violation, so an empty result above means something.
+# plant_check <label> <file> <line-to-add-after-function-head> <function>: copy the engine, add
+# the line as the first line of the function, and expect the scan or the counts to catch it.
+plant_check() {
+  local label=$1 file=$2 add=$3 fn=$4 caught=no
+  rm -rf plant-x && mkdir -p plant-x/bin plant-x/lib
+  cp "$HO_PLUGIN_ROOT"/bin/* plant-x/bin/ && cp "$HO_PLUGIN_ROOT"/lib/*.sh plant-x/lib/
+  ADD=$add FN=$fn awk '{ print } $0 ~ "^" ENVIRON["FN"] "\\(\\) *\\{" { print ENVIRON["ADD"] }' "$HO_PLUGIN_ROOT/lib/$file" > "plant-x/lib/$file"
+  [ -n "$(scan "$PWD/plant-x" | grep -v '^scanned ' || true)" ] && caught=yes
+  for a in "$ALLOW_TYPE" "$ALLOW_ENTER" "$ALLOW_CHORD"; do
+    [ "$(allowed_count "$PWD/plant-x" "$a")" = 1 ] || caught=yes
+  done
+  assert_eq "H-099: a planted $label is caught" yes "$caught"
+}
+plant_check "second copy of the allowed Enter line" deliver.sh "$ALLOW_ENTER" ho_session_deliver
+plant_check "second copy of the allowed type line" deliver.sh "$ALLOW_TYPE" ho_session_deliver
+plant_check "allowed type line with a second call after ;" deliver.sh '  ho_term_type "$h" "$tag" "$sid" "$line"; ho_term_key "$h" "$tag" "$sid" escape' ho_session_deliver
+plant_check "second byte call in the chord" deliver.sh '  ho_term_bytes "$(jq -r .handle "$rec")" "$t" "$s" 13' ho_deliver_chord
 mkdir -p plant/bin plant/lib
 cp "$HO_PLUGIN_ROOT"/bin/* plant/bin/
 cp "$HO_PLUGIN_ROOT"/lib/*.sh plant/lib/

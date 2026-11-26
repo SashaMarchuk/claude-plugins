@@ -120,6 +120,15 @@ A runtime profile is one data file per tool (D31, D37-RUNTIME-2). Two ship in `r
 - **Gate.** The engine runs the gate command itself, so the command comes only from the user config (D37-FLOW-8): `gate.list.<label>.command`. The project or user config selects the label with `gate.use`. With no gate, the merge is refused. A project config that holds a gate command is refused, and the message says where to move it.
 - `status` prints the integration tip and the confirmed merges. Setting the ticket state after a merge, the remote PR merge and the "passed with remarks" flow come later (#59, #60).
 
+## Feedback (H-140, D43)
+
+`/harness:feedback` files a problem with the harness as one issue in the plugin's own repository (the manifest `homepage`), with no labels. The person describes the problem in their own words. The command file (`commands/feedback.md`) runs two engine verbs:
+
+- `bin/harness feedback preview <description-file>` builds the issue and makes no tracker call. It prints the full text, a `DRAFT <folder>` line and a `CODE <code>` line. The code is the first 16 hex digits of the SHA-256 of the exact title and body. The text says which repository gets the issue and that it is filed under the person's own GitHub login.
+- `bin/harness feedback send --draft <folder> --code <code> --yes` sends exactly the shown draft with `gh issue create`. Without `--yes`, with a wrong code or with a changed draft, it sends nothing (exit 65).
+
+The technical context is fixed: plugin version, runtime version (`runtime.main` and a version-shaped word from `<command> --version`, 5 s limit), operating system (`uname -s -r -m`, never the host name) and a summary of the newest stamped run of the project. The summary holds only allow-listed facts: stopped or not, the number of ledger events, session roles launched (`orchestrator`, `worker`, `validator`, anything else counted as `other`), ticket counts per state, and the ledger event kinds that report a failure (`*-failed`, `*-refused`, `*-timeout`, `*-foreign`, `*-dead`, `owner-action`, `unreadable`) with counts. No ledger value is copied. The person's words are cleaned too: a path inside the plugin becomes `plugin-root/<path>`; any other path, a token, a `password=`-style value, an e-mail address and the local account name are replaced. `send` checks the whole text again and refuses a draft that still holds one (exit 65), naming only the kind. Any probe that fails gives `unknown`, so a broken config or no run still gives a report. The preview writes nothing in the run folder.
+
 ## Tests
 
 Run the plugin tests from the repository root:

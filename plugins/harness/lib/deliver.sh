@@ -289,11 +289,12 @@ ho_deliver_scan() {
 #     any text after the prompt there is a draft.
 #   - A busy mark counts above the box and in the runtime's status area under it (issue #104).
 #     On a narrow pane the status line is cut short with "…": a cut part after the last " · "
-#     that is the start of a busy mark counts as that mark.
+#     that is the start of a busy mark counts as that mark. A styled capture also shows a busy
+#     session by the colour of its prompt (busy_prompt_sgr in the profile), at any width.
 # For the check before Enter, "draft <text>" carries the box text, its lines joined. With the
 # third argument "reread", a first line "busy" or "idle" tells whether a busy mark shows.
 ho_deliver_screen() {
-  local rec=$1 profile=$2 mode=${3-} cap plain esc rc sgr k kend i n line raw text part mark p pfx="" prefixes marks cand=0 csi top busy=""
+  local rec=$1 profile=$2 mode=${3-} cap plain esc rc sgr bsgr k kend i n line raw text part mark p pfx="" prefixes marks cand=0 csi top busy=""
   esc=$(printf '\033')
   csi="$esc\\[[0-?]*[ -/]*[@-~]"
   cap=$(HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec") ho_term_capture "$(jq -r '.handle // ""' "$rec")" \
@@ -310,6 +311,8 @@ ho_deliver_screen() {
   rc=$(jq -r '.screen.rule_char // ""' "$profile")
   sgr=$(jq -r '.screen.suggestion_sgr // ""' "$profile")
   case $sgr in *[!0-9]*) sgr="" ;; esac
+  bsgr=$(jq -r '.screen.busy_prompt_sgr // "" | strings' "$profile")
+  case $bsgr in *[!0-9\;]*) bsgr="" ;; esac
   prefixes=$(jq -r '.screen.prompt_prefixes[] | strings' "$profile")
   marks=$(jq -r '.screen.busy_marks[]? | strings' "$profile")
   local -a P R
@@ -409,6 +412,10 @@ $marks
 EOF_BUSY2
     i=$((i + 1))
   done
+  # The prompt in the busy colour (a styled capture only; a plain one has no colour codes).
+  if [ -z "$busy" ] && [ -n "$bsgr" ]; then
+    case ${R[k]-} in "$esc[${bsgr}m"*) busy="the busy prompt colour" ;; esac
+  fi
   # The input line: dim suggested text aside, then the prompt prefix off.
   raw=${R[k]-}
   [ -z "$sgr" ] || raw=$(printf '%s\n' "$raw" | LC_ALL=C sed -E "s/$esc\\[${sgr}m[^$esc]*($esc\\[(0|22)?m|\$)//g")

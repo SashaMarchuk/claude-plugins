@@ -39,7 +39,9 @@
 #   status_line shape (the runtime's status lines and agent list) and blank lines, that tail
 #   is set aside first, and the rules above read the lines above the box. The tail counts
 #   only in this order: status lines with no box, or between a block and the box, are text.
-#   A data file without status_line reads as before. Known limit: a faithful paste of the notice as the last
+#   A data file without status_line reads as before. Then the lines at the end that have the
+#   profile's notification_line shape (a right-aligned line of the runtime, glued to the top
+#   rule of the box) are set aside too, with no blank line between them. Known limit: a faithful paste of the notice as the last
 #   block of the screen cannot be told from the notice itself by text. That is bounded, not
 #   closed: nothing is typed, and the wait it leads to is recorded once and ends on STOP.
 #
@@ -105,9 +107,10 @@ ho_screen_shape_match() {
   HO_SC_FRAME_ONLY=$(printf '%s' "$frames" | jq -r '.frame_only')
   HO_SC_INPUT_BOX=$(printf '%s' "$frames" | jq -r '.input_box')
   HO_SC_STATUS_LINE=$(printf '%s' "$frames" | jq -r '.status_line // "" | strings')
+  HO_SC_NOTIFICATION_LINE=$(printf '%s' "$frames" | jq -r '.notification_line // "" | strings')
   HO_SC_PROSE=$HO_SCREEN_PROSE
   export HO_SC_ANCHOR HO_SC_COMPANION HO_SC_BLOCK_ABOVE HO_SC_LAST_ONLY \
-    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_LINE HO_SC_PROSE
+    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_LINE HO_SC_NOTIFICATION_LINE HO_SC_PROSE
   LC_ALL=C awk '
     BEGIN {
       anchor = ENVIRON["HO_SC_ANCHOR"]
@@ -119,6 +122,7 @@ ho_screen_shape_match() {
       frame_only = ENVIRON["HO_SC_FRAME_ONLY"]
       input_box = ENVIRON["HO_SC_INPUT_BOX"]
       status_line = ENVIRON["HO_SC_STATUS_LINE"]
+      notification_line = ENVIRON["HO_SC_NOTIFICATION_LINE"]
       prose = ENVIRON["HO_SC_PROSE"]
     }
     function trim(s) { sub(/\r$/, "", s); sub(/[ \t]+$/, "", s); return s }
@@ -153,14 +157,17 @@ ho_screen_shape_match() {
           if (q > n || trim(raw[q]) !~ frame_only) break
           tail_ok = 1
           for (j = q + 1; j <= n; j++) if (!blank(raw[j]) && trim(raw[j]) !~ status_line) { tail_ok = 0; break }
-          if (tail_ok) {
-            n = p - 2
-            last = 0
-            for (i = 1; i <= n; i++) if (!blank(raw[i])) last = i
-            if (last == 0) exit 1
-          }
+          if (tail_ok) n = p - 2
           break
         }
+      }
+      if (notification_line != "") {
+        while (n >= 1 && !blank(raw[n]) && trim(raw[n]) ~ notification_line) n--
+      }
+      if (n < NR) {
+        last = 0
+        for (i = 1; i <= n; i++) if (!blank(raw[i])) last = i
+        if (last == 0) exit 1
       }
       for (i = 1; i <= n; i++) {
         line = trim(raw[i])
@@ -205,7 +212,7 @@ ho_screen_shape_match() {
       exit 1
     }' "$file" 2>/dev/null || rc=$?
   unset HO_SC_ANCHOR HO_SC_COMPANION HO_SC_BLOCK_ABOVE HO_SC_LAST_ONLY \
-    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_LINE HO_SC_PROSE
+    HO_SC_FRAME_START HO_SC_FRAME_END HO_SC_FRAME_ONLY HO_SC_INPUT_BOX HO_SC_STATUS_LINE HO_SC_NOTIFICATION_LINE HO_SC_PROSE
   case $rc in 0 | 1 | 3) return "$rc" ;; esac
   return 70
 }

@@ -112,7 +112,8 @@
     "busy_marks": [
       "esc to interrupt"
     ],
-    "suggestion_sgr": "2"
+    "suggestion_sgr": "2",
+    "busy_prompt_sgr": "38;5;246"
   },
   "force_send": {
     "bytes": [

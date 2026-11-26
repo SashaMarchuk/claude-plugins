@@ -171,3 +171,15 @@ assert_eq "S8-27: an unusable record is not marked closed" "running" "$(rec k1 .
 # ---- H-103: the engine has no pattern kill -------------------------------------------------
 # The bracketed pattern keeps this file itself out of the issue's grep for pattern kills.
 assert_eq "H-103: engine code holds no name-pattern kill or process search" "" "$(grep -rnE 'p[k]ill|kill[a]ll|p[g]rep' "$HO_PLUGIN_ROOT/bin" "$HO_PLUGIN_ROOT/lib" "$HO_PLUGIN_ROOT/runtimes" || true)"
+
+# ---- a session launched from a user runtime profile closes with that profile (review round 2, Codex 4701861993)
+mkdir -p "$user/runtimes"
+jq '.exit_command = "/exit"' "$HO_PLUGIN_ROOT/runtimes/claude-code.json" > "$user/runtimes/my-cc.json"
+cp "$HO_PLUGIN_ROOT/runtimes/claude-code.screen.json" "$user/runtimes/claude-code.screen.json"
+printf '{"schemaVersion": 2, "runtime": {"main": "my-cc"} }\n' > "$user/config.json"
+launch u1 >/dev/null
+pu=$(rec u1 .pid)
+assert_eq "D37-RUNTIME-2: a session launched from a user runtime profile records that profile" "my-cc" "$(rec u1 .runtime)"
+assert_exit "D37-RUNTIME-2: a session launched from a user runtime profile closes cleanly" 0 "$h" session "$run" close u1
+assert_eq "D37-RUNTIME-2: that session's process has ended" "yes" "$(wait_gone "$pu" && echo yes || echo no)"
+printf '{"schemaVersion": 2, "runtime": {"main": "claude-code"} }\n' > "$user/config.json"

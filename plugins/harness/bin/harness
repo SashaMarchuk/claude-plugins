@@ -30,6 +30,10 @@ export HO_ROOT
 . "$HO_ROOT/lib/sessions.sh"
 # shellcheck source=../lib/flow.sh
 . "$HO_ROOT/lib/flow.sh"
+# shellcheck source=../lib/loop.sh
+. "$HO_ROOT/lib/loop.sh"
+# shellcheck source=../lib/runtime.sh
+. "$HO_ROOT/lib/runtime.sh"
 # shellcheck source=../lib/screen.sh
 . "$HO_ROOT/lib/screen.sh"
 
@@ -46,7 +50,8 @@ verbs:
   run        run new: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
   session    session <run-dir> launch|close|list: launch, list and close sessions
-  flow       flow profiles: list | check <flow> | steps <flow> | render <flow> <role> ...
+  loop       loop <run-dir> integration|ready|verdict|merge|status: the engine-checked merge
+  flow       flows: list | check | steps | plan | preflight <flow> | copy <flow> <new> | render <flow> <role> ...
   screen     screen text: classify a capture, watch a session, pre-trust a folder, wait
 USAGE
 }
@@ -64,6 +69,7 @@ case $verb in
   state)    ho_state_main "$@" ;;
   session)  ho_session_main "$@" ;;
   flow)     ho_flow_main "$@" ;;
+  loop)     ho_loop_main "$@" ;;
   screen)   ho_screen_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2

@@ -120,6 +120,19 @@ ho_session_account_env_names() {
   jq -r '(.account_env // [.config_dir.env, .transcript.root_env]) | map(strings) | unique | .[]' "$1"
 }
 
+# ho_session_account_cmd <profile> <command>: run an account command as the launcher runs it,
+# with the runtime's account variables removed (the launcher unsets them first), so a command
+# that reads one of them gets the same answer in the launch check, the start check and the
+# launcher. With no profile it runs as it is.
+ho_session_account_cmd() {
+  local -a u=()
+  local v
+  if [ -n "$1" ]; then
+    for v in $(ho_session_account_env_names "$1"); do u+=(-u "$v"); done
+  fi
+  /usr/bin/env ${u[@]+"${u[@]}"} /bin/bash -c "$2"
+}
+
 ho_session_account_env() {
   local profile=$1 var val
   for var in $(ho_session_account_env_names "$profile"); do
@@ -189,10 +202,10 @@ ho_cfg_user() {
   jq -c "$1" "$f"
 }
 
-# ho_session_account <role> <requested>: print "<account>\t<env-command>", or nothing when no
+# ho_session_account <role> <requested> [profile]: print "<account>\t<env-command>", or nothing when no
 # account is configured. Refuses (65) a mismatch, an unknown account, or a command that fails.
 ho_session_account() {
-  local role=$1 want=$2 proj mapped cmd out
+  local role=$1 want=$2 profile=${3-} proj mapped cmd out
   proj="$HO_PROJECT_DIR/.harness/config.json"
   if jq -e '.accounts != null' "$proj" >/dev/null 2>&1; then
     printf 'harness: accounts are set in the project config %s; accounts belong in the user config only\n' "$proj" >&2
@@ -211,7 +224,7 @@ ho_session_account() {
   fi
   cmd=$(ho_cfg_user ".accounts.list[\"$mapped\"].env_command" | jq -r 'strings // ""')
   [ -n "$cmd" ] || { printf 'harness: account %s (role %s) has no env_command in accounts.list\n' "$mapped" "$role" >&2; return 65; }
-  out=$(/bin/bash -c "$cmd" 2>/dev/null) || { printf 'harness: the env_command of account %s failed\n' "$mapped" >&2; return 65; }
+  out=$(ho_session_account_cmd "$profile" "$cmd" 2>/dev/null) || { printf 'harness: the env_command of account %s failed\n' "$mapped" >&2; return 65; }
   printf '%s\n' "$out" | ho_account_env_parse >/dev/null || {
     printf 'harness: the env_command of account %s must print KEY=VALUE lines only\n' "$mapped" >&2
     return 65
@@ -552,7 +565,7 @@ ho_session_launch_one() {
   [ -n "$chain" ] || chain=$(ho_cfg ".models[\"$role\"]" '')
   models=""
   if [ -n "$chain" ]; then models=$(ho_model_chain "$chain") || return 65; fi
-  acct=$(ho_session_account "$role" "$account") || return 65
+  acct=$(ho_session_account "$role" "$account" "$profile") || return 65
   if [ -n "$acct" ]; then
     acct_name=${acct%%"$(printf '\t')"*}
     acct_cmd=${acct#*"$(printf '\t')"}

@@ -203,7 +203,11 @@ ho_flow_preflight() {
   # ho_session_account runs the account command once and keeps what it printed; it is not run
   # again here.
   HO_SESSION_ACCOUNT_ENV=""
-  ho_session_account worker "" > "$tmpd/acct" || exit $?
+  # It runs as in the launcher, with the account variables of the runtime sessions launch on
+  # (runtime.main) removed (issue #119).
+  local mainprof
+  mainprof=$(ho_runtime_profile 2>/dev/null) || mainprof=""
+  ho_session_account worker "" "$mainprof" > "$tmpd/acct" || exit $?
   acct=$(cat "$tmpd/acct")
   if [ -n "$acct" ]; then
     pairs=$(printf '%s\n' "$HO_SESSION_ACCOUNT_ENV" | ho_account_env_parse) || {

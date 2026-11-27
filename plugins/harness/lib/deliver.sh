@@ -84,6 +84,28 @@ ho_deliver_outside_project() {
   ho_session_runtime_path_ok "$1/ho-probe" 2>/dev/null
 }
 
+# ho_deliver_not_above_project <folder>: 0 when the folder holds neither the project, its
+# worktrees folder nor a worktree. A transcript folder above the project would let a glob or a
+# cached path reach a transcript planted inside it (PR #118 validator, minors 1 and 2).
+# Folders are compared by identity (-ef), walking up from each project folder.
+ho_deliver_not_above_project() {
+  local d roots r a
+  d=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  roots=$(ho_session_project_roots 2>/dev/null) || return 1
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    a=$r
+    while :; do
+      [ ! "$a" -ef "$d" ] || return 1
+      [ "$a" != / ] || break
+      a=$(dirname "$a")
+    done
+  done <<EOF_ROOTS
+$roots
+EOF_ROOTS
+  return 0
+}
+
 # ho_deliver_exec_path <program>: the PATH for a program that delivery runs (the version check
 # and the message command): the fixed system folders and the program's own folder, never a
 # folder of the project or a worktree, and never the caller's PATH. So a "#!/usr/bin/env bash"
@@ -152,7 +174,7 @@ ho_deliver_profile() {
 # made it: an absolute path with no line break, and a folder. The file found must be a regular,
 # readable file inside it. The path is kept in the record once found.
 ho_deliver_transcript() {
-  local rec=$1 profile=$2 sid cached glob root f
+  local rec=$1 profile=$2 sid cached glob root f fdir
   root=$(jq -r '.transcript_root // ""' "$rec")
   case $root in /*) ;; *) return 1 ;; esac
   case $root in *"
@@ -161,36 +183,59 @@ ho_deliver_transcript() {
   # A folder of the project or a worktree is never a transcript folder: a record there could
   # be planted (validator, PR #95).
   ho_deliver_outside_project "$root" || return 1
+  ho_deliver_not_above_project "$root" || return 1
   sid=$(jq -r '.session_id // ""' "$rec")
   ho_session_uuid_ok "$sid" 2>/dev/null || return 1
   # The cached path is resolved first (".." segments and links of its folders), then it counts
-  # only inside the resolved root and only when its file name is <id>.jsonl or a folder on its
+  # only inside the resolved root (or the checked data folder below) and only when its file name is <id>.jsonl or a folder on its
   # path is <id>, so it cannot point at another session's transcript (PR #95 review).
-  local rroot cdir
+  local rroot cdir pre want base rest
   rroot=$(cd "$root" 2>/dev/null && pwd -P) || return 1
+  # The runtime's data folder (the glob's fixed leading part) may be a link, as in a
+  # multi-account layout, but only to the real folder the launch recorded
+  # (transcript_prefix_real). It must still resolve there now and lie outside the project. The
+  # glob then runs from that real folder, and no folder below it may be a link. A record
+  # without the field gets no link at all. The rest of the glob is never a link either.
+  glob=$(jq -r '.transcript.glob' "$profile")
+  base=$root rest=$glob
+  pre=$(ho_live_transcript_prefix "$glob")
+  want=$(jq -r '.transcript_prefix_real // ""' "$rec")
+  if [ -n "$pre" ] && [ -n "$want" ]; then
+    case $want in /*) ;; *) return 1 ;; esac
+    base=$(cd "$root/$pre" 2>/dev/null && pwd -P) || return 1
+    [ "$base" = "$want" ] || return 1
+    ho_deliver_outside_project "$base" || return 1
+    ho_deliver_not_above_project "$base" || return 1
+    rest=${glob#"$pre"/}
+  fi
   cached=$(jq -r '.transcript // ""' "$rec")
   case $cached in
     /*)
       cdir=$(cd "$(dirname "$cached")" 2>/dev/null && pwd -P) || cdir=""
-      [ -n "$cdir" ] && cached="$cdir/$(basename "$cached")" || cached=""
+      # The cached file's own folder is never inside the project or a worktree.
+      [ -n "$cdir" ] && ho_deliver_outside_project "$cdir" && cached="$cdir/$(basename "$cached")" || cached=""
       ;;
     *) cached="" ;;
   esac
+  local cbase=$base
+  [ "$cbase" != "$root" ] || cbase=$rroot
   case $cached in
-    "$rroot"/*)
+    "$cbase"/*)
       # Whole name parts only: the file is <id>.jsonl, or a folder on the way is <id>.
       if [ "$(basename "$cached")" = "$sid.jsonl" ] || case "/$(dirname "$cached")/" in */"$sid"/*) true ;; *) false ;; esac; then
         [ -f "$cached" ] && [ ! -L "$cached" ] && [ -r "$cached" ] && { printf '%s\n' "$cached"; return 0; }
       fi
       ;;
   esac
-  glob=$(jq -r '.transcript.glob' "$profile")
-  glob=${glob//\{session_id\}/$sid}
-  for f in "$root"/$glob; do
+  rest=${rest//\{session_id\}/$sid}
+  for f in "$base"/$rest; do
     [ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ] || continue
-    # No folder below the root may be a link: a linked folder could lead to a planted
-    # transcript (PR #95 review). The root itself was checked above.
-    ho_deliver_no_link_below "$root" "$f" || continue
+    # No folder below the base may be a link: a linked folder could lead to a planted
+    # transcript (PR #95 review). The base itself was checked above.
+    ho_deliver_no_link_below "$base" "$f" || continue
+    # Nor is the found file's own folder inside the project or a worktree.
+    fdir=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P) || continue
+    ho_deliver_outside_project "$fdir" || continue
     ho_session_set "$rec" '.transcript = $t' --arg t "$f" >/dev/null 2>&1 || true
     printf '%s\n' "$f"
     return 0
@@ -280,6 +325,10 @@ ho_deliver_scan() {
 #     opening frame line (the rule line right above the input line) byte for byte, with no line
 #     cap. A rule line of another width or character is the person's text. With no equal line
 #     the box is not closed and reads as a draft (round 8, B6).
+#   - A session launched with a name shows it at the right end of the top rule. That rule
+#     opens the box only when the name is the session's own launch name from its record
+#     (ho_screen_named_rule); it then stands for the plain rule of the same width, which the
+#     closing line must equal. Another name, or a named closing line, is no frame.
 #   - The lines above the opening frame are read by the screen reader once more, so a hold
 #     above a box that already holds typed text is still a hold (the check before Enter).
 #   - The box is empty only if the input line holds no text (dim suggested text in the
@@ -307,8 +356,9 @@ ho_deliver_screen() {
     "$(jq -r '.term_tag // ""' "$rec")" "$(jq -r '.session_id // ""' "$rec")" 60 styled 2>/dev/null) || { echo "unknown the screen could not be read"; return 0; }
   plain=$(printf '%s\n' "$cap" | LC_ALL=C sed -E "s|$csi||g")
   case $plain in *"$esc"*) echo "unknown the screen holds escape codes that cannot be read"; return 0 ;; esac
-  local class
-  class=$(ho_deliver_classify "$profile" "$plain")
+  local class box
+  box=$(ho_screen_box_name "$rec")
+  class=$(ho_deliver_classify "$profile" "$plain" "$box")
   case $class in
     none) ;;
     limit | trust | password) echo "hold $class"; return 0 ;;
@@ -343,7 +393,9 @@ EOF_R
       [ -n "$p" ] || continue
       case $line in
         "$p"* | "${p% }")
-          if ho_deliver_rule "${P[i - 1]}" "$rc"; then k=$i; pfx=$p; cand=$((cand + 1)); break; fi
+          if ho_deliver_rule "${P[i - 1]}" "$rc" || ho_screen_named_rule "${P[i - 1]}" "$rc" "$box" >/dev/null; then
+            k=$i; pfx=$p; cand=$((cand + 1)); break
+          fi
           ;;
       esac
     done <<EOF_PFX
@@ -372,7 +424,9 @@ EOF_PFX2
   # (the rule line right above it) byte for byte. A rule line of another width or another
   # character, typed by the person, is no frame; with no equal line the box is not closed and
   # reads as a draft (validator B6).
-  top=${P[k - 1]}
+  # A top rule that carries the session's own launch name stands for the plain rule of the
+  # same width; the closing line must be that plain rule (real end-to-end check).
+  top=$(ho_screen_named_rule "${P[k - 1]}" "$rc" "$box") || top=${P[k - 1]}
   kend=-1
   i=$((k + 1))
   while [ "$i" -lt "$n" ]; do
@@ -397,12 +451,12 @@ EOF_PFX2
   local above=$((k - 1))
   if [ "$above" -ge 1 ] && [ -n "${P[above - 1]}" ]; then
     local ndata
-    if ndata=$(ho_screen_profile_data "$profile" 2>/dev/null) && ho_screen_notification "$ndata" "${P[above - 1]}" "${P[above]}"; then
+    if ndata=$(ho_screen_profile_data "$profile" 2>/dev/null) && ho_screen_notification "$ndata" "${P[above - 1]}" "$top"; then
       above=$((above - 1))
     fi
   fi
   if [ "$above" -ge 1 ]; then
-    class=$(ho_deliver_classify "$profile" "$(i=0; while [ "$i" -lt "$above" ]; do printf '%s\n' "${P[i]}"; i=$((i + 1)); done)")
+    class=$(ho_deliver_classify "$profile" "$(i=0; while [ "$i" -lt "$above" ]; do printf '%s\n' "${P[i]}"; i=$((i + 1)); done)" "$box")
     case $class in
       none) ;;
       limit | trust | password) echo "hold $class"; return 0 ;;
@@ -476,8 +530,8 @@ EOF_BUSY2
   echo "empty"
 }
 
-# ho_deliver_classify <profile> <plain-text>: the engine's screen reader on that text, with the
-# pattern file of the given runtime. The text lives in the run's screen folder only while it is
+# ho_deliver_classify <profile> <plain-text> [<box-name>]: the engine's screen reader on that
+# text, with the pattern file of the given runtime and the session's launch name. The text lives in the run's screen folder only while it is
 # read; a trap removes it if this step is stopped. Prints the class word, or "unknown".
 ho_deliver_classify() {
   local profile=$1 sdir class
@@ -487,7 +541,7 @@ ho_deliver_classify() {
   trap 'rm -f "$HO_DELIVER_CFILE"' EXIT HUP INT TERM
   printf '%s\n' "$2" > "$HO_DELIVER_CFILE"
   unset HO_SCREEN_SELFTEST
-  class=$(ho_screen_classify "$HO_DELIVER_CFILE" "$profile" 2>/dev/null) || class=unknown
+  class=$(ho_screen_classify "$HO_DELIVER_CFILE" "$profile" "${3-}" 2>/dev/null) || class=unknown
   rm -f "$HO_DELIVER_CFILE"
   trap - EXIT HUP INT TERM
   printf '%s\n' "$class"

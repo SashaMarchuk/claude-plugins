@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Feedback (H-140, D43): file a problem with the harness as one issue in the plugin's own
+# Feedback (H-140, D43, D40): file a problem with the harness as one issue in the plugin's own
 # repository, with no labels, after the person's yes.
 #
 #   harness feedback preview <description-file>
@@ -8,21 +8,19 @@
 #       source it reads ticket counts only).
 #   harness feedback send --draft <dir> --code <code> --yes
 #       Send exactly the draft that was shown. Refused without --yes, with a wrong code, or
-#       when the draft fails the privacy rule of lib/feedback.jq.
+#       when the context holds a line outside the fixed fields of lib/feedback.jq.
 #
 # The technical context is built from named fields only (D43): plugin version, runtime label
 # and version, operating system words, and a state summary of the last run (stop state, event
 # count, fixed role names, ticket counts per state, engine error kinds from a fixed list). Each
 # field has a fixed shape or vocabulary; anything else shows as "unknown" or "other". No free
 # text (ledger value, ticket text, runtime output) is ever copied. The person's description is
-# judged line by line by lib/feedback.jq: a line that holds the start of a path outside the
-# plugin, a secret or the account name is replaced whole by a placeholder. The send refuses a
-# draft whose description still has such a line or whose context has a line outside the
-# fixed fields.
+# sent as written (D40): the person answers for what they paste, and the preview shows it all.
 #
-# Exit codes: 64 usage, 65 refused (no yes, wrong code, private data found), 66 no draft,
-# 1 the tracker call failed. Requires lib/feedback.jq, lib/common.sh, lib/config.sh, lib/run.sh,
-# lib/runtime.sh and lib/tickets.sh.
+# Exit codes: 64 usage (also a description over 60000 bytes: the tracker limits the issue
+# body), 65 refused (no yes, wrong code, a context line outside the fixed fields), 66 no draft,
+# 1 the tracker call failed. Requires lib/feedback.jq, lib/common.sh, lib/config.sh,
+# lib/run.sh, lib/runtime.sh and lib/tickets.sh.
 
 ho_fb_usage() {
   cat <<'USAGE'
@@ -50,8 +48,8 @@ ho_fb_sha() {
   printf '%s\n' "${s:0:16}"
 }
 
-# ho_fb_jq <jq-expr> [jq-options...]: run jq over stdin with lib/feedback.jq loaded (one rule
-# set for the cleaner and the gate, so they cannot drift).
+# ho_fb_jq <jq-expr> [jq-options...]: run jq with lib/feedback.jq loaded (one definition of the
+# field shapes for the builder and the gate, so they cannot drift).
 ho_fb_jq() {
   local expr=$1
   shift
@@ -61,12 +59,6 @@ ho_fb_jq() {
 # ho_fb_fit <shape> <value>: the value when it has the fixed shape (shape_<name> in
 # lib/feedback.jq), else "unknown".
 ho_fb_fit() { ho_fb_jq "\$v | fit(shape_$1)" -nr --arg v "$2" 2>/dev/null || echo unknown; }
-
-# ho_fb_clean <roots-json> <accounts-json>: stdin description -> cleaned description.
-ho_fb_clean() {
-  # shellcheck disable=SC2016 # jq text, not shell
-  ho_fb_jq 'clean($roots; $accts)' -Rrs --argjson roots "$1" --argjson accts "$2"
-}
 
 # ho_fb_fixed: the fixed vocabularies the gate checks the context against, as JSON.
 ho_fb_fixed() {
@@ -83,33 +75,16 @@ ho_fb_shipped_runtimes() {
   done
 }
 
-# ho_fb_gate <title-file> <body-file> <accounts-json>: exit 0 when the draft passes the rule;
-# else print the kinds found (never the text) and exit 65. The fixed title prefix is not judged.
+# ho_fb_gate <body-file>: exit 0 when the context holds only fixed fields; else print what is
+# wrong (never the text) and exit 65.
 ho_fb_gate() {
   local found
   # shellcheck disable=SC2016 # jq text, not shell
-  found=$( { sed '1s/^Harness feedback: //' "$1"; cat "$2"; } |
-    ho_fb_jq 'kinds($accts; $fixed)' -Rrs --argjson accts "$3" --argjson fixed "$(ho_fb_fixed)") ||
-    { echo "the privacy check could not run"; return 65; }
+  found=$(ho_fb_jq 'context_check($fixed)' -Rrs --argjson fixed "$(ho_fb_fixed)" < "$1") ||
+    { echo "the context check could not run"; return 65; }
   [ -z "$found" ] && return 0
   printf '%s\n' "$found"
   return 65
-}
-
-# ho_fb_accounts: the local account names to keep out, as a JSON array.
-ho_fb_accounts() {
-  local u h
-  u=$(id -un 2>/dev/null || true)
-  h=${HOME:+$(basename "$HOME")}
-  jq -cn --arg u "$u" --arg h "$h" --arg l "${LOGNAME:-}" --arg s "${USER:-}" \
-    '[$u, $h, $l, $s] | map(select(length > 0)) | unique'
-}
-
-# ho_fb_roots: the plugin root as given and with links resolved, as a JSON array.
-ho_fb_roots() {
-  local phys
-  phys=$(cd -P "$HO_ROOT" 2>/dev/null && pwd -P) || phys=$HO_ROOT
-  jq -cn --arg a "$HO_ROOT" --arg b "$phys" '[$a, $b] | unique'
 }
 
 # ho_fb_runtime_version: "<label> <version>", or a word saying why there is none. Never the
@@ -189,24 +164,19 @@ ho_fb_summary() {
 
 # ho_fb_preview <description-file>
 ho_fb_preview() {
-  local desc=${1-} repo roots accts draft first title os why
+  local desc=${1-} repo draft first title os why
   [ -n "$desc" ] && [ $# -eq 1 ] || { ho_fb_usage >&2; return 64; }
   [ -f "$desc" ] && [ -r "$desc" ] || { ho_fb_err "cannot read the description file"; return 74; }
+  [ "$(wc -c < "$desc")" -le 60000 ] || { ho_fb_err "the description is over 60000 bytes; shorten it"; return 64; }
   [ -n "$(tr -d ' \t\r\n' < "$desc")" ] || { ho_fb_err "the description is empty; describe the problem first"; return 64; }
   repo=$(ho_fb_repo)
   [ -n "$repo" ] || { ho_fb_err "the plugin manifest names no repository"; return 78; }
-  roots=$(ho_fb_roots)
-  accts=$(ho_fb_accounts)
   draft=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/ho-feedback.XXXXXX") || { ho_fb_err "cannot make a draft folder"; return 1; }
-  # The person's words are cleaned on their own first, so a failed clean is never hidden.
-  if ! head -c 20000 "$desc" | ho_fb_clean "$roots" "$accts" > "$draft/desc.txt"; then
-    ho_fb_err "cannot clean the description"; rm -rf "$draft"; return 1
-  fi
   os="$(ho_fb_fit os_s "$(uname -s 2>/dev/null)") $(ho_fb_fit os_r "$(uname -r 2>/dev/null)") $(ho_fb_fit os_m "$(uname -m 2>/dev/null)")"
-  # The context is built from named fields with fixed shapes; it is not passed through the
-  # description cleaner (the gate checks it against the field grammar instead).
+  # The description as written (trailing blank lines dropped), then the context from named
+  # fields with fixed shapes.
   if ! {
-    awk '{ l[NR] = $0 } END { n = NR; while (n > 0 && l[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print l[i] }' "$draft/desc.txt"
+    awk '{ l[NR] = $0 } END { n = NR; while (n > 0 && l[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print l[i] }' "$desc"
     printf '\n---\n'
     printf 'Technical context (added by the harness feedback command):\n'
     printf -- '- Plugin version: %s\n' "$(ho_fb_fit ver "$( (ho_version) 2>/dev/null)")"
@@ -216,16 +186,12 @@ ho_fb_preview() {
   } > "$draft/body.md"; then
     ho_fb_err "cannot build the draft"; rm -rf "$draft"; return 1
   fi
-  first=$(awk 'NF && !/^\[line removed: [a-z]+\]$/ { gsub(/[\t\r]/, " "); sub(/^ +/, ""); print substr($0, 1, 70); exit }' "$draft/desc.txt")
-  # The cut may itself form a shape (">/dev/null" cut to ">/dev/nu"): such a title is not used.
-  first=$(printf '%s\n' "$first" | ho_fb_clean '[]' "$accts") || first=""
-  case $first in "[line removed: "*) first="" ;; esac
+  first=$(awk 'NF { gsub(/[\t\r]/, " "); sub(/^ +/, ""); print substr($0, 1, 70); exit }' "$desc")
   title="Harness feedback: ${first:-problem report}"
   printf '%s\n' "$title" > "$draft/title.txt"
   printf '%s\n' "$repo" > "$draft/repo.txt"
-  rm -f "$draft/desc.txt"
-  if why=$(ho_fb_gate "$draft/title.txt" "$draft/body.md" "$accts"); then :; else
-    ho_fb_err "the draft still holds private data ($why); edit the description and preview again"
+  if why=$(ho_fb_gate "$draft/body.md"); then :; else
+    ho_fb_err "the draft context is not the fixed one ($why)"
     rm -rf "$draft"
     return 65
   fi
@@ -259,7 +225,7 @@ ho_fb_send() {
   cat "$draft/title.txt" "$draft/body.md" > "$draft/all.txt" || { ho_fb_err "cannot read the draft"; return 66; }
   want=$(ho_fb_sha "$draft/all.txt") || { ho_fb_err "no SHA-256 tool found"; return 1; }
   [ "$code" = "$want" ] || { ho_fb_err "nothing sent: the draft is not the text that was shown (code mismatch); preview again"; return 65; }
-  why=$(ho_fb_gate "$draft/title.txt" "$draft/body.md" "$(ho_fb_accounts)") || { ho_fb_err "nothing sent: the draft holds private data ($why)"; return 65; }
+  why=$(ho_fb_gate "$draft/body.md") || { ho_fb_err "nothing sent: the draft context is not the fixed one ($why)"; return 65; }
   repo=$(ho_fb_repo)
   [ -n "$repo" ] && [ "$repo" = "$(cat "$draft/repo.txt")" ] || { ho_fb_err "nothing sent: the draft names another repository"; return 65; }
   url=$(gh issue create --repo "$repo" --title "$(cat "$draft/title.txt")" --body-file "$draft/body.md") ||

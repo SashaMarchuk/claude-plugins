@@ -155,6 +155,28 @@ assert_contains "D43 summary: ticket counts per state" "$ctx" "- Tickets per sta
 assert_eq "H-140: the preview leaves the run folder byte-identical" "$before" "$(tree_sum "$run")"
 unset USER LOGNAME HO_FAKE_GH_USER HO_TICKETS_REPO
 
+# ---- The run state counts the STOP file, read-only ---------------------------------------
+touch "$proj/.harness/STOP"
+before=$(tree_sum "$run")
+rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "D43 run state: a preview with a STOP file exits 0" "0" "$rc"
+assert_contains "D43 run state: a STOP file not yet in the ledger counts as stopped" "$out" "- Last run: stopped,"
+assert_eq "D43 run state: the STOP check writes nothing in the run folder" "$before" "$(tree_sum "$run")"
+rm -f "$proj/.harness/STOP"; rm -rf "$(draft_of "$out")"
+
+# ---- A runtime binary inside the project is never run for the version ---------------------
+mkdir -p "$proj/bin"
+printf '#!/usr/bin/env bash
+touch "%s/ran"
+echo 9.9.9
+' "$base" > "$proj/bin/claude"
+chmod +x "$proj/bin/claude"
+rc=0; out=$(cd "$proj" && PATH="$proj/bin:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "H-140 runtime guard: a preview with a project claude first on PATH exits 0" "0" "$rc"
+assert_eq "H-140 runtime guard: the project's own claude is not run" "no" "$([ -e "$base/ran" ] && echo yes || echo no)"
+assert_contains "H-140 runtime guard: its version shows as unknown" "$out" "- Runtime: claude-code version unknown"
+rm -rf "$proj/bin" "$base/ran" "$(draft_of "$out")"
+
 # ---- Allow-list context: a private value next to each field does not appear ----------------
 # Run state and engine error codes: a stop event and an error event carry private reasons.
 jq -cn --arg r "$(basename "$run")" '{ts: "2026-01-01T00:00:00Z", run: $r, kind: "session-dead", reason: "zederrreason /Users/x"}' >> "$run/ledger.jsonl"

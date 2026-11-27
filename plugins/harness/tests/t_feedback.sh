@@ -9,6 +9,16 @@ mkdir -p "$proj/.harness"
 printf '%s\n' '{"schemaVersion":2,"runtime":{"main":"claude-code"}}' > "$proj/.harness/config.json"
 export HO_PROJECT_DIR="$proj" HO_USER_DIR="$base/user" HO_FAKE_GH_DIR="$base/gh"
 gh_calls() { cat "$HO_FAKE_GH_DIR/calls.log" 2>/dev/null || true; }
+# Safety: every send in this file must reach the fake gh, never a real, logged-in one (a real
+# gh once filed issue #122). Stop the whole file when gh resolves anywhere else.
+fake_gh=$(cd -P "$HO_PLUGIN_ROOT/tests/fake-bin" && pwd)/gh
+real_gh=$(command -v gh 2>/dev/null || true)
+[ -n "$real_gh" ] && real_gh=$(cd -P "$(dirname "$real_gh")" && pwd)/gh
+if [ "$real_gh" != "$fake_gh" ]; then
+  bad "H-140 safety: gh resolves to the test's fake gh" "it resolves to [${real_gh:-nothing}]; refusing to run any send"
+  exit 1
+fi
+ok "H-140 safety: gh resolves to the test's fake gh"
 creates() { find "$HO_FAKE_GH_DIR/issues" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
 
 # Checksum of a whole folder: every path, mode and content.

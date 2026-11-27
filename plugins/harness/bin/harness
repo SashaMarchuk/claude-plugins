@@ -42,6 +42,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/runtime.sh"
 # shellcheck source=../lib/screen.sh
 . "$HO_ROOT/lib/screen.sh"
+# shellcheck source=../lib/feedback.sh
+. "$HO_ROOT/lib/feedback.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -60,6 +62,7 @@ verbs:
   loop       loop <run-dir> integration|ready|verdict|merge|status: the engine-checked merge
   flow       flows: list | check | steps | plan | preflight <flow> | copy <flow> <new> | render <flow> <role> ...
   screen     screen text: classify a capture, watch a session, pre-trust a folder, wait
+  feedback   feedback preview <file> | send --draft <dir> --code <code> --yes: report a harness problem
 USAGE
 }
 
@@ -79,6 +82,7 @@ case $verb in
   flow)     ho_flow_main "$@" ;;
   loop)     ho_loop_main "$@" ;;
   screen)   ho_screen_main "$@" ;;
+  feedback) ho_feedback_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

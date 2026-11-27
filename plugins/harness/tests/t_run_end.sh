@@ -254,3 +254,13 @@ assert_eq "D2: that unknown ends nothing" "none" "${ends:-none}"
 gh issue edit 3 --repo fake/repo --add-label harness:done >/dev/null
 o=$(gh_check "$r12" || true)
 assert_eq "H-079: once it carries a state label the run ends; an unlabelled issue does not hold it" "end" "$(printf '%s\n' "$o" | head -n 1)"
+
+# ---- H-079: an ended run launches nothing new; a recorded resume opens it again ----------------
+r13=$("$h" run new --workers 5)
+assert_eq "test setup: the run ends" "end" "$(HO_TICKETS_DIR="$base/tk-f" decision "$r13")"
+assert_exit "H-079: an ended run refuses a new session launch (75)" 75 sess "$r13" worker late1
+assert_exit "H-079: an ended run refuses a session resume too (75)" 75 \
+  "$h" session "$r13" launch --role worker --name late2 --cwd "$proj/src" --resume 0b6f2a8e-1c3d-4e5f-8a9b-0c1d2e3f4a5b
+assert_eq "H-079: the refused launches leave no record" "" "$(ls "$r13/sessions" 2>/dev/null | grep -E '^late' || true)"
+"$h" state "$r13" resume >/dev/null
+assert_exit "H-079: after a recorded resume the run launches again" 0 sess "$r13" worker late3

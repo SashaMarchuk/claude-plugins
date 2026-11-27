@@ -476,6 +476,8 @@ ho_session_launch_one() {
   local stopped=0
   ho_stop_gate "$ticket" || stopped=$?
   [ "$stopped" -eq 0 ] || { echo "harness: the run is stopped (or its stop state is unknown); no session is launched" >&2; return 75; }
+  # An ended run launches nothing (H-079); a recorded resume ("state <run> resume") opens it again.
+  ! ho_run_ended || { echo "harness: the run has ended; no session is launched (record a resume to open it again)" >&2; return 75; }
   ho_assert_safe_cwd "$cwd" "$HO_PROJECT_DIR" || return 65
   cwd=$(cd "$cwd" && pwd -P) || return 65
   case $cwd in *$'\n'*) echo "harness: working folder name has a line break" >&2; return 65 ;; esac
@@ -559,6 +561,11 @@ ho_session_launch_one() {
     if [ "$stopped" -ne 0 ]; then
       rm -f "$rec"
       echo "harness: the run was stopped (or its stop state is unknown) while the launch waited; no session is launched" >&2
+      return 75
+    fi
+    if ho_run_ended; then
+      rm -f "$rec"
+      echo "harness: the run ended while the launch waited; no session is launched" >&2
       return 75
     fi
   fi

@@ -147,9 +147,8 @@ ho_life_has() { printf '%s\n' $2 | grep -qx -- "$1"; }
 #   unknown       the stop state or the ticket queue cannot be read, or a ticket of the queue is
 #                 in none of the five states (D2): nothing changes (exit 2)
 ho_life_check() {
-  local last st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live prev
-  last=$(ho_ledger_events | jq -r 'select(.kind == "run-end" or .kind == "resume") | .kind' | tail -n 1)
-  if [ "$last" = run-end ]; then
+  local st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live prev
+  if ho_run_ended; then
     # A close that failed at the run end (a busy session, a terminal that could not be reached)
     # is tried again at every later call; closed records are skipped.
     ho_life_say ended

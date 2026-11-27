@@ -211,6 +211,13 @@ ho_stopped() {
   return 2
 }
 
+# ho_run_ended: 0 when the run has ended (H-079, D37-LIFECYCLE-3): its newest run-end line is
+# newer than its newest resume line. 1 otherwise. Only "state <run> resume" opens an ended run
+# again. The session launch reads it; lib/lifecycle.sh decides the run end.
+ho_run_ended() {
+  [ "$(ho_ledger_events | jq -r 'select(.kind == "run-end" or .kind == "resume") | .kind' | tail -n 1)" = run-end ]
+}
+
 ho_stop_id_new() { printf 'stop-%s\n' "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"; }
 
 # ho_stop_gate [ticket]: may new work of this ticket start? 0 yes (no stop, or a soft:ticket stop

@@ -145,9 +145,11 @@ ho_life_has() { printf '%s\n' $2 | grep -qx -- "$1"; }
 #   end           the run ends: every session of this run closes (H-079, D37-LIFECYCLE-3)
 #   ended         the run ended earlier; a session still open is closed again
 #   unknown       the stop state or the ticket queue cannot be read, or a ticket of the queue is
-#                 in none of the five states (D2): nothing changes (exit 2)
+#                 in none of the five states (D2) and the decision would end the run, wait or
+#                 stand by: nothing changes (exit 2). Work, stopping and a stop's end go on, with
+#                 a notice that names the ticket.
 ho_life_check() {
-  local st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live
+  local st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live unstated
   if ho_run_ended; then
     # A close that failed at the run end (a busy session, a terminal that could not be reached)
     # is tried again at every later call; closed records are skipped.
@@ -165,13 +167,9 @@ ho_life_check() {
       ready) ready=$ids ;; in-progress) inprog=$ids ;; blocked) blocked=$ids ;; needs-review) review=$ids ;;
     esac
   done
-  # A ticket in none of the five states might still be open work: fail closed, as above.
-  ids=$(ho_life_unstated 2>/dev/null) || { ho_life_say unknown; echo "harness: the ticket states cannot be read; nothing changed" >&2; return 2; }
-  if [ -n "$ids" ]; then
-    ho_life_say unknown
-    printf 'harness: ticket(s) %s are in none of the states ready, in-progress, blocked, needs-review, done; nothing changed\n' "$(printf '%s ' $ids)" >&2
-    return 2
-  fi
+  # A ticket in none of the five states (D2) might still be open work. Work that is ready or
+  # running goes on, but the run never ends, waits or stands by on such a queue (below).
+  unstated=$(ho_life_unstated 2>/dev/null) || unstated="?"
   if [ "$st" -eq 0 ]; then
     # D25a: a soft stop lets running work finish. soft:ticket also lets each covered ticket
     # begun before the stop run on while it is ready or in progress.
@@ -194,6 +192,17 @@ ho_life_check() {
     decision=standby
   else
     decision=end reason=all-done
+  fi
+  if [ -n "$unstated" ]; then
+    if [ "$unstated" = "?" ]; then
+      t="harness: the ticket states cannot all be read"
+    else
+      t="harness: ticket(s) $(printf '%s ' $unstated)are in none of the states ready, in-progress, blocked, needs-review, done"
+    fi
+    case $decision:$reason in
+      end:stop | work:* | stopping:*) printf '%s\n' "$t" >&2 ;;
+      *) ho_life_say unknown; printf '%s; nothing changed\n' "$t" >&2; return 2 ;;
+    esac
   fi
   if [ "$decision" = end ]; then
     # Of checks that decide "end" at the same time, only the first writes the run end; the

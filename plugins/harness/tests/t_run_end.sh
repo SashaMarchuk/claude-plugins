@@ -285,3 +285,24 @@ wait "$waiter"
 assert_eq "H-079: the launch that got its slot after the run end is refused (75)" 75 "$(cat "$base/rc-e2")"
 assert_eq "H-079: it leaves no record, no launcher and no slot" "no no no" \
   "$([ -e "$r15/sessions/e2.json" ] && echo yes || echo no) $([ -e "$r15/launchers/e2.sh" ] && echo yes || echo no) $([ -e "$r15/slots/worker/e2.json" ] && echo yes || echo no)"
+
+# ---- D2: a ticket in no known state holds only the run-ending and waiting decisions ------------
+# Ready or running work goes on; the check names the ticket once in a notice.
+r16=$("$h" run new --workers 5)
+tk "$base/tk-g" ready
+tk "$base/tk-g" done
+f16=$(ls "$base/tk-g"/2-*.md)
+sed 's/^status: done$/status: paused/' "$f16" > "$base/t16.md" && cat "$base/t16.md" > "$f16"
+rc=0; o=$(HO_TICKETS_DIR="$base/tk-g" "$h" lifecycle "$r16" check 2>"$base/check16.err") || rc=$?
+assert_eq "D2: with a ready ticket beside one in no known state the run still works (exit 0)" "work 0" "$(printf '%s\n' "$o" | head -n 1) $rc"
+assert_contains "D2: the work decision names the ticket in no known state" "$(cat "$base/check16.err")" "ticket(s) 2 "
+r17=$("$h" run new --workers 5)
+sess "$r17" worker s1
+"$h" state "$r17" stop >/dev/null
+assert_eq "D2: a stopped run with a running worker stays stopping beside a ticket in no known state" "stopping" \
+  "$(HO_TICKETS_DIR="$base/tk-g" decision "$r17")"
+r18=$("$h" run new --workers 5)
+tk "$base/tk-h" needs-review
+cp "$f16" "$base/tk-h/2-paused.md"
+rc=0; HO_TICKETS_DIR="$base/tk-h" "$h" lifecycle "$r18" check >/dev/null 2>&1 || rc=$?
+assert_eq "D2: a waiting decision beside a ticket in no known state is unknown (exit 2)" 2 "$rc"

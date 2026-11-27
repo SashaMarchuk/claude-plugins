@@ -389,7 +389,7 @@ ho_in_tick() {
   if [ "$rc" -ne 1 ]; then echo stopped; return "$HO_EXIT_STOPPED"; fi
   # An ended run (its newest run-end line has no later resume, as lifecycle check reads it)
   # claims nothing: a ticket taken now would have no run to work in (H-079).
-  if [ "$(ho_ledger_events | jq -r 'select(.kind == "run-end" or .kind == "resume") | .kind' | tail -n 1)" = run-end ]; then
+  if ho_run_ended; then
     echo ended
     return "$HO_EXIT_STOPPED"
   fi

@@ -16,7 +16,8 @@
 #                 PID goes to $HO_FAKE_MSG_PIDS, so the test stops it by exact PID)
 #   unreadable-fail  the user turn is written, the transcript is made unreadable, exit 1
 #   queue-fail    an enqueue record is written, then exit 1
-#   term-ignore   it ignores SIGTERM and sleeps 15 s (the engine must use SIGKILL)
+#   term-ignore   it ignores SIGTERM, sleeps 300 s, then writes <pids>.term.done (the engine must
+#                 use SIGKILL, so the marker never appears)
 #   signal-exit   writes nothing and ends by its own SIGKILL (exit 137)
 # The transcript is found as $HOME/.claude/projects/*/<session-id>.jsonl.
 set -euo pipefail
@@ -71,7 +72,8 @@ case ${HO_FAKE_MSG_MODE:-deliver} in
   term-ignore)
     printf '%s\n' "$$" > "${HO_FAKE_MSG_PIDS:-$HOME/fake-msg.pids}.term"
     trap '' TERM
-    exec sleep 15
+    sleep 300
+    : > "${HO_FAKE_MSG_PIDS:-$HOME/fake-msg.pids}.term.done"
     ;;
   deliver-fail | deliver-hang)
     [ -n "$tr" ] || exit 1

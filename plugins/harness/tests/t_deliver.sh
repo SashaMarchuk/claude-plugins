@@ -31,11 +31,48 @@ fout() { printf '%s/%s.out' "$HO_FAKE_TERM_DIR" "$(printf '%s' "$(rec "$1" .hand
 fbusy() { printf '%s/%s.busy' "$HO_FAKE_TERM_DIR" "$(printf '%s' "$(rec "$1" .handle)" | tr -c 'A-Za-z0-9-' '_')"; }
 screen() { cat "$screens/$2.txt" > "$(fout "$1")"; }
 trof() { ls "$HOME"/.claude/projects/*/"$(rec "$1" .session_id).jsonl" 2>/dev/null | head -n 1; }
-# start <name>: launch, then wait until the fake has opened its transcript.
+# Each block uses the sessions it starts and no earlier one, so a new start first closes every
+# earlier session by its exact PIDs (the terminal's command and the session process): about 90
+# held fakes no longer wait for their 600 s cap (issue #116). left_alive counts the PIDs of
+# earlier sessions that still run when a new one starts; it must stay 0.
+sess_pids() { # <name>: the terminal command's PID and the session's PID
+  local hd
+  hd=$(rec "$1" .handle 2>/dev/null || true)
+  [ -z "$hd" ] || cat "$HO_FAKE_TERM_DIR/$(printf '%s' "$hd" | tr -c 'A-Za-z0-9-' '_').pid" 2>/dev/null || true
+  rec "$1" '.pid // empty' 2>/dev/null || true
+}
+# alive_of <list-file>: how many PIDs of the sessions named in the file still run.
+alive_of() { local n p c=0; while IFS= read -r n; do for p in $(sess_pids "$n"); do alive "$p" && c=$((c + 1)); done; done < "$1"; printf '%s\n' "$c"; }
+: > "$base/started"
+: > "$base/open"
+left_alive=0
+# reap: close every session started since the last reap (listed in open), by exact PIDs. Each
+# PID is kept with its start time in reaped, so the last check is not misled by a reused PID.
+pstart() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+: > "$base/reaped"
+reap() {
+  local n p i ps=""
+  while IFS= read -r n; do ps="$ps $(sess_pids "$n" | tr '\n' ' ')"; done < "$base/open"
+  for p in $ps; do case $p in '' | *[!0-9]*) ;; *) ! alive "$p" || printf '%s\t%s\n' "$p" "$(pstart "$p")" >> "$base/reaped" ;; esac; done
+  for p in $ps; do case $p in '' | *[!0-9]*) ;; *) kill "$p" 2>/dev/null || true ;; esac; done
+  for p in $ps; do case $p in '' | *[!0-9]*) ;; *) i=0; while alive "$p" && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done ;; esac; done
+}
+# launch_one <name> [launch-args]: close the earlier sessions, then launch this one.
+launch_one() {
+  reap
+  left_alive=$((left_alive + $(alive_of "$base/open")))
+  printf '%s\n' "$1" > "$base/open"
+  printf '%s\n' "$1" >> "$base/started"
+  launch "$@"
+}
+# start <name>: launch, then wait until the fake has opened its transcript (a generous cap), in
+# the scratch HOME or in the transcript folder the launch recorded (an account's own folder).
+trof_any() { [ -n "$(trof "$1")" ] || ls "$(rec "$1" '.transcript_root // "/nonexistent"')"/projects/*/"$(rec "$1" .session_id).jsonl" > /dev/null 2>&1; }
 start() {
   local i=0
-  launch "$1" >/dev/null
-  while [ -z "$(trof "$1")" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  launch_one "$1" >/dev/null
+  while ! trof_any "$1" && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
+  trof_any "$1" || bad "test setup: session $1 opened no transcript" ""
 }
 deliver() { local n=$1; shift; "$h" session "$run" deliver "$n" "$@"; }
 ledger() { cat "$run/ledger.jsonl"; }
@@ -197,8 +234,9 @@ assert_eq "H-137: a line of 801 bytes goes through a file" "0 ho-limit-801: read
 assert_exit "S8-24: an instruction id used before in the run is refused" 65 "$h" session "$run" deliver l2 --id ho-limit-800 --text again
 
 # ---- D37-LIFECYCLE-4: the send-now chord comes from runtime data -------------------------
-# A longer wait here: these deliveries pass through the queue, which takes a few more steps.
-set_wait 10
+# A generous wait for a delivery that must succeed: these pass through the queue, which takes a
+# few more steps, and the wait ends as soon as the proof shows (issue #109).
+set_wait 30
 start f1
 screen f1 busy
 : > "$(fbusy f1)"
@@ -219,12 +257,15 @@ out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 deliver f2 --force-send --text "stop now an
 assert_eq "D37-LIFECYCLE-4: the chord bytes come from runtime data, not engine code" "tmux byte $(rec f2 .handle) 0x01
 tmux byte $(rec f2 .handle) 0x02" "$(calls | grep "byte $(rec f2 .handle) ")"
 set_runtime claude-code
+# f3 must stay queued, so its wait runs out: a short wait.
+set_wait 2
 start f3
 screen f3 busy
 : > "$(fbusy f3)"
 out=$(HO_FAKE_CLAUDE_VERSION=2.1.200 deliver f3 --force-send --text "stop now and park" 2>&1) && rc=0 || rc=$?
 assert_eq "D37-LIFECYCLE-4: below the data's lowest version no chord is sent; the message stays queued" "1 " "$rc $(calls | grep "byte $(rec f3 .handle) " || true)"
 assert_contains "D37-LIFECYCLE-4: the skipped chord is in the ledger" "$(ledger)" 'below 2.1.275'
+set_wait 30
 start f4
 screen f4 idle-empty
 out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 deliver f4 --force-send --text "stop now and park" 2>&1) && rc=0 || rc=$?
@@ -249,7 +290,7 @@ assert_exit "S8-24: proof exits 1 when not delivered" 1 "$h" session "$run" proo
 assert_eq "S8-24: an id matches only as a whole word, not inside a longer id" "none id=ho-proofaaa6" "$(pr ho-proofaaa6)"
 
 # ---- H-101: with no transcript to check, nothing is sent ---------------------------------
-HO_FAKE_CLAUDE_TRANSCRIPT=0 launch n1 >/dev/null
+HO_FAKE_CLAUDE_TRANSCRIPT=0 launch_one n1 >/dev/null
 screen n1 idle-empty
 out=$(deliver n1 --text "run the unit tests" 2>&1) && rc=0 || rc=$?
 assert_eq "H-101: without a transcript to prove delivery nothing is typed (exit 1, 0 bytes)" "1 0" "$rc $(inbytes n1)"
@@ -421,8 +462,9 @@ assert_eq "N2: no raw shell error reaches the output" "" "$(printf '%s\n' "$out"
 start z3
 screen z3 busy
 : > "$(fbusy z3)"
-# A positive force-send passes through the queue and the screen gate: a longer wait.
-set_wait 10
+# A positive force-send passes through the queue and the screen gate: a generous wait, which
+# ends as soon as the proof shows (issue #109).
+set_wait 30
 out=$(HO_FAKE_MSG_MODE=queue-fail HO_FAKE_CLAUDE_VERSION=2.1.332 deliver z3 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 set_wait 2
 assert_eq "N3, D37-LIFECYCLE-4: a queued stop from a failed command still gets the chord once" "0x18 0x13" \
@@ -436,9 +478,13 @@ screen z4 idle-empty
 t0=$(date +%s)
 out=$(HO_FAKE_MSG_MODE=term-ignore deliver z4 --text "run tests" 2>&1) && rc=0 || rc=$?
 el=$(( $(date +%s) - t0 ))
-# The bound proves the SIGKILL: the command would sleep 15 s. 12 s leaves room for a loaded
-# machine (it was 7 s, and took 9 s under load; PR #105 review round 2).
-assert_eq "N4: deliver returns within the timeout plus the grace and the proof wait (at most 12 s)" "yes" "$([ "$el" -le 12 ] && echo yes || echo "no (${el}s)")"
+z4id=$(printf '%s' "$out" | sed -n 's/.*id=\(ho-[0-9a-f]*\).*/\1/p' | head -n 1)
+# The command ignores SIGTERM and would sleep 300 s, then leave a marker. The proof of the
+# SIGKILL is the timeout path in the ledger and a command that never ran to its end; the bound
+# only rules out a wait for the whole sleep, with room for any load (issue #109).
+assert_contains "N4: the ledger records the message command as timed out and stopped" "$(ledger | grep -F "${z4id:-no-id}" || true)" "timed out and stopped"
+assert_eq "N4: the command that ignored SIGTERM never ran to its end" "no" "$([ -e "$base/extra.pids.term.done" ] && echo yes || echo no)"
+assert_eq "N4: deliver returns long before the command's own end (at most 120 s of its 300 s)" "yes" "$([ "$el" -le 120 ] && echo yes || echo "no (${el}s)")"
 tp=$(cat "$base/extra.pids.term" 2>/dev/null || true)
 assert_eq "N4: the command that ignored SIGTERM is gone" "no" "$([ -n "$tp" ] && alive "$tp" && echo yes || echo no)"
 assert_eq "N4: a stopped command is not followed by typing (0 bytes)" "0" "$(inbytes z4)"
@@ -461,9 +507,10 @@ start q1
 screen q1 idle-empty
 for bad in 11 '"abc"'; do
   jq --argjson d "$bad" '.terminal.enter_delay_seconds = $d' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
-  t0=$(date +%s)
   rc=0; deliver q1 --text "run tests" >/dev/null 2>&1 || rc=$?
-  assert_eq "Codex P2: terminal.enter_delay_seconds=$bad is refused (78) at once, 0 bytes typed" "78 0 yes" "$rc $(inbytes q1) $([ $(( $(date +%s) - t0 )) -le 5 ] && echo yes || echo no)"
+  # The delay runs only between typing and Enter, so no key at all proves it never ran.
+  assert_eq "Codex P2: terminal.enter_delay_seconds=$bad is refused (78) before any typing: 0 bytes, no key" "78 0 " \
+    "$rc $(inbytes q1) $(calls | grep -E "^tmux (send-text|key|byte) $(rec q1 .handle)( |$)" || true)"
 done
 jq '.terminal.enter_delay_seconds = 0' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 
@@ -496,8 +543,9 @@ planted() { cat "$base/planted-bash.log" "$base/planted-env.log" 2>/dev/null | g
 start r1
 screen r1 busy
 : > "$(fbusy r1)"
-# A positive force-send passes through the queue and the screen gate: a longer wait.
-set_wait 10
+# A positive force-send passes through the queue and the screen gate: a generous wait, which
+# ends as soon as the proof shows (issue #109).
+set_wait 30
 out=$(PATH="$proj/bin:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver r1 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 set_wait 2
 assert_eq "Codex P2: a bash or env planted in a project folder first on PATH never runs the version check" "" "$(planted '--version')"
@@ -690,8 +738,9 @@ chmod 700 "$proj/bin/awk"
 start c7-awk
 screen c7-awk busy
 : > "$(fbusy c7-awk)"
-# A positive force-send passes through the queue and the screen gate: a longer wait.
-set_wait 10
+# A positive force-send passes through the queue and the screen gate: a generous wait, which
+# ends as soon as the proof shows (issue #109).
+set_wait 30
 out=$(PATH="$proj/bin:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver c7-awk --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 set_wait 2
 assert_eq "Codex P2: an awk planted first on PATH never reads the runtime's version" "" "$(grep -e 'print \$1' -e '2.1.275' "$base/planted-awk.log" 2>/dev/null || true)"
@@ -749,8 +798,9 @@ dcase8() { # <name> <label> <delay> <builder>
   jq --argjson d "$delay" '.terminal.enter_delay_seconds = $d' "$base/proj8.bak" > "$proj/.harness/config.json"
   deliver "$nm" --text "run tests" > "$base/$nm.out" 2>&1 &
   dp=$!
-  while [ "$(inbytes "$nm")" = 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
-  sleep 0.5
+  # The typed line arrives in one write, then the engine waits the Enter delay: the screen
+  # changes as soon as the line is there, with no fixed sleep (issue #109).
+  while [ "$(inbytes "$nm")" = 0 ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
   "$b" > "$(fout "$nm")"
   rc=0; wait "$dp" || rc=$?
   cp "$base/proj8.bak" "$proj/.harness/config.json"
@@ -790,8 +840,7 @@ screen d9-busy idle-empty
 jq '.terminal.enter_delay_seconds = 4' "$base/proj8.bak" > "$proj/.harness/config.json"
 HO_FAKE_TERM_ECHO_EXTRA=ZKEYZ deliver d9-busy --text "run tests PAYLOADZ" > "$base/d9.out" 2>&1 &
 d9=$!
-i=0; while [ "$(inbytes d9-busy)" = 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
-sleep 0.5
+i=0; while [ "$(inbytes d9-busy)" = 0 ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
 busy8 > "$(fout d9-busy)"
 rc=0; wait "$d9" || rc=$?
 cp "$base/proj8.bak" "$proj/.harness/config.json"
@@ -819,12 +868,12 @@ screen d9-ver busy
 : > "$(fbusy d9-ver)"
 set_wait 10
 t0=$(date +%s)
-out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 HO_FAKE_CLAUDE_VERSION_SLEEP=60 deliver d9-ver --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 HO_FAKE_CLAUDE_VERSION_SLEEP=300 deliver d9-ver --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 el=$(( $(date +%s) - t0 ))
 set_wait 2
-# The version check would hang 60 s; returning within 40 s proves it was stopped, with room
-# for a loaded machine (the bound was 16 s against a 20 s hang, and took 20 s under load).
-assert_eq "Codex P2: a version check that hangs is stopped; deliver returns within the bound (at most 40 s)" "yes" "$([ "$el" -le 40 ] && echo yes || echo "no (${el}s)")"
+# The version check would hang 300 s. The proof that it was stopped is the unknown version in
+# the ledger (below); the bound only rules out a wait for the whole hang, with room for any load.
+assert_eq "Codex P2: a version check that hangs is stopped; deliver returns long before the hang ends (at most 120 s of 300 s)" "yes" "$([ "$el" -le 120 ] && echo yes || echo "no (${el}s)")"
 assert_eq "Codex P2: with the version unknown no chord is sent" "" "$(calls | grep "byte $(rec d9-ver .handle) " || true)"
 assert_contains "Codex P2: the skipped chord names the unknown version" "$(ledger | grep -F deliver-force-send | tail -n 1)" "unknown"
 
@@ -944,3 +993,9 @@ assert_eq "PR #105 round 2: a stale notice, then a later line indented 10 above 
 # A plain two-space line right under the box is not the status line: nothing is typed.
 under1() { rbox; printf '  Neutral text that only starts with two spaces.\n'; }
 hold_case rr2-under "PR #105 round 2: a plain two-space line right under the real box" under1
+
+# ---- issue #116: every fake session this file started is closed, checked by PID -------------
+assert_eq "test hygiene: no earlier fake session still ran when a block started its own" 0 "$left_alive"
+reap
+assert_eq "test hygiene: after the last block no fake session this file started is alive" 0 \
+  "$(c=0; while IFS='	' read -r p st; do [ -z "$st" ] || [ "$(pstart "$p")" != "$st" ] || c=$((c + 1)); done < "$base/reaped"; echo "$c")"

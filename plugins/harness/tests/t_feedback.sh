@@ -256,6 +256,32 @@ zedvscode|rule vscode://file/srv/x/zedvscode
 zeddrive2|rule C://Users/x/zeddrive2
 zedpwd|rule Pwd=zedpwd
 zedprojspec|G1 $proj/docs/Zedclient (draft)/zedprojspec.md
+zedcc1|B1 "arguments": ["-I/Users/zedperson/zedcc1/include"]
+zedcflags|B1 CFLAGS=-I/opt/zedcflags/include
+zedbt|B1 \`-L/Projects/zedbt/lib\`
+zedqflag|B1 "-L/Projects/zedqflag/lib"
+zedparen|B1 error in (-I/opt/zedparen/inc)
+zedisys|B1 cc -isystem/opt/zedisys/include x.c
+zedquoted|B1 cat /"zedquoted Corp"/plan
+zedcomma|B2 links: https://example.com,/Projects/zedcomma/plan.md
+zedpipe|B2 see https://example.com|/Users/zed/zedpipe/plan.md
+zedlparen|B2 see https://example.com(/Projects/zedlparen/plan.md)
+zedsl1|B3 zedsl1user:zedpw@localhost
+zedsl2|B3 zedsl2user:zedpw@10.0.0.5:5432/app
+zedsl3|B3 connect zedsl3user:zedpw@dbhost
+zedcurlglued|B3 curl -uzedcurlglued:zedpw https://x.example
+zedwin1|minor \\Users\\zedwin1\\x
+zedwin2|minor ~\\Documents\\zedwin2\\x
+zedwin3|minor %USERPROFILE%\\zedwin3\\x
+zedwin4|minor \\\\?\\UNC\\zedwin4\\share
+zedenv1|minor \$PWD/zedenv1 Projects/x
+zedenv2|minor \${XDG_CONFIG_HOME}/zedenv2/x
+zedenv3|minor \$env:HOME/zedenv3/x
+zedenv4|minor \$(pwd)/zedenv4/x
+zedpct|minor %2FUsers%2Fzed%2Fzedpct
+zedmail1|minor mail zedmail1@localhost
+zedmail2|minor ssh zedmail2@zedhost
+zédmail3|minor zédmail3@exämple.com
 EOF
 shapes=$(cat "$base/shapes.txt")
 printf '%s\n' "$shapes" | cut -d'|' -f2- > "$base/d3.txt"
@@ -284,6 +310,34 @@ rc=0; out2=$(cd "$proj" && "$h" feedback preview "$base/d3b.txt") || rc=$?
 assert_eq "H-140 rule: the shown text passes the privacy check when sent in again" "0" "$rc"
 assert_eq "H-140 rule: cleaning the shown text again changes nothing" "$(desc_of "$out")" "$(desc_of "$out2")"
 rm -rf "$(draft_of "$out")" "$(draft_of "$out2")"
+
+# ---- B3: a token wrapped over two lines loses both lines --------------------------------
+v_wrap="gh""p_""Zed4567890abcd"
+printf 'token was\n%s\nEFGHij1234klmnopqrstu\nthen it failed\n' "$v_wrap" > "$base/d7.txt"
+rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d7.txt") || rc=$?
+assert_eq "H-140 B3 wrapped token: preview exits 0" "0" "$rc"
+shown=$(shown_body "$out")
+for m in Zed4567890abcd EFGHij1234klmnopqrstu; do
+  case $shown in
+    *"$m"*) bad "H-140 B3 wrapped token: [$m] does not reach the shown text" "it does" ;;
+    *) ok "H-140 B3 wrapped token: [$m] does not reach the shown text" ;;
+  esac
+done
+assert_contains "H-140 B3 wrapped token: the lines around it stay" "$shown" "$(printf 'token was\n[line removed: secret]\n[line removed: secret]\nthen it failed')"
+rm -rf "$(draft_of "$out")"
+
+# ---- The login with other separators is still the login ---------------------------------
+printf 'one ZedAcct\ntwo zed.acct\nthree zed_acct\nfour zedacct2\nfive is fine\n' > "$base/d8.txt"
+out=$(cd "$proj" && USER=zed-acct LOGNAME=zed-acct "$h" feedback preview "$base/d8.txt")
+shown=$(shown_body "$out")
+for m in ZedAcct zed.acct zed_acct zedacct2; do
+  case $shown in
+    *"$m"*) bad "H-140 account rule: the login zed-acct written as [$m] does not reach the text" "it does" ;;
+    *) ok "H-140 account rule: the login zed-acct written as [$m] does not reach the text" ;;
+  esac
+done
+assert_contains "H-140 account rule: a line without the login stays" "$shown" "five is fine"
+rm -rf "$(draft_of "$out")"
 
 # ---- A realistic report does not get worse (the attempt 2 verdict's over-removal table) ------
 cat > "$base/d4.txt" <<'EOF'

@@ -21,5 +21,9 @@ because a transcript or a screen can carry secrets (field note I4). So these fil
 recognition rules and the negative cases, not that the released tool still renders a notice
 this way. The product check against a real limit is the deferred task of H-113 and issue #82.
 
+The layout around a notice on a real screen (the input box, the status lines and the agent
+list under it) is in `../screens-real/`, taken from a real pane with all text replaced
+(issue #104). `t_screen.sh` splices these files above that layout by script.
+
 Adding a file: write it with a script, keep the recognisable line inside the file, and add
 one assertion in `t_screen.sh` that compares the class word.

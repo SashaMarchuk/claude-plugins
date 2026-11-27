@@ -1,6 +1,6 @@
  Fake runtime 0.0.0
 
 ────────────────────────────────────────
-> [2mrun the tests again[0m
+[39m> [2mrun the tests again[0m
 ────────────────────────────────────────
   ? for shortcuts

@@ -147,7 +147,9 @@ for canary in CANARY Canary canary "$proj" "$HOME" "$base" $tokens; do
   case $ctx in *"$canary"*) leaks="$leaks [$canary]" ;; esac
 done
 assert_eq "H-140 / D43 private: the added context holds no ticket text, path, token or account name" "" "$leaks"
-assert_contains "D43 summary: the run state is reported" "$ctx" "- Last run: not stopped,"
+# The ledger holds an unreadable line after its last stop or resume, so the stop state is
+# unknown, as ho_stopped says.
+assert_contains "D43 summary: an unreadable ledger line after the last stop or resume makes the stop state unknown" "$ctx" "- Last run: stop state unknown,"
 assert_contains "D43 summary: step names are the fixed role names, others counted as other" "$ctx" \
   "- Steps (session roles launched): other 1, worker 1"
 assert_contains "D43 summary: engine error codes are event kinds with counts" "$ctx" "owner-action x1, session-close-failed x1, unreadable x1"
@@ -181,6 +183,15 @@ rc=0; out=$(cd "$proj" && env -u HO_PROJECT_DIR PATH="$proj/bin:$PATH" "$h" feed
 assert_eq "H-140 runtime guard: with HO_PROJECT_DIR unset the preview exits 0" "0" "$rc"
 assert_eq "H-140 runtime guard: with HO_PROJECT_DIR unset the project's own claude is not run" "no" "$([ -e "$base/ran" ] && echo yes || echo no)"
 rm -rf "$proj/bin" "$base/ran" "$(draft_of "$out")"
+# An outside runtime whose "#!" line asks env for an interpreter never gets one from the project.
+mkdir -p "$proj/bin" "$base/extbin"
+printf '#!/usr/bin/env bash\ntouch "%s/node-ran"\necho 9.9.9\n' "$base" > "$proj/bin/node"
+printf '#!/usr/bin/env node\nconsole.log("1.2.3")\n' > "$base/extbin/claude"
+chmod +x "$proj/bin/node" "$base/extbin/claude"
+rc=0; out=$(cd "$proj" && env -u HO_PROJECT_DIR PATH="$proj/bin:$base/extbin:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "H-140 runtime guard: a preview with a project node first on PATH exits 0" "0" "$rc"
+assert_eq "H-140 runtime guard: the runtime's env interpreter is never taken from the project" "no" "$([ -e "$base/node-ran" ] && echo yes || echo no)"
+rm -rf "$proj/bin" "$base/extbin" "$base/node-ran" "$(draft_of "$out")"
 mkdir -p "$proj/sub"
 for where in "$proj" "$proj/sub"; do
   rc=0; out=$(cd "$where" && env -u HO_PROJECT_DIR "$h" feedback preview "$base/d1.txt") || rc=$?

@@ -176,7 +176,7 @@ ho_stop_info() {
         (if .state == "stop" then . else .begun = .seen end)
         | .state = "stop" | .type = ($e.type // "soft:step") | .scope = ($e.tickets // "all") | .id = ($e.stop_id // "")
       elif $e.kind == "resume" then .state = "none" | .type = "" | .scope = "" | .id = "" | .begun = []
-      elif $e.kind == "step-begin" or ($e.kind == "session-launch" and ($e.ticket // "") != "") then .seen += [($e.ticket // "" | tostring)]
+      elif $e.kind == "step-begin" or $e.kind == "pickup" or ($e.kind == "session-launch" and ($e.ticket // "") != "") then .seen += [($e.ticket // "" | tostring)]
       else . end)
     | [.state, .type, .scope, .id, (.begun | unique | join(" "))] | map(gsub("[|\\n]"; " ")) | join("|")'
 }
@@ -307,7 +307,8 @@ ho_state_stop_state() {
 # state <run> begin --ticket T --step S: the step gate (D25a). The caller asks before it starts a
 # step of a ticket; 0 and one step-begin line, or 75 when a stop lets nothing new start (also
 # when the stop state is unknown). The step id is data from the flow. A ticket also counts as
-# begun when a session of it launched (session launch --ticket) before the stop.
+# begun when a session of it launched (session launch --ticket) or intake claimed it (its pickup
+# line) before the stop, so a ticket claimed just before a soft:ticket stop is not stranded.
 ho_state_begin() {
   local t="" s="" rc=0
   while [ $# -gt 0 ]; do

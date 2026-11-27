@@ -11,7 +11,8 @@
 #      Write, maintain or admin access passes; anything else, an unknown person, a login of an
 #      unexpected shape or a failed query is read-only (H-009), and the ticket moves to
 #      needs-review with one status comment (H-011, H-026, D5). A configured target repository
-#      that the ticket text names needs the same access (D37-INTAKE-9). A bot is judged by its
+#      that the ticket text (title or body) names needs the same access (D37-INTAKE-9); a text
+#      that cannot be read means no claim. A bot is judged by its
 #      own access, with no allow-list (H-008 interim rule until OPEN-INTAKE-1 is answered).
 #   2. Claim: ready -> in-progress, then one "picked up" comment.
 #   3. Readiness: the main runtime, run without a terminal and read-only from its runtime
@@ -32,7 +33,8 @@
 # Settings: tickets.poll_seconds, tickets.required_content, tickets.target_repos,
 # tickets.readiness_timeout_seconds. No command is read from any config: the judge's command
 # line comes from the runtime profile, which a project cannot add (D37-FLOW-8).
-# Exit codes: 64 usage, 69 the tracker could not be read, 75 the run is stopped, 78 bad settings.
+# Exit codes: 64 usage, 69 the tracker could not be read, 75 the run is stopped or has ended,
+# 78 bad settings.
 # Requires lib/tickets.sh, lib/run.sh, lib/config.sh, lib/common.sh, lib/sessions.sh, lib/slots.sh.
 
 HO_IN_DEFAULT_POLL=60
@@ -183,22 +185,43 @@ ho_in_review() {
 
 # ho_in_pickup <id>: print one result line. Returns 0 only when the ticket starts. A tracker
 # step that fails is never silent: it prints "error <id>" and adds a pickup-error ledger line.
+# A step that fails after the claim moves the ticket to blocked, so no ticket stays in progress
+# without a worker; a writer's ready label unblocks it (H-031). The move changes the label only,
+# because the comment may be what failed; a status comment is tried after it. When the move
+# fails too, one owner-action line says what a person does.
 ho_in_pickup() {
-  local rc=0
-  HO_IN_STEP=access
+  local rc=0 left=""
+  HO_IN_STEP=access HO_IN_CLAIMED=0
   ho_in_pickup_steps "$1" || rc=$?
   case $rc in
     0) return 0 ;;
     1) return 1 ;;
   esac
-  ho_ledger_append pickup-error ticket "$1" step "${HO_IN_STEP:-unknown}"
+  if [ "$HO_IN_CLAIMED" = 1 ]; then
+    if ho_in_set_state "$1" blocked; then
+      left=blocked
+      printf 'Reason: a tracker step failed after the claim (%s).\nNext: A person with write access checks the ticket and sets the ready label to take it again.\n' "${HO_IN_STEP:-unknown}" |
+        ho_tk_post "$1" orchestrator status "pickup failed, blocked" - from in-progress to blocked >/dev/null 2>&1 || true
+    else
+      left=in-progress
+      ho_ledger_append owner-action title "ticket $1 is in progress with no worker" \
+        why "a tracker step failed after the claim (${HO_IN_STEP:-unknown}), and the move to blocked failed too" \
+        command "harness tickets block $1 <why-file>, or set its blocked label by hand" verify "the ticket carries only the blocked label"
+    fi
+    ho_ledger_append pickup-error ticket "$1" step "${HO_IN_STEP:-unknown}" state "$left"
+  else
+    ho_ledger_append pickup-error ticket "$1" step "${HO_IN_STEP:-unknown}"
+  fi
   echo "error $1"
   return 1
+}
+ho_in_set_state() { # <id> <state>: on either backend
+  if ho_tk_gh; then ho_tk_gh_set_state "$1" "$2"; else ho_tk_locked ho_tk_l_set_state_locked "$1" "$2"; fi
 }
 
 # ho_in_pickup_steps <id>: returns 0 start, 1 handled (not started), 2 a step failed.
 ho_in_pickup_steps() {
-  local id=$1 state events ready blocked login="" ridx=-1 bidx=-1 repo body qf
+  local id=$1 state events ready blocked login="" ridx=-1 bidx=-1 repo body="" raw targets qf
   if ho_tk_gh; then
     state=$(ho_tk_gh_state "$id") || { ho_in_err "cannot read the labels of #$id"; return 2; }
     if events=$(ho_tk_gh_events "$id"); then
@@ -213,6 +236,20 @@ ho_in_pickup_steps() {
     # Local tickets: whoever can write the ticket folder can write the repository.
     state=ready login=local
   fi
+
+  # A ready label on a ticket that is already in progress or done is no new pickup (D2: one state
+  # label at a time). The ticket keeps its state, the stray ready label goes, and one ledger
+  # line records it; the next tick no longer sees the ticket. needs-review is not here: a
+  # writer's ready label on it is the approval (H-011).
+  local cur
+  for cur in in-progress done; do
+    case " $state " in *" $cur "*)
+      ho_tk_gh_set_state "$id" "$cur" || return 2
+      ho_ledger_append pickup-skipped ticket "$id" state "$cur" by "${login:-unknown}"
+      echo "kept-$cur $id"
+      return 1 ;;
+    esac
+  done
 
   # Unblock (H-031): the ready label on a blocked ticket.
   case " $state " in *" blocked "*)
@@ -240,9 +277,16 @@ ho_in_pickup_steps() {
       echo "needs-review $id"
       return 1
     fi
-    body=$(gh issue view "$id" --repo "$HO_TK_REPO" --json body 2>/dev/null | jq -r '.body // ""') || body=""
+    # The ticket text (title and body) is read only when another target repository is configured.
+    # A failed read fails closed: no claim, the ticket stays ready for the next poll.
+    targets=$(ho_in_targets | grep -vxF -- "$HO_TK_REPO" || true)
+    if [ -n "$targets" ]; then
+      HO_IN_STEP=target-repos
+      raw=$(gh issue view "$id" --repo "$HO_TK_REPO" --json title,body 2>/dev/null) || { ho_in_err "cannot read the text of #$id to check its target repositories"; return 2; }
+      body=$(printf '%s' "$raw" | jq -er '"\(.title // "")\n\(.body // "")"' 2>/dev/null) || { ho_in_err "cannot read the text of #$id to check its target repositories"; return 2; }
+    fi
     while IFS= read -r repo; do
-      [ -n "$repo" ] && [ "$repo" != "$HO_TK_REPO" ] || continue
+      [ -n "$repo" ] || continue
       printf '%s\n' "$body" | LC_ALL=C grep -Fqi -- "$repo" || continue
       if [ "$(ho_tk_access "$login" "$repo")" != writer ]; then
         ho_in_review "$id" ready "the person who set the ready label has no confirmed write access to $repo, which the ticket names" || return 2
@@ -251,7 +295,7 @@ ho_in_pickup_steps() {
         return 1
       fi
     done <<EOF_REPOS
-$(ho_in_targets)
+$targets
 EOF_REPOS
   fi
 
@@ -262,7 +306,7 @@ EOF_REPOS
   else
     ho_tk_locked ho_tk_l_set_state_locked "$id" in-progress ready || return 2
   fi
-  HO_IN_STEP=pickup-comment
+  HO_IN_CLAIMED=1 HO_IN_STEP=pickup-comment
   printf 'The harness took this ticket and checks its readiness now.\n' |
     ho_tk_post "$id" orchestrator pickup "picked up" - from ready to in-progress || return 2
   ho_ledger_append pickup ticket "$id" by "$login"
@@ -291,20 +335,29 @@ EOF_REPOS
 }
 
 # ho_in_close_asked: close every session that asked a question and is not closed yet (H-032).
+# A close that fails is tried again at every tick, but reported once per question: one
+# "close-failed <session>" line and one owner-action line, until a newer question resets it.
 ho_in_close_asked() {
-  local s st
+  local s kind st
   # Only a session whose newest question has no later question-closed line: a session relaunched
   # under the same name after the answer (D14) is not closed again.
-  ho_ledger_events | jq -rn 'reduce (inputs | select(.kind == "question" or .kind == "question-closed")
+  ho_ledger_events | jq -rn 'reduce (inputs | select(.kind == "question" or .kind == "question-closed"
+        or .kind == "question-close-failed")
       | select((.session | type) == "string")) as $e ({}; .[$e.session] = $e.kind)
-    | to_entries[] | select(.value == "question") | .key' |
-    while IFS= read -r s; do
+    | to_entries[] | select(.value != "question-closed") | "\(.key) \(.value)"' |
+    while read -r s kind; do
       ho_session_name_ok "$s" 2>/dev/null || continue
       [ -f "$HO_RUN_DIR/sessions/$s.json" ] || continue
       st=$(jq -r '.status // ""' "$HO_RUN_DIR/sessions/$s.json" 2>/dev/null) || continue
       if [ "$st" = closed ] || ho_session_close "$s" >/dev/null 2>&1; then
         ho_ledger_append question-closed session "$s"
         echo "closed $s"
+      elif [ "$kind" = question ]; then
+        ho_ledger_append question-close-failed session "$s"
+        ho_ledger_append owner-action title "session $s asked a question and could not be closed" \
+          why "the intake tick closes a session that asked a question (H-032); this close failed and is tried again at every tick" \
+          command "harness session $HO_RUN_DIR close $s" verify "the session record of $s reads closed"
+        echo "close-failed $s"
       fi
     done
 }
@@ -334,6 +387,12 @@ ho_in_tick() {
   ho_tk_settings || return
   ho_stopped || rc=$?
   if [ "$rc" -ne 1 ]; then echo stopped; return "$HO_EXIT_STOPPED"; fi
+  # An ended run (its newest run-end line has no later resume, as lifecycle check reads it)
+  # claims nothing: a ticket taken now would have no run to work in (H-079).
+  if [ "$(ho_ledger_events | jq -r 'select(.kind == "run-end" or .kind == "resume") | .kind' | tail -n 1)" = run-end ]; then
+    echo ended
+    return "$HO_EXIT_STOPPED"
+  fi
   if [ -f "$(ho_in_state)" ]; then
     wait=$(ho_in_wait "$interval" "$(ho_in_errors)")
     mtime=$(ho_tk_lock_mtime "$(ho_in_state)")
@@ -376,9 +435,10 @@ usage: harness intake <run-dir> <verb>
                       before the next poll, after the back-off for tracker errors
   tick [--max N]      one poll when it is due: close sessions that asked a question, then take
                       ready tickets up to the free worker slots (and N). Prints one line each:
-                      start|blocked|needs-review|unblocked|kept-blocked <id>, closed <session>,
-                      not-due <seconds>, tracker-error, stopped
-  poll [--max N]      tick until the run is stopped
+                      start|blocked|needs-review|unblocked|kept-blocked|kept-in-progress|
+                      kept-done|error <id>, closed|close-failed <session>,
+                      not-due <seconds>, tracker-error, stopped, ended
+  poll [--max N]      tick until the run is stopped or has ended
 USAGE
 }
 

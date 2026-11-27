@@ -153,3 +153,82 @@ label alice "$t11" ready
 out=$(HO_FAKE_GH_FAIL="issue comment" tick 2>/dev/null || true)
 assert_contains "D2 a failed pickup comment prints an error line for the ticket" "$out" "error $t11"
 assert_contains "D2 a failed pickup comment is recorded in the ledger" "$(jq -c --arg t "$t11" 'select(.kind == "pickup-error" and .ticket == $t)' "$run/ledger.jsonl")" '"step":"pickup-comment"'
+
+# D2 H-030: a ready label on a ticket that is already in progress or done is no new pickup. The
+# harness keeps the state it has, removes the stray ready label (one state label at a time) and
+# records it once; it claims nothing and runs no readiness check.
+for st in in-progress done; do
+  t=$(ticket "Stray ready on $st" "$st")
+  label alice "$t" ready
+  : > "$HO_FAKE_CLAUDE_LOG"
+  out=$(tick)
+  assert_contains "D2 a ready label on the $st ticket is not a pickup" "$out" "kept-$st $t"
+  assert_eq "D2 H-030 the $st ticket keeps only its own state label" "[\"harness:$st\"]" "$(labels "$t")"
+  assert_eq "D2 the $st ticket gets no picked-up comment" "" "$(comments "$t" | grep 'picked up' || true)"
+  assert_eq "D2 no readiness check runs for the $st ticket" "" "$(cat "$HO_FAKE_CLAUDE_LOG")"
+  assert_eq "D2 the stray ready label on the $st ticket is recorded once" "1" "$(jq -c --arg t "$t" 'select(.kind == "pickup-skipped" and .ticket == $t)' "$run/ledger.jsonl" | grep -c . || true)"
+  out=$(tick)
+  assert_eq "D2 the next tick says nothing more about the $st ticket" "" "$(printf '%s' "$out" | grep -w "$t" || true)"
+done
+# H-011 a writer's ready label on a needs-review ticket is the approval and stays a pickup.
+t=$(ticket "Approved after review" needs-review)
+label alice "$t" ready
+out=$(tick)
+assert_contains "H-011 a writer's ready label on a needs-review ticket is taken" "$out" "start $t"
+
+# D37-INTAKE-9 H-009: the target repository check fails closed. A ticket text that cannot be read
+# is no pickup: the ticket is not claimed, one error line and a pickup-error ledger line report
+# it, and it stays ready for the next poll. A repository named only in the title is checked too.
+mkdir -p "$base/gh-shim"
+cat > "$base/gh-shim/gh" <<SHIM
+#!/usr/bin/env bash
+# Fails only the read of the ticket text; every other call goes to the fake gh.
+case " \$* " in *" issue view "*body*) echo "simulated outage" >&2; exit 1 ;; esac
+exec "$HO_TESTS_DIR/fake-bin/gh" "\$@"
+SHIM
+chmod +x "$base/gh-shim/gh"
+t12=$(ticket "Text unreadable")
+label alice "$t12" ready
+out=$(PATH="$base/gh-shim:$PATH" tick 2>/dev/null || true)
+assert_contains "D37-INTAKE-9 an unreadable ticket text is no pickup" "$out" "error $t12"
+assert_eq "D37-INTAKE-9 the ticket with unreadable text is not claimed" '["harness:ready"]' "$(labels "$t12")"
+assert_contains "D37-INTAKE-9 the failed read is recorded in the ledger" "$(jq -c --arg t "$t12" 'select(.kind == "pickup-error" and .ticket == $t)' "$run/ledger.jsonl")" '"step":"target-repos"'
+out=$(tick)
+assert_contains "D37-INTAKE-9 once the text can be read the ticket is taken" "$out" "start $t12"
+t13=$(ticket "Port the export to fake/api" "" "## Outcome
+Export reports as CSV.
+
+## Scope
+src/report.sh
+
+## Acceptance criteria
+A test exports one report.")
+label alice "$t13" ready
+out=$(HO_FAKE_GH_FAIL_API=repos/fake/api/ tick)
+assert_contains "D37-INTAKE-9 a target repository named only in the title is checked" "$out" "needs-review $t13"
+
+# D2 H-030: a tracker step that fails after the claim leaves no in-progress ticket without a
+# worker. The ticket moves to blocked (one state label), the error is reported once, and a
+# writer's ready label later unblocks and takes it.
+assert_eq "D2 the ticket whose pickup comment failed is moved to blocked" '["harness:blocked"]' "$(labels "$t11")"
+assert_contains "D2 the ledger records where the failed ticket was left" "$(jq -c --arg t "$t11" 'select(.kind == "pickup-error" and .ticket == $t)' "$run/ledger.jsonl")" '"state":"blocked"'
+out=$(tick)
+assert_eq "D2 the next tick reports the failed ticket no more" "" "$(printf '%s' "$out" | grep -w "$t11" || true)"
+label alice "$t11" ready
+out=$(tick)
+assert_contains "D2 a writer's ready label takes the failed ticket again" "$out" "start $t11"
+# When the move to blocked fails too, one owner-action line tells a person what to do.
+cat > "$base/gh-shim2" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" issue comment "*) echo "simulated outage" >&2; exit 1 ;;
+  *" issue edit "*harness:blocked*) echo "simulated outage" >&2; exit 1 ;;
+esac
+exec "$HO_TESTS_DIR/fake-bin/gh" "\$@"
+SHIM
+mkdir -p "$base/gh-shim2.d" && mv "$base/gh-shim2" "$base/gh-shim2.d/gh" && chmod +x "$base/gh-shim2.d/gh"
+t14=$(ticket "Comment and block fail")
+label alice "$t14" ready
+out=$(PATH="$base/gh-shim2.d:$PATH" tick 2>/dev/null || true)
+assert_contains "D2 a failed pickup and a failed move to blocked still print one error line" "$out" "error $t14"
+assert_contains "D2 a ticket left in progress gets one owner-action line" "$(jq -c 'select(.kind == "owner-action")' "$run/ledger.jsonl")" "ticket $t14"

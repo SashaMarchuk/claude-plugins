@@ -87,3 +87,19 @@ assert_exit "H-031 unblock of a missing ticket fails" 66 env HO_FAKE_GH_USER=ali
   assert_eq "H-030 local: exactly one status line, ready" "status: ready" "$(sed -n '/^$/q; /^status:/p' "$f")"
   assert_exit "H-031 local: unblock of a ready ticket is refused" 65 "$h" tickets unblock "$lt"
 )
+
+# H-031 a person unblocks, never a harness session: inside a session (the launcher exports
+# HO_SESSION_ID and HO_SESSION_NAME) the terminal unblock is refused (exit 77, as autonomy
+# approve) and the ticket stays blocked, even when the signed-in account can write.
+t9=$(ticket "Session tries to unblock" blocked)
+assert_exit "H-031 unblock from inside a session (session name) is refused (exit 77)" 77 env HO_FAKE_GH_USER=alice HO_SESSION_NAME=w1 "$h" tickets unblock "$t9"
+assert_exit "H-031 unblock from inside a session (session id) is refused (exit 77)" 77 env HO_FAKE_GH_USER=alice HO_SESSION_ID=0b7c5f2e-1d1a-4c49-9a57-3f0e8d6a2b11 "$h" tickets unblock "$t9"
+assert_eq "H-031 R10.3 the ticket a session tried to unblock stays blocked" '["harness:blocked"]' "$(state_labels "$t9")"
+err=$(env HO_FAKE_GH_USER=alice HO_SESSION_NAME=w1 "$h" tickets unblock "$t9" 2>&1 >/dev/null || true)
+assert_contains "H-031 the refusal says a person unblocks" "$err" "person"
+(
+  export HO_TICKETS_SOURCE=local HO_TICKETS_DIR="$base/local"
+  unset HO_TICKETS_REPO
+  lt2=$(ticket "Local blocked, session" blocked)
+  assert_exit "H-031 local: unblock from inside a session is refused (exit 77)" 77 env HO_SESSION_NAME=w1 "$h" tickets unblock "$lt2"
+)

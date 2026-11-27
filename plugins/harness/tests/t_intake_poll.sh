@@ -71,3 +71,32 @@ start=$(date +%s)
 rc=0; "$h" intake "$run" poll >/dev/null 2>&1 || rc=$?
 assert_eq "H-003 a stopped run: poll exits 75" "75" "$rc"
 assert_eq "H-003 a stopped run: poll ends without waiting an interval" "yes" "$([ $(( $(date +%s) - start )) -lt 20 ] && echo yes || echo no)"
+
+# H-079 D37-LIFECYCLE-3: a run that has ended (a run-end ledger line, here for all-done) claims
+# nothing: tick and poll exit 75, as for a stop, and a ready ticket stays ready. A resume after the
+# end lets intake take work again.
+run2=$(cd "$proj" && "$h" run new)
+jq -cn --arg r "$(basename "$run2")" '{ts: "2026-01-01T00:00:00Z", run: $r, kind: "run-end", reason: "all-done"}' >> "$run2/ledger.jsonl"
+te=$(ticket "After the end")
+label alice "$te" ready
+rc=0; out=$("$h" intake "$run2" tick) || rc=$?
+assert_eq "H-079 an ended run: tick exits 75" "75" "$rc"
+assert_contains "H-079 an ended run: tick says the run has ended" "$out" "ended"
+assert_eq "H-079 an ended run claims no ticket" '["harness:ready"]' "$(labels "$te")"
+# The poll runs in the background and is ended after 20 s, so a poll that never stops fails here.
+"$h" intake "$run2" poll >/dev/null 2>&1 & pp=$!
+i=0; while kill -0 "$pp" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.2; i=$((i + 1)); done
+kill "$pp" 2>/dev/null || true
+rc=0; wait "$pp" || rc=$?
+assert_eq "H-079 an ended run: poll exits 75" "75" "$rc"
+"$h" state "$run2" resume >/dev/null
+out=$("$h" intake "$run2" tick)
+assert_contains "H-079 after a resume the ended run takes work again" "$out" "start $te"
+
+# H-086 D25a: a ticket that intake took before a soft:ticket stop counts as begun, so its first
+# step and its worker may still start; a ticket intake did not take stays refused.
+"$h" state "$run2" stop --type soft:ticket "finish what runs" >/dev/null
+rc=0; "$h" state "$run2" begin --ticket "$te" --step plan >/dev/null 2>&1 || rc=$?
+assert_eq "H-086 D25a a ticket picked up before a soft:ticket stop may begin its first step" "0" "$rc"
+rc=0; "$h" state "$run2" begin --ticket 999 --step plan >/dev/null 2>&1 || rc=$?
+assert_eq "H-086 D25a a ticket not picked up before the soft:ticket stop does not begin (75)" "75" "$rc"

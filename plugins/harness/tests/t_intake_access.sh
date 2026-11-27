@@ -175,3 +175,34 @@ t=$(ticket "Approved after review" needs-review)
 label alice "$t" ready
 out=$(tick)
 assert_contains "H-011 a writer's ready label on a needs-review ticket is taken" "$out" "start $t"
+
+# D37-INTAKE-9 H-009: the target repository check fails closed. A ticket text that cannot be read
+# is no pickup: the ticket is not claimed, one error line and a pickup-error ledger line report
+# it, and it stays ready for the next poll. A repository named only in the title is checked too.
+mkdir -p "$base/gh-shim"
+cat > "$base/gh-shim/gh" <<SHIM
+#!/usr/bin/env bash
+# Fails only the read of the ticket text; every other call goes to the fake gh.
+case " \$* " in *" issue view "*body*) echo "simulated outage" >&2; exit 1 ;; esac
+exec "$HO_TESTS_DIR/fake-bin/gh" "\$@"
+SHIM
+chmod +x "$base/gh-shim/gh"
+t12=$(ticket "Text unreadable")
+label alice "$t12" ready
+out=$(PATH="$base/gh-shim:$PATH" tick 2>/dev/null || true)
+assert_contains "D37-INTAKE-9 an unreadable ticket text is no pickup" "$out" "error $t12"
+assert_eq "D37-INTAKE-9 the ticket with unreadable text is not claimed" '["harness:ready"]' "$(labels "$t12")"
+assert_contains "D37-INTAKE-9 the failed read is recorded in the ledger" "$(jq -c --arg t "$t12" 'select(.kind == "pickup-error" and .ticket == $t)' "$run/ledger.jsonl")" '"step":"target-repos"'
+out=$(tick)
+assert_contains "D37-INTAKE-9 once the text can be read the ticket is taken" "$out" "start $t12"
+t13=$(ticket "Port the export to fake/api" "" "## Outcome
+Export reports as CSV.
+
+## Scope
+src/report.sh
+
+## Acceptance criteria
+A test exports one report.")
+label alice "$t13" ready
+out=$(HO_FAKE_GH_FAIL_API=repos/fake/api/ tick)
+assert_contains "D37-INTAKE-9 a target repository named only in the title is checked" "$out" "needs-review $t13"

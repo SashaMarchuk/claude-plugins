@@ -11,7 +11,8 @@
 #      Write, maintain or admin access passes; anything else, an unknown person, a login of an
 #      unexpected shape or a failed query is read-only (H-009), and the ticket moves to
 #      needs-review with one status comment (H-011, H-026, D5). A configured target repository
-#      that the ticket text names needs the same access (D37-INTAKE-9). A bot is judged by its
+#      that the ticket text (title or body) names needs the same access (D37-INTAKE-9); a text
+#      that cannot be read means no claim. A bot is judged by its
 #      own access, with no allow-list (H-008 interim rule until OPEN-INTAKE-1 is answered).
 #   2. Claim: ready -> in-progress, then one "picked up" comment.
 #   3. Readiness: the main runtime, run without a terminal and read-only from its runtime
@@ -198,7 +199,7 @@ ho_in_pickup() {
 
 # ho_in_pickup_steps <id>: returns 0 start, 1 handled (not started), 2 a step failed.
 ho_in_pickup_steps() {
-  local id=$1 state events ready blocked login="" ridx=-1 bidx=-1 repo body qf
+  local id=$1 state events ready blocked login="" ridx=-1 bidx=-1 repo body="" raw targets qf
   if ho_tk_gh; then
     state=$(ho_tk_gh_state "$id") || { ho_in_err "cannot read the labels of #$id"; return 2; }
     if events=$(ho_tk_gh_events "$id"); then
@@ -254,9 +255,16 @@ ho_in_pickup_steps() {
       echo "needs-review $id"
       return 1
     fi
-    body=$(gh issue view "$id" --repo "$HO_TK_REPO" --json body 2>/dev/null | jq -r '.body // ""') || body=""
+    # The ticket text (title and body) is read only when another target repository is configured.
+    # A failed read fails closed: no claim, the ticket stays ready for the next poll.
+    targets=$(ho_in_targets | grep -vxF -- "$HO_TK_REPO" || true)
+    if [ -n "$targets" ]; then
+      HO_IN_STEP=target-repos
+      raw=$(gh issue view "$id" --repo "$HO_TK_REPO" --json title,body 2>/dev/null) || { ho_in_err "cannot read the text of #$id to check its target repositories"; return 2; }
+      body=$(printf '%s' "$raw" | jq -er '"\(.title // "")\n\(.body // "")"' 2>/dev/null) || { ho_in_err "cannot read the text of #$id to check its target repositories"; return 2; }
+    fi
     while IFS= read -r repo; do
-      [ -n "$repo" ] && [ "$repo" != "$HO_TK_REPO" ] || continue
+      [ -n "$repo" ] || continue
       printf '%s\n' "$body" | LC_ALL=C grep -Fqi -- "$repo" || continue
       if [ "$(ho_tk_access "$login" "$repo")" != writer ]; then
         ho_in_review "$id" ready "the person who set the ready label has no confirmed write access to $repo, which the ticket names" || return 2
@@ -265,7 +273,7 @@ ho_in_pickup_steps() {
         return 1
       fi
     done <<EOF_REPOS
-$(ho_in_targets)
+$targets
 EOF_REPOS
   fi
 

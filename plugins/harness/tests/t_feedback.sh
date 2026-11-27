@@ -267,6 +267,31 @@ esac
 rm -rf "$(draft_of "$out")" "$base/user/runtimes/zedprivate-rt.json"
 cp "$base/config.keep2" "$proj/.harness/config.json"
 
+# ---- The version probe gets no caller environment but HOME and PATH ---------------------
+# BASH_ENV runs a file before a bash script; NODE_OPTIONS and PYTHONPATH load project code in
+# node and python. None of them may reach the probe.
+mkdir -p "$base/extbin"
+printf '#!/usr/bin/env bash\n[ -n "${NODE_OPTIONS:-}${PYTHONPATH:-}" ] && touch "%s/env-ran"\necho 1.2.3\n' "$base" > "$base/extbin/claude"
+# bin/harness is a bash script too, so the file marks only a run under the probe's fixed PATH.
+printf 'case $PATH in /usr/bin:/bin:/usr/sbin:/sbin*) touch "%s/bashenv-ran" ;; esac\n' "$base" > "$proj/evil.sh"
+chmod +x "$base/extbin/claude"
+rc=0; out=$(cd "$proj" && PATH="$base/extbin:$PATH" BASH_ENV="$proj/evil.sh" NODE_OPTIONS="--require $proj/evil.js" \
+  PYTHONPATH="$proj/py" "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "H-140 runtime probe: a preview with project code in the environment exits 0" "0" "$rc"
+assert_eq "H-140 runtime probe: BASH_ENV from the caller does not reach the probe" "no" "$([ -e "$base/bashenv-ran" ] && echo yes || echo no)"
+assert_eq "H-140 runtime probe: NODE_OPTIONS and PYTHONPATH from the caller do not reach the probe" "no" "$([ -e "$base/env-ran" ] && echo yes || echo no)"
+assert_contains "H-140 runtime probe: the version still comes through" "$out" "- Runtime: claude-code 1.2.3"
+rm -rf "$base/extbin" "$proj/evil.sh" "$base/bashenv-ran" "$base/env-ran" "$(draft_of "$out")"
+
+# ---- An unreadable ledger file gives one clear line, not two -----------------------------
+chmod 000 "$run/ledger.jsonl"
+rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d1.txt") || rc=$?
+chmod 644 "$run/ledger.jsonl"
+assert_eq "D43 run state: a preview with an unreadable ledger file exits 0" "0" "$rc"
+assert_contains "D43 run state: an unreadable ledger file says so" "$out" "- Last run: found, but its ledger could not be read"
+assert_eq "D43 run state: an unreadable ledger file gives no other run-state line" "1" "$(printf '%s\n' "$out" | grep -c '^- Last run:')"
+rm -rf "$(draft_of "$out")"
+
 # ---- Broken state still gives a report ----------------------------------------------------
 cp "$proj/.harness/config.json" "$base/config.keep"
 printf 'not json\n' > "$proj/.harness/config.json"

@@ -15,6 +15,9 @@
 #   <run>/sessions/<name>.transcript_root
 #                                  the transcript folder, worked out by the launcher in the
 #                                  session's own folder and environment; copied into the record
+#   <run>/sessions/<name>.transcript_prefix_real
+#                                  where the runtime's data folder below it resolved at launch
+#                                  (it may be a link); copied into the record
 #   <run>/sessions/<name>.closing  present while a close is under way (stops model fallback)
 #   <run>/sessions/<name>.failed   written by the launcher when the session could not start
 #   <run>/launchers/<name>.sh      the generated launcher
@@ -101,11 +104,70 @@ ho_runtime_profile() {
     and (.command | type == "string" and length > 0)
     and ([.argv.new, .argv.resume, .argv.model, .argv.title, .argv.prompt] | all(type == "array" and all(type == "string" and (test("\n") | not))))
     and (.permissions | type == "object")
-    and (.exit_command | type == "string" and length > 0 and (test("\n") | not))' "$f" >/dev/null 2>&1 || {
+    and (.exit_command | type == "string" and length > 0 and (test("\n") | not))
+    and ((.account_env // []) | type == "array" and all(type == "string" and test("\\A[A-Z_][A-Z0-9_]*\\z")))' "$f" >/dev/null 2>&1 || {
     printf 'harness: runtime file %s is not a valid schemaVersion 2 runtime\n' "$f" >&2
     return 78
   }
   printf '%s\n' "$f"
+}
+
+# ho_session_account_env <profile>: the runtime's account variables with the caller's values
+# (issue #119). The names come from the runtime data: account_env, or else config_dir.env and
+# transcript.root_env. One line per name: "NAME<tab>VALUE", or "NAME" alone when the caller has
+# no value (an empty value counts as none). The launcher sets each one, or removes it, so a
+# session's account never depends on what the terminal inherited: an iTerm2 tab starts a fresh
+# login shell, and a tmux server keeps the environment of its first start. These variables
+# hold folders, never secrets: a value must be one absolute path, or the launch is refused (65).
+# ho_session_account_env_names <profile>: those names, one per line (the start check uses them too).
+ho_session_account_env_names() {
+  jq -r '(.account_env // [.config_dir.env, .transcript.root_env]) | map(strings) | unique | .[]' "$1"
+}
+
+# ho_session_account_cmd <profile> <command>: run an account command as the launcher runs it,
+# with the runtime's account variables removed (the launcher unsets them first), so a command
+# that reads one of them gets the same answer in the launch check, the start check and the
+# launcher. With no profile it runs as it is.
+ho_session_account_cmd() {
+  local -a u=()
+  local v
+  if [ -n "$1" ]; then
+    for v in $(ho_session_account_env_names "$1"); do u+=(-u "$v"); done
+  fi
+  /usr/bin/env ${u[@]+"${u[@]}"} /bin/bash -c "$2"
+}
+
+ho_session_account_env() {
+  local profile=$1 var val
+  for var in $(ho_session_account_env_names "$profile"); do
+    case $var in [!A-Z_]* | *[!A-Z0-9_]* | PATH | HO_*)
+      printf 'harness: account_env name %s in runtime %s is not a variable the harness may set\n' "$var" "$profile" >&2; return 65 ;;
+    esac
+    val=$(printenv "$var" 2>/dev/null; printf x) || val=x
+    val=${val%x}
+    val=${val%$'\n'}
+    if [ -z "$val" ]; then printf '%s\n' "$var"; continue; fi
+    case $val in
+      *$'\n'* | *$'\t'*) printf 'harness: %s has a line break or a tab; the session was not launched\n' "$var" >&2; return 65 ;;
+      /*) ;;
+      *) printf 'harness: %s must be an absolute folder path; the session was not launched\n' "$var" >&2; return 65 ;;
+    esac
+    printf '%s\t%s\n' "$var" "$val"
+  done
+}
+
+# ho_session_account_env_lines <account-env> <account>: the launcher lines for them. With an
+# account command the variables are removed, and the command sets what it sets: the caller's
+# folder belongs to the caller's account, not the role's.
+ho_session_account_env_lines() {
+  local line
+  printf '%s\n' "$1" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case $line in
+      *$'\t'*) if [ -n "$2" ]; then printf 'unset %s\n' "${line%%$'\t'*}"; else printf 'export %s=%s\n' "${line%%$'\t'*}" "$(ho_q "${line#*$'\t'}")"; fi ;;
+      *) printf 'unset %s\n' "$line" ;;
+    esac
+  done
 }
 
 # ho_account_env_parse: read an account command's output on stdin; print "KEY<tab>VALUE" lines.
@@ -144,10 +206,10 @@ ho_cfg_user() {
   jq -c "$1" "$f"
 }
 
-# ho_session_account <role> <requested>: print "<account>\t<env-command>", or nothing when no
+# ho_session_account <role> <requested> [profile]: print "<account>\t<env-command>", or nothing when no
 # account is configured. Refuses (65) a mismatch, an unknown account, or a command that fails.
 ho_session_account() {
-  local role=$1 want=$2 proj mapped cmd out
+  local role=$1 want=$2 profile=${3-} proj mapped cmd out
   proj="$HO_PROJECT_DIR/.harness/config.json"
   if jq -e '.accounts != null' "$proj" >/dev/null 2>&1; then
     printf 'harness: accounts are set in the project config %s; accounts belong in the user config only\n' "$proj" >&2
@@ -166,7 +228,7 @@ ho_session_account() {
   fi
   cmd=$(ho_cfg_user ".accounts.list[\"$mapped\"].env_command" | jq -r 'strings // ""')
   [ -n "$cmd" ] || { printf 'harness: account %s (role %s) has no env_command in accounts.list\n' "$mapped" "$role" >&2; return 65; }
-  out=$(/bin/bash -c "$cmd" 2>/dev/null) || { printf 'harness: the env_command of account %s failed\n' "$mapped" >&2; return 65; }
+  out=$(ho_session_account_cmd "$profile" "$cmd" 2>/dev/null) || { printf 'harness: the env_command of account %s failed\n' "$mapped" >&2; return 65; }
   printf '%s\n' "$out" | ho_account_env_parse >/dev/null || {
     printf 'harness: the env_command of account %s must print KEY=VALUE lines only\n' "$mapped" >&2
     return 65
@@ -329,7 +391,7 @@ ho_session_set() {
 # ho_session_launcher_write <file> <args...>: print the launcher text. All values arrive checked.
 ho_session_launcher_text() {
   local name=$1 role=$2 account=$3 acct_cmd=$4 sid=$5 cwd=$6 prompt=$7 pidfile=$8 closing=$9
-  local log=${10} path=${11} grace=${12} hold=${13} cmdpath=${14} attempts=${15} profile=${16}
+  local log=${10} path=${11} grace=${12} hold=${13} cmdpath=${14} attempts=${15} profile=${16} aenv=${17}
   printf '#!/bin/bash\n'
   printf '# ho-launcher run=%s name=%s role=%s account=%s session=%s\n' "$HO_RUN_ID" "$name" "$role" "${account:--}" "$sid"
   printf '# Generated by the harness engine. Do not edit; launch it again instead.\n'
@@ -338,6 +400,7 @@ ho_session_launcher_text() {
   printf 'ho_note() { printf '"'"'[%%s %%s] %%s\\n'"'"' "$(date -u +%%H:%%M:%%S)" %s "$*" >> "$HO_LOG"; printf '"'"'%%s\\n'"'"' "$*" >&2; }\n' "$(ho_q "$name")"
   printf 'ho_fatal() { ho_note "FATAL: $2"; printf '"'"'%%s\\n'"'"' "$2" > %s; sleep %s; exit "$1"; }\n' "$(ho_q "${pidfile%.pid}.failed")" "$hold"
   printf 'unset %s\n' "$HO_OLD_VARS"
+  ho_session_account_env_lines "$aenv" "$account"
   printf 'export PATH=%s\n' "$(ho_q "$path")"
   printf 'export HO_PROJECT_DIR=%s HO_RUN_DIR=%s HO_RUN_ID=%s\n' "$(ho_q "$HO_PROJECT_DIR")" "$(ho_q "$HO_RUN_DIR")" "$(ho_q "$HO_RUN_ID")"
   printf 'export HO_SESSION_NAME=%s HO_SESSION_ROLE=%s HO_SESSION_ID=%s\n' "$(ho_q "$name")" "$(ho_q "$role")" "$(ho_q "$sid")"
@@ -369,6 +432,14 @@ ho_session_launcher_text() {
   printf 'ho_troot=$(ho_live_transcript_root %s "" 2>/dev/null) || ho_troot=""\n' "$(ho_q "$profile")"
   printf '[ -z "$ho_troot" ] || { printf '"'"'%%s\n'"'"' "$ho_troot" > %s && mv -f %s %s; } 2>/dev/null || true\n' \
     "$(ho_q "${pidfile%.pid}.transcript_root.tmp")" "$(ho_q "${pidfile%.pid}.transcript_root.tmp")" "$(ho_q "${pidfile%.pid}.transcript_root")"
+  # The runtime's data folder below it (the glob's fixed leading part) may be a link in a
+  # multi-account layout. Where it resolves now is recorded once, here, so delivery accepts
+  # that one link only while it still leads to the same real folder (lib/deliver.sh).
+  declare -f ho_live_transcript_prefix
+  printf 'ho_tpre=$(ho_live_transcript_prefix %s)\n' "$(ho_q "$(jq -r '.transcript.glob // ""' "$profile" 2>/dev/null)")"
+  printf 'ho_treal=""; [ -z "$ho_troot" ] || [ -z "$ho_tpre" ] || ho_treal=$(cd "$ho_troot/$ho_tpre" 2>/dev/null && pwd -P) || ho_treal=""\n'
+  printf '[ -z "$ho_treal" ] || { printf '"'"'%%s\n'"'"' "$ho_treal" > %s && mv -f %s %s; } 2>/dev/null || true\n' \
+    "$(ho_q "${pidfile%.pid}.transcript_prefix_real.tmp")" "$(ho_q "${pidfile%.pid}.transcript_prefix_real.tmp")" "$(ho_q "${pidfile%.pid}.transcript_prefix_real")"
   if [ -n "$prompt" ]; then
     printf 'HO_PROMPT=$(cat %s) || ho_fatal 65 "cannot read the prompt file"\n' "$(ho_q "$prompt")"
   fi
@@ -508,11 +579,13 @@ ho_session_launch_one() {
   [ -n "$chain" ] || chain=$(ho_cfg ".models[\"$role\"]" '')
   models=""
   if [ -n "$chain" ]; then models=$(ho_model_chain "$chain") || return 65; fi
-  acct=$(ho_session_account "$role" "$account") || return 65
+  acct=$(ho_session_account "$role" "$account" "$profile") || return 65
   if [ -n "$acct" ]; then
     acct_name=${acct%%"$(printf '\t')"*}
     acct_cmd=${acct#*"$(printf '\t')"}
   fi
+  local aenv
+  aenv=$(ho_session_account_env "$profile") || return 65
   cmd=$(jq -r .command "$profile")
   cmdpath=$(command -v "$cmd" 2>/dev/null || true)
   case $cmdpath in /*) ;; *) printf 'harness: the runtime command %s is not on PATH\n' "$cmd" >&2; return 65 ;; esac
@@ -531,7 +604,7 @@ ho_session_launch_one() {
   fi
   # Files of an earlier launch of this name (its record was removed) must not speak for this one.
   rm -f "$sdir/$name.pid" "$sdir/$name.closing" "$sdir/$name.failed" "$sdir/$name.launcher" "$sdir/$name.ended" \
-    "$sdir/$name.transcript_root"
+    "$sdir/$name.transcript_root" "$sdir/$name.transcript_prefix_real"
   # The reserved record says "launching" and names this launch command (PID and start time)
   # from its first write. It reads dead only once this command, the launcher and the session
   # process are all gone (lib/liveness.sh), never by its age: a launch may wait for a slot or
@@ -640,11 +713,12 @@ ho_session_launch_one() {
 
   ho_session_launcher_text "$name" "$role" "$acct_name" "$acct_cmd" "$sid" "$cwd" "$prompt" "$pidfile" "$closing" \
     "$HO_RUN_DIR/logs/launcher.log" "$path" "$(ho_cfg_int '.session.boot_grace_seconds' 45)" \
-    "$(ho_cfg_int '.session.fatal_hold_seconds' 30)" "$cmdpath" "$attempts" "$profile" > "$launcher.tmp" || { rm -f "$rec" "$launcher.tmp"; return 1; }
+    "$(ho_cfg_int '.session.fatal_hold_seconds' 30)" "$cmdpath" "$attempts" "$profile" "$aenv" > "$launcher.tmp" || { rm -f "$rec" "$launcher.tmp"; return 1; }
   # The launcher must say exactly what was asked for, or it is not used.
   if ! /bin/bash -n "$launcher.tmp" 2>/dev/null \
     || [ "$(sed -n 2p "$launcher.tmp")" != "# ho-launcher run=$HO_RUN_ID name=$name role=$role account=${acct_name:--} session=$sid" ] \
-    || ! grep -qxF "cd -- $(ho_q "$cwd") || ho_fatal 66 \"cannot enter the working folder; the session was not started\"" "$launcher.tmp"; then
+    || ! grep -qxF "cd -- $(ho_q "$cwd") || ho_fatal 66 \"cannot enter the working folder; the session was not started\"" "$launcher.tmp" \
+    || [ "$(grep -E '^(export|unset) ' "$launcher.tmp" | grep -vE '^(unset HARNESS_|export (PATH|HO_))')" != "$(ho_session_account_env_lines "$aenv" "$acct_name")" ]; then
     rm -f "$rec" "$launcher.tmp"
     echo "harness: the generated launcher does not match the request; nothing was launched" >&2
     return 65
@@ -658,8 +732,10 @@ ho_session_launch_one() {
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg account "$acct_name" \
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
-    --arg rpath "$cmdpath" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg ticket "$ticket" \
+    --arg rpath "$cmdpath" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg aenv "$aenv" \
+    --arg ticket "$ticket" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
+      account_env: (if $account != "" then null else ($aenv | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) end),
       runtime: $runtime, runtime_path: $rpath, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
       transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end)}' \
@@ -707,8 +783,12 @@ ho_session_launch_one() {
   local troot=""
   troot=$(head -n 1 "$sdir/$name.transcript_root" 2>/dev/null) || troot=""
   case $troot in /*) ;; *) troot="" ;; esac
+  local treal=""
+  treal=$(head -n 1 "$sdir/$name.transcript_prefix_real" 2>/dev/null) || treal=""
+  case $treal in /*) ;; *) treal="" ;; esac
   ho_session_set "$rec" '.pid = ($p | tonumber) | .status = "running" | .started = $ts
-      | (if $t != "" then .transcript_root = $t else . end)' --arg p "$pid" --arg ts "$(ho_now)" --arg t "$troot" || {
+      | (if $t != "" then .transcript_root = $t else . end)
+      | (if $t != "" and $r != "" then .transcript_prefix_real = $r else . end)' --arg p "$pid" --arg ts "$(ho_now)" --arg t "$troot" --arg r "$treal" || {
     printf 'harness: session %s runs as pid %s but its record could not be written\n' "$name" "$pid" >&2
     return 1
   }

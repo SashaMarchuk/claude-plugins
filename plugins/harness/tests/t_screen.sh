@@ -249,6 +249,19 @@ assert_eq "H-099: still no text or key sent" "0" \
 cat "$fix/n-plain-working.txt" >> "$hfile.out"
 assert_eq "H-113 (F1): an ordinary working screen needs no action" "none" "$("$h" screen "$run" watch w1 2>/dev/null)"
 
+# ---- the session name in the top rule of the input box (real end-to-end check) ----------
+# A session launched with a name shows it at the right end of the box's top rule. The watch
+# knows the session, so that named rule still opens the runtime's own tail and a dialog above
+# the box is recognised. The named rule is built here from the real top rule's width.
+ntail() { tail_of idle-full | { IFS= read -r top; k=$(( ${#top} - 3 * (${#1} + 3) )); printf '%s %s ─\n' "${top:0:k}" "$1"; cat; }; }
+nscreen() { head_of idle-full; cat "$fix/$1.txt"; ntail "$2"; }
+{ head_of idle-full; cat "$fix/password-prompt.txt"; tail_of idle-full; } > "$hfile.out"
+assert_eq "named top rule: control: a password prompt above the plain box is recognised by the watch" "password" "$("$h" screen "$run" watch w1 2>/dev/null)"
+nscreen trust-dialog ho-worker-w1 > "$hfile.out"
+assert_eq "named top rule: a trust dialog above a box named for this session is recognised by the watch" "trust" "$("$h" screen "$run" watch w1 2>/dev/null)"
+nscreen password-prompt ho-worker-w1 > "$hfile.out"
+assert_eq "named top rule: a password prompt above a box named for this session is recognised by the watch" "password" "$("$h" screen "$run" watch w1 2>/dev/null)"
+
 # ---- a session on its own account: nothing is written to the wrong trust file -----------
 mkdir -p "$proj/src2" "$base/acct"
 acct_cmd="printf CLAUDE_CONFIG_DIR=$base/acct\\n"

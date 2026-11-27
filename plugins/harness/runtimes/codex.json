@@ -43,6 +43,10 @@
     "env": "CODEX_HOME",
     "default": "{home}/.codex"
   },
+  "_comment_account_env": "Issue #119: the variables that choose the account folder. A launch sets each one to the caller's value, or removes it when the caller has none, so the terminal's inherited environment never picks the account; with an account command they are removed and the command sets them. Folder paths only, never secrets: the value is written into the launcher.",
+  "account_env": [
+    "CODEX_HOME"
+  ],
   "session_log": "{config_dir}/sessions/<date>/rollout-<time>-<session id>.jsonl",
   "limits": "The /status screen of an interactive Codex session shows the plan's usage limits; codex exec does not report them.",
   "capabilities": {

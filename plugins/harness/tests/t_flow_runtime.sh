@@ -273,12 +273,26 @@ jq -n --arg d "$base/ah" '{schemaVersion: 2, accounts: {roles: {worker: "work"},
 rc=0; out=$(env -u CLAUDE_CONFIG_DIR -u CODEX_HOME "$h" flow preflight sys 2>&1) || rc=$?
 assert_eq "D31: skills are looked up under the HOME the worker account sets (exit 69)" "69" "$rc"
 assert_contains "D31: the missing skill is named in the account HOME's config folder" "$out" "not installed in $base/ah/.claude"
+# Issue #119: the start check judges the folder a launched session gets. With an account the
+# caller's account variables are removed before the account command, so a caller's
+# CLAUDE_CONFIG_DIR or CODEX_HOME does not hide the account HOME's folder.
+rc=0; out=$(HO_FAKE_CLAUDE_LOG="$base/pf119.log" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR "$h" flow preflight sys 2>&1) || rc=$?
+assert_contains "#119: with an account, the caller's folder variable is not used by the start check" "$out" "not installed in $base/ah/.claude"
+assert_eq "#119: the login check runs without the caller's folder variable" "env CLAUDE_CONFIG_DIR=" "$(grep -m1 '^env CLAUDE_CONFIG_DIR=' "$base/pf119.log" 2>/dev/null || true)"
 for s in acme-plan acme-review; do
   mkdir -p "$base/ah/.claude/skills/$s" "$base/ah/.codex/skills/$s"
   printf 'x\n' > "$base/ah/.claude/skills/$s/SKILL.md"; printf 'x\n' > "$base/ah/.codex/skills/$s/SKILL.md"
 done
 rc=0; out=$(env -u CLAUDE_CONFIG_DIR -u CODEX_HOME "$h" flow preflight sys 2>&1) || rc=$?
 assert_eq "D31: with the skills under the account HOME the start goes on (exit 0)" "0" "$rc"
+# Issue #119, Codex review of PR #118: the start check runs the account command as the launcher
+# does, with the runtime's account variables removed, so a command that falls back on the
+# caller's value gets its own folder in both places.
+jq -n '{schemaVersion: 2, accounts: {roles: {worker: "work"},
+  list: {work: {env_command: "echo \"CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude-work}\""} } } }' > "$user/config.json"
+rc=0; out=$(HO_FAKE_CLAUDE_LOG="$base/pf119b.log" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR "$h" flow preflight sys 2>&1) || rc=$?
+assert_contains "#119: the account command in the start check does not see the caller's folder" "$out" "not installed in $HOME/.claude-work"
+assert_eq "#119: the login check gets the account command's own fallback folder" "env CLAUDE_CONFIG_DIR=$HOME/.claude-work" "$(grep -m1 '^env CLAUDE_CONFIG_DIR=' "$base/pf119b.log" 2>/dev/null || true)"
 printf '{"schemaVersion": 2}\n' > "$user/config.json"
 
 # ---- the start check runs the account's env_command once (review round 2, minor 4) ------------

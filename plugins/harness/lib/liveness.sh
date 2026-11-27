@@ -181,6 +181,24 @@ ho_live_transcript_root() {
   case $v in /*) printf '%s\n' "${v%/}" ;; *) printf '\n' ;; esac
 }
 
+# ho_live_transcript_prefix <glob>: the glob's leading folder parts that hold no wildcard and no
+# {session_id}: the runtime's own data folder ("projects" for "projects/*/{session_id}.jsonl").
+# The file name part never counts. Prints nothing for a glob that starts with "/", holds a ".."
+# part or has no such folder. The launcher records where this folder resolves (it may be a
+# link, as in a multi-account layout), and delivery accepts that one link only (lib/deliver.sh).
+ho_live_transcript_prefix() {
+  local rest=$1 part out=""
+  case $rest in /* | .. | ../* | */.. | */../*) printf '\n'; return 0 ;; esac
+  while :; do
+    case $rest in */*) ;; *) break ;; esac
+    part=${rest%%/*}
+    rest=${rest#*/}
+    case $part in '' | . | *[][*?{}\\]*) break ;; esac
+    out=${out:+$out/}$part
+  done
+  printf '%s\n' "$out"
+}
+
 # ho_live_transcript <record>: the transcript path of the session, or nothing. A file
 # must match the session ID (a UUID), so a match is that session's own transcript.
 ho_live_transcript() {

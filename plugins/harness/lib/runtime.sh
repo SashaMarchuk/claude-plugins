@@ -69,6 +69,8 @@ ho_rt_check() {
     elif (.config_dir.default | line | not)
       or ((.config_dir | has("env")) and (.config_dir.env | (type != "string") or (test("\\A[A-Z_][A-Z0-9_]*\\z") | not))) then
       "config_dir needs a default and, if set, an env variable name"
+    elif has("account_env") and ((.account_env | type) != "array" or (.account_env | any((type != "string") or (test("\\A[A-Z_][A-Z0-9_]*\\z") | not)))) then
+      "account_env must list variable names"
     elif (.check.argv | strs | not) or ((.check | has("expect")) and (.check.expect | line | not)) then
       "check needs argv, and an optional expect"
     elif (.check | has("timeout_seconds")) and ((.check.timeout_seconds | type) != "number"
@@ -153,7 +155,7 @@ ho_rt_probe() {
 }
 
 # ho_rt_home <account-pairs>: the HOME a launched session gets. The launcher keeps the
-# terminal's environment and exports the account's variables on top (lib/sessions.sh), so the
+# terminal's HOME and exports the account's variables on top (lib/sessions.sh), so the
 # account's HOME wins over the caller's.
 ho_rt_home() {
   local h
@@ -162,14 +164,19 @@ ho_rt_home() {
   printf '%s\n' "$h"
 }
 
-# ho_rt_config_dir <profile> <account-pairs>: the tool's own folder, from the account's
-# variables, then the environment, then the profile default under the session's HOME.
+# ho_rt_config_dir <profile> <account-pairs>: the tool's own folder, as a launched session gets
+# it (issue #119): from the account's variables; with no account, from the caller's environment;
+# then the profile default under the session's HOME. With an account the launcher removes the
+# runtime's account variables (ho_session_account_env_names) before the account command, so the
+# caller's value of such a variable is not used here either.
 ho_rt_config_dir() {
   local f=$1 pairs=$2 var dir=""
   var=$(jq -r '.config_dir.env // ""' "$f")
   if [ -n "$var" ]; then
     dir=$(printf '%s\n' "$pairs" | awk -F '\t' -v k="$var" '$1 == k { v = $2 } END { print v }')
-    [ -n "$dir" ] || dir=$(printenv "$var" || true)
+    if [ -z "$dir" ] && { [ -z "$pairs" ] || ! ho_session_account_env_names "$f" | grep -qxF "$var"; }; then
+      dir=$(printenv "$var" || true)
+    fi
   fi
   [ -n "$dir" ] || dir=$(jq -r --arg home "$(ho_rt_home "$pairs")" '.config_dir.default | gsub("\\{home\\}"; $home)' "$f")
   printf '%s\n' "$dir"
@@ -197,7 +204,11 @@ ho_flow_preflight() {
   # ho_session_account runs the account command once and keeps what it printed; it is not run
   # again here.
   HO_SESSION_ACCOUNT_ENV=""
-  ho_session_account worker "" > "$tmpd/acct" || exit $?
+  # It runs as in the launcher, with the account variables of the runtime sessions launch on
+  # (runtime.main) removed (issue #119).
+  local mainprof
+  mainprof=$(ho_runtime_profile 2>/dev/null) || mainprof=""
+  ho_session_account worker "" "$mainprof" > "$tmpd/acct" || exit $?
   acct=$(cat "$tmpd/acct")
   if [ -n "$acct" ]; then
     pairs=$(printf '%s\n' "$HO_SESSION_ACCOUNT_ENV" | ho_account_env_parse) || {
@@ -229,12 +240,20 @@ EOF_ENV
     # A whole number (ho_rt_check); floor prints 1.0 or 2e1 the way shell arithmetic reads it.
     tmo=$(jq -r '(.check.timeout_seconds // 20) | floor' "$f")
     argv=()
+    # With an account, the login check runs without the caller's account variables, as the
+    # launcher removes them before the account command (issue #119); the account's own come after.
+    local -a unsets=()
+    if [ -n "$pairs" ]; then
+      while IFS= read -r a; do [ -n "$a" ] && unsets+=(-u "$a"); done <<EOF_UNSET
+$(ho_session_account_env_names "$f")
+EOF_UNSET
+    fi
     while IFS= read -r a; do [ -n "$a" ] && argv+=("$a"); done <<EOF_ARGV
 $(jq -r '.check.argv[]' "$f")
 EOF_ARGV
     rc=0
     ho_rt_probe "$tmo" "$tmpd/check.out" \
-      /usr/bin/env PATH="$(ho_session_clean_path)" ${envs[@]+"${envs[@]}"} "$cmdpath" ${argv[@]+"${argv[@]}"} || rc=$?
+      /usr/bin/env ${unsets[@]+"${unsets[@]}"} PATH="$(ho_session_clean_path)" ${envs[@]+"${envs[@]}"} "$cmdpath" ${argv[@]+"${argv[@]}"} || rc=$?
     expect=$(jq -r '.check.expect // ""' "$f")
     if [ "$rc" -eq 124 ]; then
       add "runtime $rt: the login check did not answer within $tmo s. Install step: $t"

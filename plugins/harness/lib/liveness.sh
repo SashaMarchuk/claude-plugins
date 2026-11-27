@@ -340,8 +340,8 @@ ho_live_hooks() {
 # no time limit, or one above preflight.hook_timeout_max_seconds (default 10), in one attention
 # notice on stderr, with one owner-action line in the run ledger. It never edits a settings
 # file. preflight.hooks is warn (default: exit 0) or stop (exit 69 when a hook is named). Hook
-# command text goes to the notice only, never to the ledger. A file that cannot be read is
-# named too (field note I1). The harness's own hook is declared in the plugin, not in these.
+# command text goes to the notice only, never to the ledger. A file that cannot be read as a
+# JSON object, or whose hooks is not an object, is a finding too (field note I1): never "hooks OK". The harness's own hook is declared in the plugin, not in these.
 ho_live_hooks_check() {
   local mode max profile cdir_env cdir_def cdir pat f found="" n=0 unread="" lines
   mode=$(ho_cfg '.preflight.hooks' warn) || exit $?
@@ -358,6 +358,14 @@ ho_live_hooks_check() {
     f=${f//\{project\}/$HO_PROJECT_DIR}
     case $f in /*) ;; *) continue ;; esac
     [ -e "$f" ] || continue
+    if ! jq -e 'type == "object" and ((.hooks // {}) | type == "object")' "$f" >/dev/null 2>&1; then
+      if jq -e 'type == "object"' "$f" >/dev/null 2>&1; then
+        unread="$unread  $f: hooks is not an object; its hooks were not checked"$'\n'
+      else
+        unread="$unread  $f: cannot be read as a JSON object; its hooks were not checked"$'\n'
+      fi
+      continue
+    fi
     if ! lines=$(jq -r --argjson max "$max" '(.hooks // {}) | to_entries[] | .key as $e | (.value // [])[] | (.hooks // [])[]
         | select((.timeout | type) != "number" or .timeout > $max)
         | "\($e) \((.command // .url // .type // "?") | tostring | gsub("[[:cntrl:]]"; " ") | .[0:80]) (timeout \(.timeout // "none"))"' "$f" 2>/dev/null); then
@@ -374,16 +382,26 @@ EOF_L
   done <<EOF_P
 $(jq -r '.hooks_settings // [] | .[] | strings' "$profile")
 EOF_P
-  [ -z "$unread" ] || printf 'harness: attention: settings that the sessions load could not be read:\n%s' "$unread" >&2
-  if [ "$n" -eq 0 ]; then
+  # A settings file whose hooks were not checked is a finding too: its hooks may have no limit.
+  local nu=0
+  [ -z "$unread" ] || nu=$(printf '%s' "$unread" | grep -c '^  ')
+  if [ "$n" -eq 0 ] && [ "$nu" -eq 0 ]; then
     echo "hooks OK"
     return 0
   fi
-  printf 'harness: attention: %s hook(s) in the settings that the sessions will load have no time limit or one above %s s (design D42l); a hook that hangs can hold a session:\n%s' "$n" "$max" "$found" >&2
-  ho_ledger_append owner-action title "hooks without a time limit" \
-    why "$n hook(s) in the settings the sessions load have no time limit or one above $max s (D42l)" \
-    command "add a \"timeout\" of at most $max to each hook named by: harness session <run> hooks-check" \
-    verify "harness session <run> hooks-check prints hooks OK"
+  [ -z "$unread" ] || printf 'harness: attention: settings that the sessions load could not be checked:\n%s' "$unread" >&2
+  [ "$n" -eq 0 ] || printf 'harness: attention: %s hook(s) in the settings that the sessions will load have no time limit or one above %s s (design D42l); a hook that hangs can hold a session:\n%s' "$n" "$max" "$found" >&2
+  if [ "$n" -gt 0 ]; then
+    ho_ledger_append owner-action title "hooks without a time limit" \
+      why "$n hook(s) in the settings the sessions load have no time limit or one above $max s; $nu settings file(s) could not be checked (D42l)" \
+      command "add a \"timeout\" of at most $max to each hook named by: harness session <run> hooks-check" \
+      verify "harness session <run> hooks-check prints hooks OK"
+  else
+    ho_ledger_append owner-action title "settings the hooks check could not read" \
+      why "$nu settings file(s) the sessions load could not be checked for hook time limits (D42l)" \
+      command "fix each settings file named by: harness session <run> hooks-check" \
+      verify "harness session <run> hooks-check prints hooks OK"
+  fi
   [ "$mode" = stop ] && return 69
   return 0
 }

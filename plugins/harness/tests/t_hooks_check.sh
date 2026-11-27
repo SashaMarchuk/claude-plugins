@@ -63,3 +63,25 @@ mkdir -p "$base/cfgdir"
 printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "moved-hook"}]}]}}\n' > "$base/cfgdir/settings.json"
 out=$(CLAUDE_CONFIG_DIR="$base/cfgdir" "$h" session "$run" hooks-check 2>&1) || true
 assert_contains "H-089 (D42l): the user settings follow the runtime's config folder variable" "$out" "moved-hook"
+
+# ---- a settings file the check cannot read is a finding, never "hooks OK" (D42l) ----
+# Its hooks were not checked, so the check cannot say they are fine.
+mkdir -p "$base/away"
+mv "$HOME/.claude/settings.json" "$base/away/user.json"
+mv "$proj/.claude/settings.local.json" "$base/away/local.json"
+printf '{bad' > "$proj/.claude/settings.local.json"
+n0=$(owner_actions)
+out=$(chk 2>&1) && rc=0 || rc=$?
+assert_eq "H-089 (D42l): an unreadable settings file alone does not stop a warn check (exit 0)" "0 no" \
+  "$rc $(printf '%s' "$out" | grep -q 'hooks OK' && echo yes || echo no)"
+assert_eq "H-089 (D42l): an unreadable settings file records one owner action" "$((n0 + 1))" "$(owner_actions)"
+cfg '.preflight.hooks = "stop"'
+assert_exit "H-089 (D42l): with preflight.hooks stop an unreadable settings file refuses the start (exit 69)" 69 chk
+printf '{"hooks": []}\n' > "$proj/.claude/settings.local.json"
+out=$(chk 2>&1) && rc=0 || rc=$?
+assert_eq "H-089 (D42l): settings whose hooks are not an object refuse a stop check (exit 69)" "69" "$rc"
+assert_contains "H-089 (D42l): the notice says the hooks are not an object" "$out" "hooks is not an object"
+cfg 'del(.preflight)'
+rm -f "$proj/.claude/settings.local.json"
+mv "$base/away/user.json" "$HOME/.claude/settings.json"
+mv "$base/away/local.json" "$proj/.claude/settings.local.json"

@@ -96,6 +96,9 @@ jq --arg c "echo HOME=$base/acct-home" '.accounts = {roles: {default: "acc"}, li
 CLAUDE_CONFIG_DIR=$ax HO_FAKE_TERM_ENV="CLAUDE_CONFIG_DIR=$base/acct-term" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR launch e5 >/dev/null
 assert_eq "#119: an account that sets only HOME gets no folder from the caller or the terminal" "env CLAUDE_CONFIG_DIR=" "$(envlog e5)"
 assert_eq "#119: transcript_root is then the default folder under the account's HOME" "$base/acct-home/.claude" "$(rec e5 .transcript_root)"
+jq '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: "echo \"CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude-work}\""}}}' "$base/user.keep.json" > "$user/config.json"
+CLAUDE_CONFIG_DIR=$ax HO_FAKE_TERM_ENV="CLAUDE_CONFIG_DIR=$base/acct-term" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR launch e9 >/dev/null
+assert_eq "#119: an account command that falls back on the variable gets its own folder in the launcher" "env CLAUDE_CONFIG_DIR=$HOME/.claude-work" "$(envlog e9)"
 cp "$base/user.keep.json" "$user/config.json"
 bad_dir="$base/a
 b"

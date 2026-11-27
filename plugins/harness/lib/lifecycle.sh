@@ -36,7 +36,7 @@ ho_life_settings() {
 # to the project's .harness/tickets, wherever the caller stands.
 ho_life_ids() {
   (
-    [ -n "${HO_TICKETS_DIR:-}" ] || export HO_TICKETS_DIR="$HO_PROJECT_DIR/.harness/tickets"
+    ho_tk_bind_project_dir
     # A missing local ticket folder lists nothing, which must never read as "all done".
     if [ "${HO_TICKETS_SOURCE:-local}" = local ] && [ ! -d "$HO_TICKETS_DIR" ]; then
       printf 'harness: the ticket folder %s does not exist\n' "$HO_TICKETS_DIR" >&2
@@ -52,7 +52,7 @@ ho_life_ids() {
 # label is not a harness ticket. Such a ticket may or may not be done, so it is never "all done".
 ho_life_unstated() {
   (
-    [ -n "${HO_TICKETS_DIR:-}" ] || export HO_TICKETS_DIR="$HO_PROJECT_DIR/.harness/tickets"
+    ho_tk_bind_project_dir
     ho_tk_settings || exit $?
     if ho_tk_gh; then
       local json

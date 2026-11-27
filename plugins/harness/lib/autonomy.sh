@@ -358,6 +358,9 @@ ho_autonomy_main() {
   esac
   [ $# -ge 2 ] || { ho_au_usage; exit 64; }
   ho_run_open "$1"
+  # A run-specific check reads the config of the project the run belongs to, never the caller's
+  # (H-036): the profile is read once from there. HO_PROJECT_DIR naming another project is refused.
+  ho_session_bind_project || exit $?
   verb=$2
   shift 2
   case $verb in

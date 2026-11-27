@@ -210,3 +210,29 @@ pcfg '{"schemaVersion":2,"guardrails":{"never_push":false}}'
 assert_eq "D12 migration: never_push: false kept in a config selects draft-pr" draft-pr "$("$h" autonomy show | jq -r .name)"
 pcfg '{"schemaVersion":2,"guardrails":{"never_push":false},"autonomy":{"profile":"safe"}}'
 assert_eq "D12 migration: autonomy.profile wins over never_push" safe "$("$h" autonomy show | jq -r .name)"
+
+# ---- H-036: a check from another project uses the run's own project, never the caller's ------
+# The run's profile is read once, from the project the run belongs to. A caller standing in a
+# project set to full must not lift a safe run to full, nor cache full into the run.
+profile safe
+runA=$("$h" run new)
+projB="$PWD/projB"
+mkdir -p "$projB/.harness"
+printf '%s\n' '{"schemaVersion":2,"autonomy":{"profile":"full"} }' > "$projB/.harness/config.json"
+rc=0; (cd "$projB" && env -u HO_PROJECT_DIR "$h" autonomy "$runA" check push >/dev/null 2>&1) || rc=$?
+assert_eq "H-036: a check from another project set to full does not allow push in a safe run (77)" 77 "$rc"
+assert_eq "H-036: the run's profile is cached from its own project (safe)" safe \
+  "$(jq -r '.name // .profile // empty' "$runA/autonomy.json" 2>/dev/null)"
+rc=0; (cd "$projB" && HO_PROJECT_DIR="$projB" "$h" autonomy "$runA" check push >/dev/null 2>&1) || rc=$?
+assert_eq "H-036: HO_PROJECT_DIR naming another project is refused for a run-specific check (65)" 65 "$rc"
+# The engine's own merge reads the profile too: from another project it still reads the run's.
+profile safe
+runM=$("$h" run new)
+"$h" loop "$runM" integration --repo "$proj" --base main --worktree "$PWD/int-m" >/dev/null
+git -C "$proj" worktree add -q -b lane-m "$PWD/w-m" main
+printf 'from m\n' > "$PWD/w-m/m.txt"; git -C "$PWD/w-m" add m.txt; git -C "$PWD/w-m" commit -qm "work m"
+git -C "$PWD/w-m" commit -q --allow-empty -m "finalize(m): done"
+"$h" loop "$runM" ready m --worktree "$PWD/w-m" >/dev/null
+rc=0; (cd "$projB" && env -u HO_PROJECT_DIR "$h" loop "$runM" merge m >/dev/null 2>"$PWD/err-m") || rc=$?
+assert_eq "H-036: a loop merge from another project set to full is refused by the run's safe profile (65)" 65 "$rc"
+assert_eq "H-036: the merge caches the run's own profile (safe)" safe "$(jq -r '.name // empty' "$runM/autonomy.json" 2>/dev/null)"

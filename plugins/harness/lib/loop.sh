@@ -551,6 +551,9 @@ USAGE
 ho_loop_main() {
   [ $# -ge 2 ] || { ho_loop_usage; exit 64; }
   ho_run_open "$1"
+  # The run's config (the autonomy profile, the gate choice) comes from the project the run
+  # belongs to, never the caller's (H-036).
+  ho_session_bind_project || exit $?
   local verb=$2 rc=0
   shift 2
   case $verb in

@@ -147,7 +147,7 @@ ho_life_has() { printf '%s\n' $2 | grep -qx -- "$1"; }
 #   unknown       the stop state or the ticket queue cannot be read, or a ticket of the queue is
 #                 in none of the five states (D2): nothing changes (exit 2)
 ho_life_check() {
-  local st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live prev
+  local st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live
   if ho_run_ended; then
     # A close that failed at the run end (a busy session, a terminal that could not be reached)
     # is tried again at every later call; closed records are skipped.
@@ -195,19 +195,60 @@ ho_life_check() {
   else
     decision=end reason=all-done
   fi
-  # One ledger line per change of decision, so a polling orchestrator does not fill the ledger.
-  prev=$(ho_ledger_events | jq -r 'select(.kind == "lifecycle") | .decision' | tail -n 1)
-  [ "$prev" = "$decision" ] || ho_ledger_append lifecycle decision "$decision" standby "$HO_LIFE_STANDBY"
+  if [ "$decision" = end ]; then
+    # Of checks that decide "end" at the same time, only the first writes the run end; the
+    # others read "ended". Both close what is still open.
+    local erc=0
+    ho_life_end_once "$reason" || erc=$?
+    case $erc in
+      0) ho_life_say end ;;
+      1) ho_life_say ended ;;
+      *) ho_life_say unknown; return 2 ;;
+    esac
+    ho_life_sweep workers
+    ho_life_sweep keepers
+    return 0
+  fi
+  ho_life_note "$decision"
   ho_life_say "$decision"
   case $decision in
     wait-review | wait-blocked | standby) ho_life_sweep workers ;;
-    end)
-      ho_ledger_append run-end reason "$reason"
-      ho_life_sweep workers
-      ho_life_sweep keepers
-      ;;
   esac
   return 0
+}
+
+# ho_life_note <decision>: one ledger line per change of decision, so a polling orchestrator does
+# not fill the ledger.
+ho_life_note() {
+  local prev
+  prev=$(ho_ledger_events | jq -r 'select(.kind == "lifecycle") | .decision' | tail -n 1)
+  [ "$prev" = "$1" ] || ho_ledger_append lifecycle decision "$1" standby "$HO_LIFE_STANDBY"
+}
+
+# ho_life_end_once <reason>: write the run end once (H-079). The ledger is read again under the
+# lifecycle lock, so two checks never both write it. 0 this call ended the run, 1 the run had
+# already ended, 2 the lock stayed held. The lock covers only this read and write, never a close;
+# a lock left by a killed holder counts as stale after 30 s.
+ho_life_end_once() {
+  local lock="$HO_RUN_DIR/lifecycle.lock" n=0 t rc=0
+  until mkdir "$lock" 2>/dev/null; do
+    t=$(ho_live_mtime "$lock")
+    if [ -n "$t" ] && [ $(( $(date +%s) - t )) -ge 30 ]; then
+      rm -rf "$lock" 2>/dev/null || true
+      continue
+    fi
+    n=$((n + 1))
+    [ "$n" -lt 1200 ] || { printf 'harness: the lifecycle lock %s is held; nothing changed\n' "$lock" >&2; return 2; }
+    sleep 0.05
+  done
+  if ho_run_ended; then
+    rc=1
+  else
+    ho_life_note end
+    ho_ledger_append run-end reason "$1"
+  fi
+  rm -rf "$lock"
+  return "$rc"
 }
 
 # harness lifecycle <run> done <name>: the task of that session ended (H-081). One ledger line,

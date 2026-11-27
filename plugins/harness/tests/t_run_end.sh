@@ -264,3 +264,10 @@ assert_exit "H-079: an ended run refuses a session resume too (75)" 75 \
 assert_eq "H-079: the refused launches leave no record" "" "$(ls "$r13/sessions" 2>/dev/null | grep -E '^late' || true)"
 "$h" state "$r13" resume >/dev/null
 assert_exit "H-079: after a recorded resume the run launches again" 0 sess "$r13" worker late3
+
+# ---- H-079: checks that run at the same time write one run end ----------------------------------
+r14=$("$h" run new --workers 5)
+for i in 1 2 3 4 5 6 7 8; do HO_TICKETS_DIR="$base/tk-f" "$h" lifecycle "$r14" check >/dev/null 2>&1 & done
+wait
+assert_eq "H-079: eight checks at the same time write exactly one run-end line" 1 \
+  "$(jq -r 'select(.kind == "run-end") | .kind' "$r14/ledger.jsonl" | wc -l | tr -d ' ')"

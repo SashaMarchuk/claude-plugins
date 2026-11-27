@@ -302,7 +302,18 @@ EOF_REPOS
   # 2. Claim and comment.
   HO_IN_STEP=claim
   if ho_tk_gh; then
-    ho_tk_gh_set_state "$id" in-progress --add-assignee "@me" || return 2
+    if ! ho_tk_gh_set_state "$id" in-progress --add-assignee "@me"; then
+      # The edit may have failed half way, with the in-progress label set (D2, H-030). Read the
+      # state again: a set label, or a state that cannot be read, counts as claimed, so the
+      # ticket is moved to blocked and never sits in progress with no worker.
+      local now
+      if now=$(ho_tk_gh_state "$id" 2>/dev/null); then
+        case " $now " in *" in-progress "*) HO_IN_CLAIMED=1 ;; esac
+      else
+        HO_IN_CLAIMED=1
+      fi
+      return 2
+    fi
   else
     ho_tk_locked ho_tk_l_set_state_locked "$id" in-progress ready || return 2
   fi

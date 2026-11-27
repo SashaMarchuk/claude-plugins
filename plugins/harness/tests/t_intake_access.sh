@@ -232,3 +232,30 @@ label alice "$t14" ready
 out=$(PATH="$base/gh-shim2.d:$PATH" tick 2>/dev/null || true)
 assert_contains "D2 a failed pickup and a failed move to blocked still print one error line" "$out" "error $t14"
 assert_contains "D2 a ticket left in progress gets one owner-action line" "$(jq -c 'select(.kind == "owner-action")' "$run/ledger.jsonl")" "ticket $t14"
+
+# D2 H-030: a claim edit that fails half way (the in-progress label is set, the assignee is not)
+# is still a claim. The tick reads the state again and moves the ticket to blocked, as for the
+# other failures after the claim, so no ticket sits in progress with no worker.
+cat > "$base/gh-shim3" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" issue edit "*"--add-assignee"*)
+    args=(); skip=0
+    for a in "\$@"; do
+      if [ "\$skip" = 1 ]; then skip=0; continue; fi
+      if [ "\$a" = --add-assignee ]; then skip=1; continue; fi
+      args+=("\$a")
+    done
+    "$HO_TESTS_DIR/fake-bin/gh" "\${args[@]}" >/dev/null
+    echo "simulated failure after the labels" >&2; exit 1 ;;
+esac
+exec "$HO_TESTS_DIR/fake-bin/gh" "\$@"
+SHIM
+mkdir -p "$base/gh-shim3.d" && mv "$base/gh-shim3" "$base/gh-shim3.d/gh" && chmod +x "$base/gh-shim3.d/gh"
+t15=$(ticket "Claim edit fails half way")
+label alice "$t15" ready
+out=$(PATH="$base/gh-shim3.d:$PATH" tick 2>/dev/null || true)
+assert_contains "D2 a claim edit that failed half way prints one error line" "$out" "error $t15"
+assert_eq "D2 a claim edit that set the in-progress label and then failed moves the ticket to blocked" '["harness:blocked"]' "$(labels "$t15")"
+assert_contains "D2 the ledger records the half claim as left blocked" \
+  "$(jq -c --arg t "$t15" 'select(.kind == "pickup-error" and .ticket == $t)' "$run/ledger.jsonl")" '"state":"blocked"'

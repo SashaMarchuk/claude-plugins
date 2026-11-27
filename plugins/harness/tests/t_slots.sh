@@ -182,13 +182,17 @@ for s in 1.7 2.0 2.3 2.6; do
   l1v=$("$h" session "$r" status l1 | jq -r .liveness)
   if [ "$n" -le 1 ]; then ok "H-105: boot at ${s}s with a 2s boot timeout: at most one worker runs (l1 rc $rc1, l2 rc $rc2)"
   else bad "H-105: boot at ${s}s with a 2s boot timeout: at most one worker runs" "$n working, l1 rc $rc1, l2 rc $rc2"; fi
-  if [ "$l1v" = working ]; then
-    assert_eq "H-105: boot at ${s}s: the late session holds its slot" yes "$([ -f "$r/slots/worker/l1.json" ] && echo yes || echo no)"
-    if [ "$rc1" -ne 0 ]; then
-      assert_contains "H-105: boot at ${s}s: close ends the late session" "$("$h" session "$r" close l1 2>&1)" "closed"
-      assert_eq "H-105: boot at ${s}s: close gives the late session's slot back" no "$([ -f "$r/slots/worker/l1.json" ] && echo yes || echo no)"
-    fi
-  fi
+  # Which way a timing goes depends on the machine's load, so each timing gives the same results
+  # whichever way it went (issue #109).
+  held=$([ -f "$r/slots/worker/l1.json" ] && echo yes || echo no)
+  if [ "$l1v" != working ] || [ "$held" = yes ]; then ok "H-105: boot at ${s}s: a working late session holds its slot (l1 $l1v)"
+  else bad "H-105: boot at ${s}s: a working late session holds its slot" "l1 working, slot $held"; fi
+  if [ "$l1v" = working ] && [ "$rc1" -ne 0 ]; then
+    co=$("$h" session "$r" close l1 2>&1 || true)
+    case $co in *closed*) cl=yes ;; *) cl=no ;; esac
+    assert_eq "H-105: boot at ${s}s: close ends a late session whose launch failed and gives its slot back" "yes no" \
+      "$cl $([ -f "$r/slots/worker/l1.json" ] && echo yes || echo no)"
+  else ok "H-105: boot at ${s}s: close ends a late session whose launch failed and gives its slot back (l1 $l1v, rc $rc1)"; fi
   [ -z "$lp" ] || kill "$lp" 2>/dev/null || true
 done
 cp "$base/user.orig.json" "$user/config.json"

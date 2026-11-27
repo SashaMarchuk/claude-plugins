@@ -66,6 +66,14 @@ Source: interview 2026-11-24 R21.3
 The harness SHALL support limits per stage, such as a browser or UI check, next to the overall worker cap, and one shared limit for heavy operations. The owner left the choice of heavy operations to the orchestrator or a recommended list; as an agent decision, a default list is fixed and stage and heavy limits default to 1 (design.md D26). The orchestrator MAY extend the list but MUST NOT raise a limit.
 Source: interview 2026-11-24 R21.4, R21.5; D26
 
+#### Scenario: A running session needs a heavy or stage slot under a soft stop (design.md D37-LIFECYCLE-7)
+- **WHEN** a soft stop is in force and a session that already runs asks for a heavy or stage slot to finish its step
+- **THEN** the harness grants the slot under the normal limits, so the step can finish
+
+#### Scenario: The stop state cannot be read (design.md D37-LIFECYCLE-7)
+- **WHEN** a session asks for a slot of any kind and the run's stop state cannot be read
+- **THEN** the harness refuses the slot
+
 #### Scenario: A stage limit holds while tickets run in parallel
 - **WHEN** the worker cap is 3, the browser stage limit is 1, and one ticket is already in a browser check
 - **THEN** a second ticket that reaches the browser check waits, while other tickets continue in other stages

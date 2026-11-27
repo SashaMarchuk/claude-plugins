@@ -49,7 +49,7 @@ Decided: design.md D37-VERIFICATION-4 (block layout)
 Before it merges, the harness merge step MUST check that the independent validator gave the change a "passed" verdict, and MUST NOT merge without one. "Passed with remarks" alone does not satisfy this gate; H-058 governs it.
 
 Source: interview 2026-11-24 R13.1; the independent validator is existing harness behaviour that stays (decided context of the interview, not asked); remarks handling: design.md D15
-Decided: design.md D37-VERIFICATION-6
+Decided: design.md D37-VERIFICATION-6; D37-VERIFICATION-8 (verdict author)
 
 #### Scenario: Pass verdict present
 - **WHEN** the merge step runs and a "passed" verdict from the independent validator exists for the change
@@ -66,6 +66,14 @@ Decided: design.md D37-VERIFICATION-6
 #### Scenario: Passed-with-remarks verdict
 - **WHEN** the merge step runs and the only validator verdict is "passed with remarks"
 - **THEN** the merge step does not treat it as "passed" and follows H-058
+
+#### Scenario: The verdict comes from the lane's worker (design.md D37-VERIFICATION-8)
+- **WHEN** the "passed" verdict was recorded by the lane's worker session, also one resumed under a validator record
+- **THEN** the merge step refuses to merge
+
+#### Scenario: The verdict has no valid author (design.md D37-VERIFICATION-8)
+- **WHEN** the verdict was not recorded by a session of this run whose only role is validator, for example a file written in the repository
+- **THEN** the merge step refuses to merge
 
 ### Requirement: H-056 By default at least one test runs and all tests pass
 By default, verification SHALL check that all tests passed and that the number of tests run is not zero.

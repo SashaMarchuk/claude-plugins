@@ -113,10 +113,11 @@ ho_fb_runtime_version() {
     echo "$label, version unknown"; return 0
   fi
   out=$(mktemp "${TMPDIR:-/tmp}/ho-fb-ver.XXXXXX") || { echo "$label, version unknown"; return 0; }
-  # The probe gets the fixed system folders and the runtime's own folder only, never the
-  # caller's PATH, so a "#!/usr/bin/env node" line cannot pick a project interpreter (as
-  # delivery runs its version check, ho_deliver_exec_path).
-  ho_rt_probe 5 "$out" /usr/bin/env PATH="$(HO_PROJECT_DIR=$proj ho_deliver_exec_path "$path")" "$path" --version || rc=$?
+  # The probe gets an empty environment except HOME and a PATH of the fixed system folders and
+  # the runtime's own folder (ho_deliver_exec_path), never the caller's: so neither a
+  # "#!/usr/bin/env node" line nor BASH_ENV, NODE_OPTIONS or PYTHONPATH can load project code.
+  ho_rt_probe 5 "$out" /usr/bin/env -i HOME="${HOME:-/}" \
+    PATH="$(HO_PROJECT_DIR=$proj ho_deliver_exec_path "$path")" "$path" --version || rc=$?
   [ "$rc" -eq 0 ] && v=$(head -c 400 "$out" | tr ' \t\r' '\n\n\n' |
     grep -E '^v?[0-9]+(\.[0-9]+){1,3}([-+][0-9A-Za-z.]{1,20})?$' | head -n 1)
   rm -f "$out"
@@ -151,13 +152,15 @@ ho_fb_tickets() {
 
 # ho_fb_summary: the state summary of the last run, one line per fact.
 ho_fb_summary() {
-  local run proj file
+  local run proj file facts
   if ! run=$(ho_fb_last_run); then
     echo "- Last run: there is no last run of this engine in this project"
     return 0
   fi
   proj=$(dirname "$(dirname "$(dirname "$run")")")
-  (
+  # The facts are printed only when the whole ledger read worked, so a failed read gives one
+  # clear line and never a half summary next to it.
+  if facts=$(
     # shellcheck disable=SC2034 # read by ho_ledger_events
     HO_RUN_DIR=$run
     # The stop state as ho_stopped reads it (a STOP file first, then the last stop or resume,
@@ -176,7 +179,7 @@ ho_fb_summary() {
             else ($r | group_by(.) | map("\(.[0]) \(length)") | join(", ")) end)",
         "- Engine error codes: \(if ($err | length) == 0 then "none"
             else ($err | group_by(.) | map("\(.[0]) x\(length)") | join(", ")) end)"' -rs --argjson file "$file"
-  ) || echo "- Last run: found, but its ledger could not be read"
+  ); then printf '%s\n' "$facts"; else echo "- Last run: found, but its ledger could not be read"; fi
   printf -- '- Tickets per state: %s\n' "$(ho_fb_tickets "$proj")"
 }
 

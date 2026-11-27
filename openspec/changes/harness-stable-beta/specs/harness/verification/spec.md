@@ -49,7 +49,7 @@ Decided: design.md D37-VERIFICATION-4 (block layout)
 Before it merges, the harness merge step MUST check that the independent validator gave the change a "passed" verdict, and MUST NOT merge without one. "Passed with remarks" alone does not satisfy this gate; H-058 governs it.
 
 Source: interview 2026-11-24 R13.1; the independent validator is existing harness behaviour that stays (decided context of the interview, not asked); remarks handling: design.md D15
-Decided: design.md D37-VERIFICATION-6
+Decided: design.md D37-VERIFICATION-6; D37-VERIFICATION-8 (verdict author)
 
 #### Scenario: Pass verdict present
 - **WHEN** the merge step runs and a "passed" verdict from the independent validator exists for the change
@@ -66,6 +66,14 @@ Decided: design.md D37-VERIFICATION-6
 #### Scenario: Passed-with-remarks verdict
 - **WHEN** the merge step runs and the only validator verdict is "passed with remarks"
 - **THEN** the merge step does not treat it as "passed" and follows H-058
+
+#### Scenario: The verdict comes from the lane's worker (design.md D37-VERIFICATION-8)
+- **WHEN** the "passed" verdict was recorded by the lane's worker session, also one resumed under a validator record
+- **THEN** the merge step refuses to merge
+
+#### Scenario: The verdict has no valid author (design.md D37-VERIFICATION-8)
+- **WHEN** the verdict was not recorded by a session of this run whose only role is validator, for example a file written in the repository
+- **THEN** the merge step refuses to merge
 
 ### Requirement: H-056 By default at least one test runs and all tests pass
 By default, verification SHALL check that all tests passed and that the number of tests run is not zero.
@@ -229,3 +237,82 @@ Source: interview 2026-11-24 R15.12; D37-VERIFICATION-5
 #### Scenario: Ignore is set
 - **WHEN** the user has set the harness to ignore external review and an external code-review system comments on a pull request
 - **THEN** the harness does not act on those comments
+
+### Requirement: H-145 After a pull request opens, the harness checks whether the repository has an automatic reviewer
+When the harness opens a pull request, it SHALL check whether the repository has an automatic reviewer: a known review bot that reviewed or commented on recent pull requests there. Known review bots, and how each shows that it is done, SHALL be listed in a data file. This SHALL hold for every flow. A detected bot SHALL decide only the wait, not trust (H-061).
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.1, RP3.2
+Decided: design.md D44
+
+#### Scenario: Codex reviewed a recent pull request
+- **WHEN** the harness opens a pull request in a repository where the Codex review bot reviewed at least one of the last five pull requests
+- **THEN** the harness records Codex as the repository's automatic reviewer
+
+#### Scenario: No review bot in the history
+- **WHEN** no known review bot reviewed or commented on any of the last five pull requests, and none left its review summary on any of them
+- **THEN** the repository has no detected reviewer, and H-147 applies
+
+#### Scenario: A bot that is not a reviewer
+- **WHEN** a preview or coverage bot that is not in the list of known review bots commented on recent pull requests
+- **THEN** the harness does not count it as a reviewer
+
+#### Scenario: Any flow
+- **WHEN** the harness opens a pull request in a project with a custom flow
+- **THEN** the same check runs as for GSD
+
+#### Scenario: The person names the reviewer
+- **WHEN** the project config sets the reviewer to none, or names one review bot
+- **THEN** the harness uses that setting and skips the detection
+
+#### Scenario: A detected bot that is not approved
+- **WHEN** the detected bot is not in the project's list of approved review bots
+- **THEN** the harness waits for it, records its comments in the ticket thread and does not apply them (H-061)
+- **AND** the first setup and the configuration skill offer to add the bot to the approved list, which takes effect only after the person's yes
+
+### Requirement: H-146 The harness waits for a detected reviewer and then reacts
+When the repository has an automatic reviewer and external review is set to react or ask, the harness SHALL wait for the reviewer's result before the review-comments step reads the comments. The wait SHALL end when the reviewer is done, when no sign of a start comes within a first limit, or at a total limit. Both limits SHALL be settings, with the defaults of design.md D44.
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.1, RP3.3
+Decided: design.md D44
+
+#### Scenario: The reviewer finishes
+- **WHEN** the reviewer is done within the limits
+- **THEN** the review-comments step reads its comments and the harness reacts to them (H-061)
+
+#### Scenario: The reviewer never starts
+- **WHEN** no sign of a start comes from the reviewer within the first limit
+- **THEN** the harness writes one line in the ticket thread and goes on without that review
+
+#### Scenario: The reviewer starts but does not finish
+- **WHEN** the reviewer showed a start but was not done within the total limit
+- **THEN** the harness goes on, records that the review did not arrive, and moves the ticket to needs-review before any merge
+
+#### Scenario: External review is ignored
+- **WHEN** external review is set to ignore
+- **THEN** the harness does not wait for any reviewer and does nothing with its comments (H-063)
+
+#### Scenario: A fix is pushed
+- **WHEN** the harness pushes a fix after a review, and fewer review rounds than the round limit have run
+- **THEN** it waits for the reviewer again on the new commit, and the review-comments step runs again on that commit
+
+#### Scenario: The round limit is reached
+- **WHEN** the review rounds on a pull request reach the round limit and the reviewer still has new comments
+- **THEN** the harness pushes no more fixes for them and moves the ticket to needs-review
+
+### Requirement: H-147 With no detected reviewer, the harness still waits a short fixed time
+When the repository has no detected automatic reviewer and external review is set to react or ask, the harness SHALL still wait a short fixed time after it opens a pull request. It SHALL then read any review comments before it goes on. The time SHALL be a setting, with the default of design.md D45.
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.2, RP3.3
+Decided: design.md D45
+
+#### Scenario: No reviewer, nothing arrives
+- **WHEN** the repository has no detected reviewer and no comment arrives within the fixed wait
+- **THEN** the harness goes on after the wait
+
+#### Scenario: A known review bot starts during the wait
+- **WHEN** the repository has no detected reviewer and a known review bot shows a start within the fixed wait
+- **THEN** the harness switches to the wait of H-146 for that pull request
+
+#### Scenario: The user sets the wait to zero
+- **WHEN** the user sets the fixed wait to zero
+- **THEN** the harness does not wait

@@ -46,7 +46,21 @@ Source: interview 2026-11-24 R19.2; S8-SESSIONS; owner message 2026-11-25 (iTerm
 ### Requirement: H-091 The orchestrator decides how to handle a hung or stopped session
 When a session stops or hangs, the orchestrator SHALL decide at run time what to do with its ticket, including whether to escalate to a human or to solve the problem itself. The harness gives the orchestrator a default order of options and a list of causes that escalate at once; this guard is an agent decision, see design.md D20.
 
+Decided: design.md D37-SESSIONS-8 (proof that a session ended)
+
 Source: interview 2026-11-24 R18.1; D20
+
+#### Scenario: A session counts as ended only with proof (design.md D37-SESSIONS-8)
+- **WHEN** every recorded process of a session is proven gone
+- **THEN** the session reads as ended, and the run ledger records it once
+
+#### Scenario: The end cannot be proven (design.md D37-SESSIONS-8)
+- **WHEN** the record or the process table cannot be read, or a process can neither be seen nor proven gone
+- **THEN** the session reads as unknown, never as ended, and a close changes nothing
+
+#### Scenario: A quiet session is not ended (design.md D37-SESSIONS-8)
+- **WHEN** a session's transcript has not changed for hours and its process is alive
+- **THEN** the session reads as working, and the age of the transcript or the record is not proof of an end
 
 #### Scenario: A session stopped and the cause needs no human
 - **WHEN** a worker session stops and the orchestrator finds no cause that needs a human
@@ -227,6 +241,10 @@ Source: interview 2026-11-24 R18.10, R24.7; S8-24; owner message 2026-11-25 (iTe
 - **WHEN** the typed fallback targets a session that shows a dialog or a notice that would take the next key
 - **THEN** the harness types nothing and sends no Enter key, and it reports what it saw
 
+#### Scenario: A trust dialog shows on the screen (design.md D37-SESSIONS-7)
+- **WHEN** a session's screen shows the folder trust dialog
+- **THEN** the harness does not answer it, types nothing and records one owner action
+
 #### Scenario: The input line is checked by reading (design.md D42g)
 - **WHEN** the harness checks whether a session's input line is empty
 - **THEN** it reads the screen and types no test character
@@ -241,9 +259,9 @@ Source: interview 2026-11-24 R24.1; D30
 - **THEN** the worker runs as an interactive session in a terminal
 
 ### Requirement: H-101 Instructions go as messages first, with terminal typing as the fallback
-In terminal mode, the harness SHALL send instructions to a session as a message between sessions first. If that fails, it SHALL type the instruction directly into the terminal (on a Mac, through osascript). The message mechanism, the delivery proof and the action when both fail are an agent decision; see design.md S8-24.
+In terminal mode, the harness SHALL send instructions to a session as a message between sessions first. Only a proven failure of the message SHALL fall back to typing the instruction into the session. A message whose outcome is unknown MUST NOT be typed. iTerm2 SHALL never get typed delivery. The message mechanism, the delivery proof and the action when both fail are an agent decision; see design.md S8-24.
 
-Decided: design.md D42b, D42g (typed route)
+Decided: design.md D42b, D42g, D37-SESSIONS-6
 
 Source: interview 2026-11-24 R24.2; S8-24
 
@@ -251,18 +269,27 @@ Source: interview 2026-11-24 R24.2; S8-24
 - **WHEN** the orchestrator sends an instruction to a worker and the message is delivered
 - **THEN** the harness does not type into the terminal
 
-#### Scenario: Message fails
-- **WHEN** the message between sessions fails
-- **THEN** the harness types the instruction directly into that session's terminal
+#### Scenario: Message fails with proof (design.md D37-SESSIONS-6)
+- **WHEN** the message command could not start at all, or it exited non-zero, its process group is gone and the readable transcript has no record of the instruction ID
+- **THEN** the harness types the instruction into that session, under the conditions of H-099
+
+#### Scenario: The message outcome is unknown (design.md D37-SESSIONS-6)
+- **WHEN** the message command reaches its time limit, exits by a signal, or exits 0 with no proof, or the transcript cannot be read
+- **THEN** the harness types nothing and does not retry
+- **AND** it records one owner action that the instruction may not have arrived
+
+#### Scenario: The session runs in iTerm2 (design.md D37-SESSIONS-6)
+- **WHEN** an instruction goes to a session whose screen is in iTerm2 and not in the session host
+- **THEN** the message route is the only route, and nothing is typed, because an idle screen cannot be proven there
 
 #### Scenario: The session runs in the session host (design.md D42b, D42g)
 - **WHEN** the message between sessions fails and the session runs in the session host
 - **THEN** the harness types the instruction through the session host, not through the terminal app, and only under the conditions of H-099
-- **AND** typing through the terminal app is used only for a session that runs directly in it
 
 #### Scenario: Busy worker, unrelated output
 - **WHEN** an instruction is sent to a worker that keeps producing output, but no transcript entry carries that instruction or its id
-- **THEN** the harness does not count the instruction as delivered and uses the fallback or reports the failure
+- **THEN** the harness does not count the instruction as delivered
+- **AND** it types nothing unless the message failed with proof, and otherwise records one owner action (design.md D37-SESSIONS-6)
 
 ### Requirement: H-102 Non-interactive mode only where the rule allows; the result and the log suffice
 The harness SHALL launch a session in non-interactive mode (`claude -p`) only where a documented rule allows it. The rule, including the check of whether MCP access works in that mode, is an agent decision; see design.md D30. For a session launched this way, the result and the log SHALL be enough; the owner does not need to watch it live.
@@ -379,7 +406,21 @@ Source: owner message 2026-11-25 (iTerm2 incident); D42d
 ### Requirement: H-136 A session starts with a clean environment
 The harness SHALL start every session with an environment built from a short allow-list plus the variables the harness sets on purpose. Nothing else SHALL pass from the launching process. The same SHALL hold for a terminal app that the harness starts. The harness SHALL check this after launch and SHALL abort a launch that fails. See design.md D42e.
 
+Decided: design.md D37-SESSIONS-7, D61
+
 Source: owner message 2026-11-25 (iTerm2 incident); D42e
+
+#### Scenario: The runtime binary comes from the repository (design.md D61)
+- **WHEN** the person's PATH and shell variables are their own, but the runtime binary on that PATH resolves inside the project or one of its worktrees
+- **THEN** the harness uses the person's environment as given, refuses the launch and names the path of the runtime binary
+
+#### Scenario: The person has trusted the project folder (design.md D37-SESSIONS-7)
+- **WHEN** a session is launched in a worktree of the project, and the person has already trusted the project folder in the runtime
+- **THEN** the harness writes the same trust for that worktree before the session starts
+
+#### Scenario: The person has not trusted the project folder (design.md D37-SESSIONS-7)
+- **WHEN** a session is launched and the project folder is not trusted in the runtime
+- **THEN** the harness writes no trust, stops the launch and records one owner action
 
 #### Scenario: The launcher runs inside another session
 - **WHEN** the launcher runs from a shell inside another Claude Code session
@@ -433,3 +474,58 @@ Source: owner message 2026-11-25 (iTerm2 incident); D37-SESSIONS-5; D42k
 #### Scenario: The configuration changes during a run
 - **WHEN** the account label of a role changes in the configuration while a run is active
 - **THEN** sessions that already exist keep their recorded label, and only new sessions use the new one
+
+### Requirement: H-148 Every terminal action is checked after it is done, with a cheap model where no exact proof exists
+After each action on a session's terminal, the harness SHALL check that the result is what it expected, with an exact check first. Where no exact check gives an answer, a model in the cheap checker role (H-150) SHALL read the screen. A model answer alone SHALL NOT allow typing into a session or closing it. An unclear answer SHALL count as a failed check.
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.9
+Decided: design.md D46
+
+#### Scenario: Delivery is proven exactly
+- **WHEN** the harness delivers an instruction and the session's transcript records it
+- **THEN** the check passes without a model call
+
+#### Scenario: No exact proof, the cheap checker reads the screen
+- **WHEN** the harness launches a session and no exact check can prove that the session is ready for input
+- **THEN** a model in the cheap checker role reads the screen
+- **AND** its answer counts only when a second exact sample of the screen agrees with it
+- **AND** the harness records the answer and the screen it read
+
+#### Scenario: The cheap checker is unsure
+- **WHEN** the cheap checker cannot say whether the action worked
+- **THEN** the check counts as failed, and the harness handles it as a failed action (H-091)
+
+#### Scenario: A model answer never allows typing by itself
+- **WHEN** the cheap checker reads a session as idle but the exact checks of H-099 say busy or unknown
+- **THEN** the harness types nothing
+
+#### Scenario: No model name in the check
+- **WHEN** the user maps the cheap checker role to another model
+- **THEN** the check uses that model, and no engine code changes
+
+### Requirement: H-149 A confidence log by version sets how deep the checks go
+The harness SHALL log which terminal actions worked for each combination of terminal app version, runtime version and operating system. A new combination SHALL get the deepest checks. The first session of a day SHALL get more checks than later sessions that day. A known-good combination SHALL get light checks. A failed light check SHALL bring back the deep checks.
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.10
+Decided: design.md D47
+
+#### Scenario: A new version combination
+- **WHEN** the runtime updates and the harness launches its first session with the new version
+- **THEN** it runs the deep checks for every action of that session
+- **AND** it records each result under the new combination
+
+#### Scenario: A known-good combination later the same day
+- **WHEN** a combination already passed the deep checks in an earlier session today and the harness delivers an instruction in a new session
+- **THEN** it runs only the light checks
+
+#### Scenario: A light check fails
+- **WHEN** a light check fails or is unclear on a known-good combination
+- **THEN** the combination is marked suspect and the next actions get the deep checks again
+
+#### Scenario: Light checks keep the safety checks before typing
+- **WHEN** a combination is known-good and the harness is about to type into a session
+- **THEN** it still runs every check that H-099 requires before typing
+
+#### Scenario: The first run of a new day
+- **WHEN** a combination is known-good from an earlier day and no run used it today
+- **THEN** the first session of the day gets the medium checks

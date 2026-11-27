@@ -247,10 +247,10 @@ Decided: design.md D37-FLOW-4
 - **AND** it does not fall back to another config, to the saved user default or to the shipped default config
 
 ### Requirement: H-073 Flow systems are linked, never vendored, and checked present at start
-Flow systems themselves, such as GSD or superpowers, SHALL NOT be stored in the project repo. Configs SHALL only link to them. When the harness starts development, it MUST check that every technology and skill the flow names is present, because a linked system may be absent from a given machine. If one is missing, the harness SHALL stop before work starts, name it and install nothing (design.md D37-RUNTIME-3).
+Flow systems, such as GSD, SHALL NOT be stored in the project repo; configs SHALL only link to them. At start, the harness MUST check that every technology and skill the flow names is present for each runtime that uses it. If one is missing, it SHALL stop before work starts and name it with its install step. It SHALL run only a trusted install step, and only after a person's yes.
 
-Source: interview 2026-11-24 R17.5, R17.6
-Decided: design.md D37-RUNTIME-3
+Source: interview 2026-11-24 R17.5, R17.6; agent reading of RP3.13, RP3.14
+Decided: design.md D37-RUNTIME-3, D49
 
 #### Scenario: All named tools are present
 - **WHEN** the harness starts development and every technology and skill the flow names is installed
@@ -259,7 +259,26 @@ Decided: design.md D37-RUNTIME-3
 #### Scenario: A named skill is missing
 - **WHEN** the harness starts development and a skill the flow names is not installed
 - **THEN** the harness stops before any work starts and prints the missing skill with its install step
-- **AND** it installs nothing
+
+#### Scenario: The person agrees to set it up
+- **WHEN** an attended start finds a missing skill and the person says yes to the offer to set it up
+- **THEN** the harness runs the printed install step, checks again, and starts only when the check passes
+
+#### Scenario: A trusted install step
+- **WHEN** the missing item's install step comes from the shipped defaults or the user config, and the start is attended
+- **THEN** the harness may offer to run it
+
+#### Scenario: An install step from a project config
+- **WHEN** the missing item's install step comes from a project flow config
+- **THEN** the harness shows the step as "not checked" and never offers to run it
+
+#### Scenario: The person declines, or nobody answers
+- **WHEN** an attended start finds a missing skill and the person says no, or an unattended start finds one
+- **THEN** the harness installs nothing and does not start
+
+#### Scenario: A flow system is set up for one runtime only
+- **WHEN** the flow runs some steps on Claude Code and some on Codex, and its flow system is installed for Claude Code only
+- **THEN** the check names the flow system as missing for Codex, with the install step for Codex
 
 #### Scenario: The repo holds only links
 - **WHEN** a flow config uses GSD
@@ -362,3 +381,22 @@ Source: interview 2026-11-24 R24.5, R24.6; D31 (split from H-075)
 #### Scenario: A harness change is needed
 - **WHEN** running the same workflow on both runtimes needs a change in the harness
 - **THEN** that change is made in the harness
+
+### Requirement: H-150 Steps and checks name a model role, not a model
+A flow step, a check or a helper call SHALL name a model role, not a model. The roles SHALL be at least: cheap checker, standard, strong and strongest. One data file SHALL map each role to a model for each runtime. The user MAY change the mapping.
+
+Source: owner decision 2026-11-26 (review page, item 3): RP3.9, RP3.18
+Decided: design.md D48
+
+#### Scenario: A check asks for the cheap checker
+- **WHEN** the check of H-148 runs on Claude Code
+- **THEN** the harness takes the model for the cheap checker role on Claude Code from the mapping file
+
+#### Scenario: The user changes a role
+- **WHEN** the user maps the strong role on Codex to another model in the user config
+- **THEN** every step that names the strong role and runs on Codex uses that model
+
+#### Scenario: A role has no model for a runtime
+- **WHEN** a step names a role that the mapping does not give for the step's runtime
+- **THEN** the run stops at start and names the role and the runtime
+- **AND** it never picks a model by itself

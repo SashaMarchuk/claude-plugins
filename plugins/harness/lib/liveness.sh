@@ -312,7 +312,8 @@ ho_live_hooks() {
     --argjson quiet "$HO_LIVE_QUIET_SECONDS" --arg v "$verdict" '
     [split("\n")[] | select(length > 0) | (try fromjson catch null)
       | select(type == "object" and .session_id == $sid and (.t | type) == "number" and (.event | type) == "string")] as $r
-    | reduce $r[] as $e ({open: {}, order: [], stop_error: null};
+    # The reduce is parenthesized before "as": jq 1.7 (the macOS default) requires it.
+    | (reduce $r[] as $e ({open: {}, order: [], stop_error: null};
         if $e.event == "PreToolUse" and (($e.tool_use_id // "") | type) == "string" and ($e.tool_use_id // "") != "" then
           .open[$e.tool_use_id] = {tool: $e.tool, tool_use_id: $e.tool_use_id, t: $e.t} | .order += [$e.tool_use_id]
         elif $e.event == "PostToolUse" or $e.event == "PostToolUseFailure" then
@@ -321,7 +322,7 @@ ho_live_hooks() {
           .open = {} | .order = []
           | if $e.event == "StopFailure" then .stop_error = ($e.error // "unknown")
             elif $e.event == "Stop" then .stop_error = null else . end
-        else . end) as $s
+        else . end)) as $s
     | ($r | last) as $last
     | (if $tr then [$s.order | unique[] as $id | $s.open[$id] | select(. != null)] | sort_by(.t)
          | map({tool, tool_use_id, age_seconds: ([$now - .t, 0] | max)}) else [] end) as $open

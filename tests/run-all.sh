@@ -43,6 +43,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 take_lock() {
   local said=0 owner
+  [ -d "$(dirname "$LOCK")" ] || { echo "run-all: the folder of the lock $LOCK does not exist" >&2; exit 2; }
   until mkdir "$LOCK" 2>/dev/null; do
     owner=$(cat "$LOCK/owner" 2>/dev/null || true)
     # A lock with no owner line (its maker died between mkdir and the write) is stale after a minute.

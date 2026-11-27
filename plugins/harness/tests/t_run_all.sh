@@ -33,6 +33,10 @@ for p in $plugins; do
     fi
   } > "$repo/plugins/$p/tests/run.sh"
 done
+# T_FAIL=<plugin>: that plugin's runner reports FAIL=2 and exits 1.
+for p in $plugins; do
+  printf '[ "${T_FAIL:-}" != %s ] || { echo "%s tests: PASS=1  FAIL=2"; exit 1; }\n' "$p" "$p" >> "$repo/plugins/$p/tests/run.sh"
+done
 lock="$base/run-all.lock"
 ra() { PATH="$base/bin:$PATH" HO_RUN_ALL_LOCK="$lock" bash "$repo/tests/run-all.sh"; }
 # wait_for <tenths> <cmd...>: wait until the command succeeds (a generous cap, not a timing check).
@@ -50,6 +54,16 @@ assert_contains "run-all: a plugin's totals are its own last summary line" "$out
 # Each fake runner but the last says PASS=3; the last says PASS=2; openspec adds one PASS.
 assert_contains "run-all: the total is the sum of the last summary lines" "$out" "Total: $(( (nplug - 1) * 3 + 2 + 1 )) PASS / 0 FAIL"
 assert_eq "run-all: the lock is released after the run" no "$([ -e "$lock" ] && echo yes || echo no)"
+
+# A failing runner: its own counts and exit, once, and the whole run fails.
+: > "$base/calls.log"
+rc=0; out=$(T_TAG=f T_FAIL="$first" ra 2>&1) || rc=$?
+assert_eq "run-all: a failing plugin runner fails the run (exit 1)" 1 "$rc"
+assert_contains "run-all: the failing runner's line shows its own counts and exit" "$out" "/$first: PASS=1  FAIL=2  exit=1"
+assert_contains "run-all: the total counts the failing runner's FAIL=2" "$out" "/ 2 FAIL"
+assert_eq "run-all: the failing runner ran once" 1 "$(grep -c "^f start $first\$" "$base/calls.log")"
+rc=0; out=$(PATH="$base/bin:$PATH" HO_RUN_ALL_LOCK="$base/no-such-dir/x.lock" bash "$repo/tests/run-all.sh" 2>&1) || rc=$?
+assert_eq "run-all: a lock folder that does not exist stops the run at once (exit 2)" 2 "$rc"
 
 # ---- one full run at a time: a second run waits until the first ends ----
 : > "$base/calls.log"

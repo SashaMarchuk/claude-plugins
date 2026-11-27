@@ -479,11 +479,10 @@ t0=$(date +%s)
 out=$(HO_FAKE_MSG_MODE=term-ignore deliver z4 --text "run tests" 2>&1) && rc=0 || rc=$?
 el=$(( $(date +%s) - t0 ))
 z4id=$(printf '%s' "$out" | sed -n 's/.*id=\(ho-[0-9a-f]*\).*/\1/p' | head -n 1)
-# The command ignores SIGTERM and would sleep 300 s, then leave a marker. The proof of the
-# SIGKILL is the timeout path in the ledger and a command that never ran to its end; the bound
-# only rules out a wait for the whole sleep, with room for any load (issue #109).
+# The command ignores SIGTERM and would sleep 300 s. The proof of the SIGKILL is the timeout
+# path in the ledger and the command's process gone (below); the bound only rules out a wait
+# for the whole sleep, with room for any load (issue #109).
 assert_contains "N4: the ledger records the message command as timed out and stopped" "$(ledger | grep -F "${z4id:-no-id}" || true)" "timed out and stopped"
-assert_eq "N4: the command that ignored SIGTERM never ran to its end" "no" "$([ -e "$base/extra.pids.term.done" ] && echo yes || echo no)"
 assert_eq "N4: deliver returns long before the command's own end (at most 120 s of its 300 s)" "yes" "$([ "$el" -le 120 ] && echo yes || echo "no (${el}s)")"
 tp=$(cat "$base/extra.pids.term" 2>/dev/null || true)
 assert_eq "N4: the command that ignored SIGTERM is gone" "no" "$([ -n "$tp" ] && alive "$tp" && echo yes || echo no)"

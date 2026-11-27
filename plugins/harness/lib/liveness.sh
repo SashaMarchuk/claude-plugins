@@ -249,10 +249,149 @@ ho_live_verdict() {
   echo dead
 }
 
+# ---- Hook log (H-089; design S8-SESSIONS, D37-SESSIONS-2) ----
+# hooks/liveness-hook.sh appends one JSON line per event to <run>/hooks.jsonl: t (epoch
+# seconds), ts, event, session_id, and tool and tool_use_id, or error for StopFailure. The
+# records add facts to a status line; they never change a verdict, so a dead process ID always
+# wins. Ages come from the time in each line, never from a file's mtime (H-105).
+#   open call  a PreToolUse with no closing record: a later PostToolUse or PostToolUseFailure
+#              with the same tool call ID, or any later Stop, StopFailure or SessionEnd of the
+#              session. "Later" means later in the file.
+#   quiet      the flag of D20: a working session with no hook event for 15 minutes. An open
+#              call holds it off for liveness.tool_running_max_minutes (default 60), because a
+#              cancelled call fires no closing event and a tool can hang. Judged only for a
+#              working session whose records can be read; otherwise null.
+HO_LIVE_HOOK_EVENTS_ALL="SessionStart PreToolUse PostToolUse PostToolUseFailure Stop StopFailure SessionEnd"
+HO_LIVE_QUIET_SECONDS=900
+
+ho_live_hook_log() { printf '%s/hooks.jsonl\n' "$HO_RUN_DIR"; }
+
+# ho_live_hook_events: the events the hooks record, from liveness.hook_events (default all
+# seven), in the fixed order. A name outside the seven is dropped; a value that is not a list
+# is reported and the default is used.
+ho_live_hook_events() {
+  local v e out=""
+  v=$(ho_cfg '.liveness.hook_events | if . == null then null elif type == "array" then map(select(type == "string" and test("^[A-Za-z]+$"))) | join(" ") else "!not-a-list" end' "$HO_LIVE_HOOK_EVENTS_ALL") || return 1
+  case $v in
+    *[!A-Za-z\ ]*)
+      printf 'harness: config .liveness.hook_events is not a list of event names; using all seven\n' >&2
+      v=$HO_LIVE_HOOK_EVENTS_ALL
+      ;;
+  esac
+  for e in $HO_LIVE_HOOK_EVENTS_ALL; do
+    case " $v " in *" $e "*) out="$out${out:+ }$e" ;; esac
+  done
+  [ -n "$out" ] || [ -z "$(ho_cfg '.liveness.hook_events | if type == "array" and length > 0 then "set" else "" end' "")" ] \
+    || printf 'harness: config .liveness.hook_events names none of the seven hook events; the hooks record nothing\n' >&2
+  printf '%s\n' "$out"
+}
+
+# ho_live_hooks <record> <verdict>: {"hooks": {...}, "quiet": true|false|null} for the session.
+ho_live_hooks() {
+  local rec=$1 verdict=$2 sid log events maxs tracked=false state
+  log=$(ho_live_hook_log)
+  sid=$(jq -r '.session_id // ""' "$rec" 2>/dev/null) || sid=""
+  if [ ! -e "$log" ]; then state=missing
+  elif [ ! -r "$log" ] || [ ! -f "$log" ]; then state=unreadable
+  else state=present; fi
+  events=$(ho_live_hook_events 2>/dev/null) || events=$HO_LIVE_HOOK_EVENTS_ALL
+  case " $events " in *" PreToolUse "*) case " $events " in *" PostToolUse "*) case " $events " in
+    *" PostToolUseFailure "*) tracked=true ;; esac ;; esac ;; esac
+  maxs=$(ho_cfg_int '.liveness.tool_running_max_minutes' 60 2>/dev/null) || maxs=60
+  # A whole week at most, so the product never overflows.
+  { [ "${#maxs}" -le 6 ] && [ "$maxs" -le 10080 ]; } 2>/dev/null || maxs=10080
+  maxs=$((maxs * 60))
+  if [ "$state" != present ] || [ -z "$sid" ]; then
+    jq -cn --arg s "$state" --argjson tr "$tracked" '{hooks: {state: $s, tools_tracked: $tr, events: 0, last_event: null,
+      last_event_at: null, last_event_age_seconds: null, open_tools: [], tool_running: false, stop_error: null}, quiet: null}'
+    return 0
+  fi
+  # Lines that do not name the session ID are left out before jq parses anything, so a long
+  # run's shared log costs one pass of grep per session.
+  { grep -F -- "\"$sid\"" "$log" 2>/dev/null || true; } | jq -R -s -c --arg sid "$sid" --argjson now "$(date +%s)" --argjson max "$maxs" --argjson tr "$tracked" \
+    --argjson quiet "$HO_LIVE_QUIET_SECONDS" --arg v "$verdict" '
+    [split("\n")[] | select(length > 0) | (try fromjson catch null)
+      | select(type == "object" and .session_id == $sid and (.t | type) == "number" and (.event | type) == "string")] as $r
+    | reduce $r[] as $e ({open: {}, order: [], stop_error: null};
+        if $e.event == "PreToolUse" and (($e.tool_use_id // "") | type) == "string" and ($e.tool_use_id // "") != "" then
+          .open[$e.tool_use_id] = {tool: $e.tool, tool_use_id: $e.tool_use_id, t: $e.t} | .order += [$e.tool_use_id]
+        elif $e.event == "PostToolUse" or $e.event == "PostToolUseFailure" then
+          (($e.tool_use_id // "") | tostring) as $id | del(.open[$id])
+        elif $e.event == "Stop" or $e.event == "StopFailure" or $e.event == "SessionEnd" then
+          .open = {} | .order = []
+          | if $e.event == "StopFailure" then .stop_error = ($e.error // "unknown")
+            elif $e.event == "Stop" then .stop_error = null else . end
+        else . end) as $s
+    | ($r | last) as $last
+    | (if $tr then [$s.order | unique[] as $id | $s.open[$id] | select(. != null)] | sort_by(.t)
+         | map({tool, tool_use_id, age_seconds: ([$now - .t, 0] | max)}) else [] end) as $open
+    | ($open | map(select(.age_seconds < $max)) | length > 0) as $running
+    | (if $last == null then null else ([$now - $last.t, 0] | max) end) as $age
+    | {hooks: {state: (if $last == null then "none" else "present" end), tools_tracked: $tr, events: ($r | length),
+        last_event: $last.event, last_event_at: $last.ts, last_event_age_seconds: $age,
+        open_tools: $open, tool_running: ($v == "working" and $running), stop_error: $s.stop_error},
+       quiet: (if $v != "working" or $last == null then null else ($age >= $quiet and ($running | not)) end)}
+  ' 2>/dev/null || jq -cn --argjson tr "$tracked" '{hooks: {state: "unreadable", tools_tracked: $tr, events: 0, last_event: null,
+      last_event_at: null, last_event_age_seconds: null, open_tools: [], tool_running: false, stop_error: null}, quiet: null}'
+}
+
+# harness session <run-dir> hooks-check: the start check of D42l (H-089). It reads the settings
+# files the sessions will load (the runtime profile's hooks_settings) and names every hook with
+# no time limit, or one above preflight.hook_timeout_max_seconds (default 10), in one attention
+# notice on stderr, with one owner-action line in the run ledger. It never edits a settings
+# file. preflight.hooks is warn (default: exit 0) or stop (exit 69 when a hook is named). Hook
+# command text goes to the notice only, never to the ledger. A file that cannot be read is
+# named too (field note I1). The harness's own hook is declared in the plugin, not in these.
+ho_live_hooks_check() {
+  local mode max profile cdir_env cdir_def cdir pat f found="" n=0 unread="" lines
+  mode=$(ho_cfg '.preflight.hooks' warn) || exit $?
+  case $mode in warn | stop) ;; *) printf 'harness: config preflight.hooks must be warn or stop, not %s\n' "$mode" >&2; exit "$HO_EXIT_CONFIG" ;; esac
+  max=$(ho_cfg_int '.preflight.hook_timeout_max_seconds' 10) || exit $?
+  profile=$(ho_runtime_profile) || exit $?
+  cdir_env=$(jq -r '.config_dir.env // ""' "$profile")
+  cdir_def=$(jq -r '.config_dir.default // ""' "$profile")
+  case $cdir_env in '' | *[!A-Z0-9_]*) cdir="" ;; *) cdir=$(printenv "$cdir_env" 2>/dev/null || true) ;; esac
+  [ -n "$cdir" ] || cdir=${cdir_def//\{home\}/$HOME}
+  while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    f=${pat//\{config_dir\}/$cdir}
+    f=${f//\{project\}/$HO_PROJECT_DIR}
+    case $f in /*) ;; *) continue ;; esac
+    [ -e "$f" ] || continue
+    if ! lines=$(jq -r --argjson max "$max" '(.hooks // {}) | to_entries[] | .key as $e | (.value // [])[] | (.hooks // [])[]
+        | select((.timeout | type) != "number" or .timeout > $max)
+        | "\($e) \((.command // .url // .type // "?") | tostring | gsub("[[:cntrl:]]"; " ") | .[0:80]) (timeout \(.timeout // "none"))"' "$f" 2>/dev/null); then
+      unread="$unread  $f: cannot be read as JSON; its hooks were not checked"$'\n'
+      continue
+    fi
+    while IFS= read -r l; do
+      [ -n "$l" ] || continue
+      found="$found  $f: $l"$'\n'
+      n=$((n + 1))
+    done <<EOF_L
+$lines
+EOF_L
+  done <<EOF_P
+$(jq -r '.hooks_settings // [] | .[] | strings' "$profile")
+EOF_P
+  [ -z "$unread" ] || printf 'harness: attention: settings that the sessions load could not be read:\n%s' "$unread" >&2
+  if [ "$n" -eq 0 ]; then
+    echo "hooks OK"
+    return 0
+  fi
+  printf 'harness: attention: %s hook(s) in the settings that the sessions will load have no time limit or one above %s s (design D42l); a hook that hangs can hold a session:\n%s' "$n" "$max" "$found" >&2
+  ho_ledger_append owner-action title "hooks without a time limit" \
+    why "$n hook(s) in the settings the sessions load have no time limit or one above $max s (D42l)" \
+    command "add a \"timeout\" of at most $max to each hook named by: harness session <run> hooks-check" \
+    verify "harness session <run> hooks-check prints hooks OK"
+  [ "$mode" = stop ] && return 69
+  return 0
+}
+
 # ho_live_status_one <record>: one JSON line of facts. A running record whose process is gone
 # turns "dead" here, once, with one ledger line (H-090: the record is kept current, D42h).
 ho_live_status_one() {
-  local rec=$1 verdict pid="" tr="" tstate=missing tage=null tbytes=null now t
+  local rec=$1 verdict pid="" tr="" tstate=missing tage=null tbytes=null now t hooks
   verdict=$(ho_live_verdict "$rec")
   # Only a running record is brought up to date here; a launching one belongs to its launch.
   if [ "$verdict" = working ]; then
@@ -279,14 +418,16 @@ ho_live_status_one() {
       tstate=unreadable
     fi
   fi
+  hooks=$(ho_live_hooks "$rec" "$verdict")
   jq -c --arg v "$verdict" --arg pid "$pid" --arg tr "$tr" --arg ts "$tstate" --argjson age "$tage" \
-    --argjson bytes "${tbytes:-null}" --arg now "$(ho_now)" '{
+    --argjson bytes "${tbytes:-null}" --arg now "$(ho_now)" --argjson hk "$hooks" '{
       name, role, session_id, record_status: .status, liveness: $v,
       pid: (if $pid != "" then ($pid | tonumber) else .pid end),
       process: (if $v == "working" then "alive" elif $v == "dead" or $v == "closed" then "gone" else "unknown" end),
       account, cwd, handle, backend,
       transcript: (if $tr != "" then $tr else null end), transcript_state: $ts,
-      transcript_age_seconds: $age, transcript_bytes: $bytes, checked: $now}' "$rec" 2>/dev/null \
+      transcript_age_seconds: $age, transcript_bytes: $bytes,
+      hooks: $hk.hooks, quiet: $hk.quiet, checked: $now}' "$rec" 2>/dev/null \
     || jq -cn --arg name "$(basename "$rec" .json)" --arg now "$(ho_now)" \
       '{name: $name, liveness: "unknown", reason: "the record cannot be read", checked: $now}'
 }

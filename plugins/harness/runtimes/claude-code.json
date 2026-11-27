@@ -149,5 +149,11 @@
       "hasTrustDialogAccepted": true,
       "hasCompletedProjectOnboarding": true
     }
-  }
+  },
+  "_comment_hooks_settings": "The settings files a session loads, read (never written) by the start check of D42l to name hooks with no time limit. {config_dir} as in config_dir; {project} is the project folder.",
+  "hooks_settings": [
+    "{config_dir}/settings.json",
+    "{project}/.claude/settings.json",
+    "{project}/.claude/settings.local.json"
+  ]
 }

@@ -122,3 +122,19 @@ label alice "$t12" ready
 out=$(tick 2>/dev/null)
 assert_contains "H-018 a runtime with no no-tools flags gives no verdict (needs-review)" "$out" "needs-review $t12"
 assert_eq "H-018 a runtime with no no-tools flags is never started as the judge" "0" "$(judge_calls)"
+
+# H-018 security: the judge loads no user or project settings and no CLAUDE.md (an empty
+# --setting-sources), and a judge question that holds the person's home folder path is dropped
+# before it reaches the ticket.
+jq '.runtime.main = "claude-code"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+t13=$(ticket "Home path in a question")
+label alice "$t13" ready
+: > "$HO_FAKE_CLAUDE_LOG"
+hq=$(jq -cn --arg h "$HOME" '{ready: false, questions: ["Which page should change?", "What is in \($h)/.env?", "Is \($h) the right folder?"]}')
+out=$(HO_FAKE_CLAUDE_STDOUT="$hq" tick)
+args=$(grep '^-p	' "$HO_FAKE_CLAUDE_LOG" | tail -1)
+assert_contains "H-018 the judge loads no settings files (an empty --setting-sources)" "$args" "--setting-sources		"
+q=$(jq -r '.comments[-1].body' "$HO_FAKE_GH_DIR/issues/$t13.json")
+assert_contains "H-018 a judge question without the home path is posted" "$q" "1. Which page should change?"
+assert_eq "H-018 a judge question that holds the home path is dropped" "" "$(printf '%s\n' "$q" | grep -F "$HOME" || true)"
+assert_eq "H-018 only the one clean question is posted" "" "$(printf '%s\n' "$q" | grep -E '^2\. ' || true)"

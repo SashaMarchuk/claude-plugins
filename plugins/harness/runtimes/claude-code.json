@@ -60,7 +60,7 @@
       "dontAsk"
     ]
   },
-  "_comment_sandbox": "read-only: a review step without a terminal. no-tools: the readiness judge, which reads untrusted ticket text and so gets nothing to act with: no built-in tool (--tools with an empty list), no MCP server (--strict-mcp-config with no --mcp-config), no skill or command, and plan mode on top. Checked against claude --help 2.1.332.",
+  "_comment_sandbox": "read-only: a review step without a terminal. no-tools: the readiness judge, which reads untrusted ticket text and so gets nothing to act with: no built-in tool (--tools with an empty list), no MCP server (--strict-mcp-config with no --mcp-config), no skill or command, no user or project settings and no CLAUDE.md (--setting-sources with an empty list), and plan mode on top. Checked against claude --help 2.1.332.",
   "sandbox": {
     "read-only": [
       "--permission-mode",
@@ -71,6 +71,8 @@
       "",
       "--strict-mcp-config",
       "--disable-slash-commands",
+      "--setting-sources",
+      "",
       "--permission-mode",
       "plan"
     ]

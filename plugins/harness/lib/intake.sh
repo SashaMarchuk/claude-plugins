@@ -119,7 +119,7 @@ ho_in_record() { # <errors>: write the poll record; its time is now
 # The ticket text is untrusted, and the judge's questions are posted to the ticket. So the judge
 # gets nothing to read secrets with: it runs with the runtime profile's sandbox.no-tools flags
 # (no tools at all), from a new empty folder outside the project, and its questions are cut to
-# HO_IN_MAX_Q of at most HO_IN_MAX_QLEN characters. A profile without no-tools flags gives no
+# HO_IN_MAX_Q of at most HO_IN_MAX_QLEN characters; a question holding the home folder path is dropped. A profile without no-tools flags gives no
 # verdict, and the ticket goes to needs-review.
 HO_IN_MAX_Q=10
 HO_IN_MAX_QLEN=300
@@ -169,8 +169,11 @@ ho_in_judge() {
         and (.ready | type) == "boolean" and (.questions | type) == "array"
         and all(.questions[]; type == "string"))' 2>/dev/null | tail -n 1)
     if [ -n "$verdict" ]; then
-      printf '%s' "$verdict" | jq -r --argjson n "$HO_IN_MAX_Q" --argjson l "$HO_IN_MAX_QLEN" \
-        '[.questions[] | gsub("[[:cntrl:]]"; " ") | select(test("\\S"))][:$n][] | .[:$l]' > "$qf"
+      # A question that holds the person's home folder path is dropped: it may carry a local path
+      # or file content, and it would be posted to the ticket.
+      printf '%s' "$verdict" | jq -r --argjson n "$HO_IN_MAX_Q" --argjson l "$HO_IN_MAX_QLEN" --arg home "${HOME:-}" \
+        '[.questions[] | gsub("[[:cntrl:]]"; " ") | select(test("\\S"))
+          | select(($home | length) < 2 or (contains($home) | not))][:$n][] | .[:$l]' > "$qf"
       if [ "$(printf '%s' "$verdict" | jq -r .ready)" = true ]; then
         # Ready only with no open question for a human (H-012).
         if [ -s "$qf" ]; then HO_IN_VERDICT=not-ready; else HO_IN_VERDICT=ready; fi

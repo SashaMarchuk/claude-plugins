@@ -49,7 +49,8 @@ verbs:
   answer <id> <author> <body-file>   record an answer that arrived elsewhere, with its author (H-034)
   step <id> <step> <result>          record a finished step; result commit:<sha> or file:<path>
   resume <id> --repo <dir> <step>... print "next <step>" (first step without a real result) or "complete"
-  unblock <id>                       blocked -> ready, only for an account with write access (H-031)
+  unblock <id>                       blocked -> ready, only for an account with write access and
+                                     never from inside a harness session (H-031; exit 77)
   template                           the ticket body headings the plugin writes (D6)
   review <id>                        -> needs-review
   release <id>                       in-progress -> ready (body must pass the ready floor)
@@ -594,6 +595,12 @@ ho_tk_result_exists() {
 }
 ho_tk_unblock_terminal() { # <id>: the terminal form of unblock (OPEN-10, D37)
   local id=$1 who state
+  # H-031: a person unblocks. A launched session carries these, as for autonomy approve; an
+  # unblock from inside one is refused on every backend, whatever account is signed in.
+  if [ -n "${HO_SESSION_ID-}" ] || [ -n "${HO_SESSION_NAME-}" ]; then
+    ho_tk_err "a person unblocks a ticket, never a harness session; #$id stays blocked"
+    return "$HO_EXIT_DENIED"
+  fi
   if ho_tk_gh; then
     state=$(ho_tk_gh_state "$id") || { ho_tk_err "no ticket #$id"; return 66; }
     case " $state " in *" blocked "*) ;; *) ho_tk_err "#$id is not blocked (state: ${state:-none}); nothing was changed"; return 65 ;; esac

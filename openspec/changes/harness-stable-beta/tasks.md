@@ -10,7 +10,8 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 0.4 Check that a separate config folder keeps its own plugin cache and that two marketplaces cannot share one name
 - [x] 0.5 Build-time ground rules: the build session merges wave PRs into `harness/next` after an independent validator pass, a green `bash tests/run-all.sh` and a clean external review, and merges into `main` stay the owner's; the redacted field notes are on `harness/next`; `main` is protected (pull request only, admins included); a private sandbox repository exists for GitHub intake tests
   The empty leftover branch check is done: no such branch existed.
-- [ ] 0.6 Owner item, with no agent decision: the per-project worker count and safety rules 3 to 6 stay with the owner or the project
+- [x] 0.6 Worker count: the plugin default and the value recommended to a new user is 1; the owner's own user configuration sets at least 5 (H-104)
+- [ ] 0.7 Owner item, with no agent decision: safety rules 3 to 6 stay with the owner or the project
 
 ## 1. Build branch (after the owner merges the requirements PR)
 
@@ -87,7 +88,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 
 ## 14. Autonomy and git
 
-- [ ] 14.1 Autonomy profiles checked by the engine at every step boundary and before push, PR, merge and deploy
+- [ ] 14.1 Autonomy profiles checked by the engine at every step boundary and before push, PR, merge and deploy — including the approval record of D37-FLOW-8: the recorded fields, the compare at run start, the ranking file and the stop on a raise (H-036)
 - [ ] 14.2 Push to the ticket branch, draft PR after verification, merge confirmation by git, close on merge
 
 ## 15. Verification
@@ -104,7 +105,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 ## 17. Run lifecycle and recovery
 
 - [ ] 17.1 Soft and hard stops, and the STOP file
-- [ ] 17.2 Test force-send of a queued stop message from a script before relying on `hard:message` (D37-LIFECYCLE-4): tmux proven (issue #62); two iTerm2 trials before release
+- [ ] 17.2 Test force-send of a queued stop message from a script before relying on `hard:message` (D37-LIFECYCLE-4): tmux proven (issue #62); two iTerm2 trials before release (may be moot: iTerm2 gets no typed delivery, D37-SESSIONS-6)
 - [ ] 17.3 Standby, end of run, automatic recovery after sleep or a crash
 - [ ] 17.4 Outage monitor and dead-orchestrator restart in the watch script
 - [ ] 17.5 Typed text: the byte limit, longer text through a file, the check after a launch line, and the conditions for the typed fallback (H-137, H-099; D42f, D42g; issue #64)
@@ -128,6 +129,18 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 20.4 `/harness:feedback`: an issue without labels in the plugin's own repository, with technical context and no private data, shown in full and sent only after a yes; verify a no sends nothing (H-140; D43)
 - [ ] 20.5 Release checklist file in the plugin repository: automated tests, real terminals and the main success flow (H-141, H-142, H-143)
 
+## 20a. Owner review-page answers (2026-11-26)
+
+- [ ] 20a.1 Detect the repository's automatic reviewer from recent pull requests; wait with a first-signal limit and a total limit; a short fixed wait when there is none; offer to list a detected bot; the review settings are recorded fields of the approval record (H-145, H-146, H-147; D44, D45, D37-FLOW-8)
+- [ ] 20a.2 Check after each terminal action: exact check, second sample, cheap checker role; an unclear answer fails; a model answer never allows typing (H-148; D46)
+- [ ] 20a.3 Confidence log by terminal, runtime and operating system version, and the light, medium and deep check levels (H-149; D47)
+- [ ] 20a.4 `models.json` with the four roles for each runtime; a step, check or chain names a role (H-150; D48)
+- [ ] 20a.5 After the owner confirms OPEN-RP-1: offer to run printed install steps after a yes in an attended start; never in an unattended one; project install steps never offered (H-073; D49)
+- [ ] 20a.6 Machine fingerprint, its digest in the local selection, block, confirm and note classes, and `/harness:config --recheck` (H-151; D50)
+- [ ] 20a.7 Scan-first setup with at most five questions (H-152; D51)
+- [ ] 20a.8 Readiness check: the read-only `harness doctor` command and the skill; blind naming test for its name (H-154; D52)
+- [ ] 20a.9 Setup evaluation: machine-state fixtures, pass criteria, one mutant per criterion, three runs per state (H-153; D51)
+
 ## 21. Evaluation programme
 
 - [ ] 21.1 Isolation self-test of the eval lane; verify the installed 0.6.0 and its data are unchanged (R27.14, R27.15)
@@ -141,6 +154,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 - [ ] 21.9 Verify the main success flow works end to end, as the release checklist states it (H-143; R30.5, R27.17)
 - [ ] 21.10 Real-terminal acceptance before release: run the iTerm2 backend once on the real app, from launch to close, together with the two trials of 17.2, and log the result; until then the backend counts as tested against fakes only (H-142; D42n; issue #78)
 - [ ] 21.11 Run the release checklist in full and record the results for the release PR (H-141)
+- [ ] 21.12 Run the setup evaluation and record its result for the release PR (H-153)
 
 ## 22. Release
 

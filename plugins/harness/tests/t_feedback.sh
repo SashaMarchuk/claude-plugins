@@ -131,6 +131,14 @@ assert_eq "D40: the description reaches the issue exactly as written" "$(cat "$b
   "$(printf '%s\n' "$body" | awk '/^---$/{exit} {print}' | sed '$d')"
 assert_contains "D40: the title is the first line of the description, as written" \
   "$(jq -r .title "$HO_FAKE_GH_DIR/issues/$n.json")" "Harness feedback: It hangs. My notes are in"
+# The title cut at 70 counts characters, so a multi-byte character is never split.
+zh=""; for i in $(seq 1 70); do zh="${zh}Ж"; done; zh70=$zh; zh="${zh}ЖЖЖЖЖЖЖЖЖЖ"
+printf '%s\n' "$zh" > "$base/d9.txt"
+rc=0; out9=$(cd "$proj" && "$h" feedback preview "$base/d9.txt") || rc=$?
+assert_eq "H-140 title: a non-Latin first line gives a preview (exit 0)" "0" "$rc"
+assert_eq "H-140 title: a non-Latin first line is cut at 70 whole characters" "Harness feedback: $zh70" \
+  "$(printf '%s\n' "$out9" | sed -n 's/^Title: //p')"
+rm -rf "$(draft_of "$out9")"
 # Only the context is checked: it holds no value of the private run.
 ctx=$(printf '%s\n' "$body" | sed -n '/^Technical context/,$p')
 leaks=""

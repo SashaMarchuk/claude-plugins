@@ -163,8 +163,8 @@ unset USER LOGNAME HO_FAKE_GH_USER HO_TICKETS_REPO
 # ---- Token shapes and paths from validation round 1, one marker and one check each -----------
 # Every fake secret is built by concatenation, so no whole secret sits in this file. Each one
 # carries a marker word in its secret part; the check is that the marker does not reach the text.
-v_stripe="sk""_live_""51ZedStripeLiveMark""4eC39HqLyjWDarjtT1"
-v_stripe_t="sk""_test_""ZedStripeTestMark""4eC39HqLyjWDarjt"
+v_stripe="sk""_live_""ZedStripeLiveMark""4eC39Hq"
+v_stripe_t="sk""_test_""ZedStripeTestMark""4eC3"
 v_glpat="glp""at-""ZedGitlabMark""x1y2z3w4v5u6"
 v_hf="h""f_""ZedHuggingMark""abcdefgh12345678"
 v_tg="1234""56789:""AAH""ZedTelegramMark""abcdefghijklmnopq"
@@ -185,11 +185,16 @@ v_basic="ZedBasicMark""dXNlcjpwYXNzd29yZA=="
   printf 'Authorization: Basic %s\n' "$v_basic"
   printf 'DB_PASS=ZedDbPassMark passphrase=ZedPhraseMark run --password ZedFlagPwMark now\n'
   printf 'password="ZedQuoteOneMark ZedQuoteTwoMark words"\n'
-  printf 'redis://:ZedRedisPwMark@localhost:6379 and postgres://ZedPgUserMark:p!ZedPgPassMark@db.internal/app\n'
+  printf 'redis://:ZedRedisPwMark@localhost:6379 and postgres://ZedPgUserMark:ZedPgPassMark!x@db.internal/app\n'
   printf 'host:/Projects/zedhostmark/x and -L/Projects/zedlinkmark/lib and file:///Projects/zedfilemark/x.html\n'
   printf 'share //nas/zednasmark/f and ~/Documents/Zed Corp/zedtildemark.md\n'
   printf 'and /Projects/My Zedspacemark/s.txt and "/Applications/Zed App/zedquotemark"\n'
   printf 'sibling %s-private/tickets/zedsibmark.md\n' "$HO_PLUGIN_ROOT"
+  # A path with a part that looks like a token: no end of it may stay.
+  printf 'archive /srv/ZedClientProject2026Arch/zqm.md\n'
+  printf 'budget /Projects/acme.io/ZedClient2026Q4MigrationPlan/zbm.xlsx\n'
+  printf 'temp /var/folders/8c/lgj8t4xj4fg4st79311kj1f40000gn/T/zedtmp.dir/zedcsvmark.csv\n'
+  printf 'hex /a/%s/zedhexmark.txt\n' "$v_hex"
   printf 'keep read/write and and/or, the plugin file %s/lib/feedback.sh and %s\n' "$HO_PLUGIN_ROOT" "$HO_PLUGIN_ROOT"
 } > "$base/d3.txt"
 rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d3.txt") || rc=$?
@@ -199,7 +204,8 @@ for m in ZedStripeLiveMark ZedStripeTestMark ZedGitlabMark ZedHuggingMark ZedTel
   ZedGoogleMark ZedSendgridHeadMark ZedSendgridTailMark ZedSlackTeam ZedSlackBot ZedSlackHookMark \
   "$v_hex" ZedBasicMark ZedDbPassMark ZedPhraseMark ZedFlagPwMark ZedQuoteOneMark ZedQuoteTwoMark \
   ZedRedisPwMark ZedPgUserMark ZedPgPassMark zedhostmark zedlinkmark zedfilemark zednasmark \
-  "Corp/" zedtildemark Zedspacemark zedquotemark "App/" zedsibmark "plugin-root-private"; do
+  "Corp/" zedtildemark Zedspacemark zedquotemark "App/" zedsibmark "plugin-root-private" \
+  zqm.md zbm.xlsx zedcsvmark zedtmp.dir zedhexmark; do
   case $shown in
     *"$m"*) bad "H-140 / D43 round 1: [$m] does not reach the shown text" "it does" ;;
     *) ok "H-140 / D43 round 1: [$m] does not reach the shown text" ;;

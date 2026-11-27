@@ -16,6 +16,9 @@
 # rules and the "/" token rule: their "/" stands in as SHIELD while those rules run.
 
 def SHIELD: "\u0002";
+# Stands for "[token removed]" while the path rules run, so a removed token counts as a path
+# part ("/srv/<token>/x.md" goes whole) and a token glued to a path tail goes with it.
+def TOKEN_PART: "\u0003";
 def esc: gsub("(?<c>[.^$*+?()\\[\\]{}|\\\\/-])"; "\\\(.c)");
 def word($a): "(?i)(?<![A-Za-z0-9_.-])" + ($a | esc) + "(?![A-Za-z0-9_-])";
 
@@ -91,11 +94,14 @@ def abs_re: first_part + "(?:" + part + ")+/?";
 def home_re: "(?:~|\\$HOME|\\$\\{HOME\\})(?:" + part + ")+/?";
 def rel_re: "(?<![A-Za-z0-9_])(?:\\.\\.?/)+" + seg + "+(?:/" + seg + "+)*";
 def win_re: "(?<![A-Za-z0-9])[A-Za-z]:\\\\[^\\s]+";
+def glued_re: seg + "*" + TOKEN_PART + seg + "*(?:" + part + ")+/?";
 def s_paths($priv):
-  reduce ($priv | map(select(length >= 4)) | sort_by(-length))[] as $q
+  gsub(TOKEN_PART; "") | gsub("\\[token removed\\]"; TOKEN_PART)
+  | reduce ($priv | map(select(length >= 4)) | sort_by(-length))[] as $q
     (.; gsub("(?i)" + ($q | esc); "[path removed]"))
   | outside_links(gsub(home_re; "[path removed]") | gsub(abs_re; "[path removed]")
-      | gsub(rel_re; "[path removed]") | gsub(win_re; "[path removed]"));
+      | gsub(glued_re; "[path removed]") | gsub(rel_re; "[path removed]") | gsub(win_re; "[path removed]"))
+  | gsub(TOKEN_PART; "[token removed]");
 
 def s_accounts($accts):
   reduce ($accts[] | select(length >= 3)) as $a (.; gsub(word($a); "[account removed]"));

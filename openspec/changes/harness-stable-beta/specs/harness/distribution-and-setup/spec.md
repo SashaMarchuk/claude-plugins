@@ -181,8 +181,7 @@ Source: owner decision 2026-11-26; owner message 2026-11-25 (iTerm2 incident)
 
 #### Scenario: iTerm2 is checked
 - **WHEN** the release checklist reaches the terminal checks
-- **THEN** a session of the real runtime is launched in the real iTerm2 app, receives an instruction by the message route, reads as alive and is closed gracefully
-- **AND** typed delivery is not part of the iTerm2 check: iTerm2 never gets typed delivery, because its screen capture keeps no colours and an idle screen cannot be proven there
+- **THEN** a session of the real runtime is launched in the real iTerm2 app, receives an instruction, reads as alive and is closed gracefully
 
 #### Scenario: A backend ran only against fakes
 - **WHEN** a backend passed its automated tests against a fake terminal and was not run on the real app

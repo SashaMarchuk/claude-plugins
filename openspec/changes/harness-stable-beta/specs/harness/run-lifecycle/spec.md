@@ -119,6 +119,10 @@ Source: interview 2026-11-24 R20.5, R20.6; D25, D25a, D25b; proposal.md (STOP fi
 - **WHEN** the STOP file is created for an active run
 - **THEN** the harness applies the default soft stop, which finishes only the current step
 
+#### Scenario: STOP file while a looser stop is in force (design.md D37-LIFECYCLE-7)
+- **WHEN** the STOP file appears while a `soft:ticket` stop is in force
+- **THEN** the harness applies `soft:step`, because the stricter stop wins
+
 ### Requirement: H-087 Hard stop variants that may force-close sessions
 A hard stop SHALL stop work at once. It MAY force-close sessions; the rule "never force-close a session" SHALL NOT apply to a hard stop. A force-close MUST target each process as in H-103 (agent decision, design.md S8-27). Final variants and forced send: design.md D25. Run state kept for recovery at an immediate hard stop: design.md S8-20b.
 Decided: design.md D37-LIFECYCLE-4, D37-LIFECYCLE-6

@@ -131,9 +131,9 @@ Source: interview 2026-11-24 R17.10; D19
 - **THEN** the documentation tells them how to set the harness up
 
 ### Requirement: H-140 A feedback command files a problem report as an issue, after the person's yes
-The plugin SHALL provide `/harness:feedback`. The person describes a problem with the harness, and the command SHALL file it as an issue without labels in the plugin's own repository. It SHALL add technical context: plugin version, runtime version, operating system and a state summary of the last run. It MUST NOT add private data: paths outside the plugin, tokens, ticket text or account names. It SHALL show the full text first and send only after a yes.
+The plugin SHALL provide `/harness:feedback`. The person describes a problem with the harness, and the command SHALL file it as an issue without labels in the plugin's own repository. It SHALL add technical context from fixed fields only, with no private data: no path outside the plugin, token, ticket text or account name. The description SHALL be sent as written. It SHALL show the full text first and send only after a yes.
 
-Source: owner decision 2026-11-26
+Source: owner decisions 2026-11-26, 2026-11-27; design.md D43, D60
 
 #### Scenario: A report is filed
 - **WHEN** the person runs `/harness:feedback`, describes a problem and says yes to the shown text
@@ -144,9 +144,13 @@ Source: owner decision 2026-11-26
 - **WHEN** the person reads the shown text and does not say yes
 - **THEN** nothing is sent
 
-#### Scenario: Private data stays out
+#### Scenario: Private data stays out of the added context
 - **WHEN** the last run worked on tickets of a private project
-- **THEN** the shown text holds no ticket text, no path outside the plugin, no token and no account name
+- **THEN** the added context holds no ticket text, no path outside the plugin, no token and no account name
+
+#### Scenario: The description is sent as written (design.md D60)
+- **WHEN** the person's description holds a path, a token or another private value
+- **THEN** the shown text and the issue hold the description exactly as the person wrote it, and the harness removes nothing from it
 
 #### Scenario: No run exists yet
 - **WHEN** the person runs `/harness:feedback` before any run
@@ -181,7 +185,8 @@ Source: owner decision 2026-11-26; owner message 2026-11-25 (iTerm2 incident)
 
 #### Scenario: iTerm2 is checked
 - **WHEN** the release checklist reaches the terminal checks
-- **THEN** a session of the real runtime is launched in the real iTerm2 app, receives an instruction, reads as alive and is closed gracefully
+- **THEN** a session of the real runtime is launched in the real iTerm2 app, receives an instruction by the message route, reads as alive and is closed gracefully
+- **AND** typed delivery is not part of the iTerm2 check: iTerm2 never gets typed delivery, because its screen capture keeps no colours and an idle screen cannot be proven there
 
 #### Scenario: A backend ran only against fakes
 - **WHEN** a backend passed its automated tests against a fake terminal and was not run on the real app

@@ -101,8 +101,8 @@ Source: interview 2026-11-24 R10.2; D1, D2
 ### Requirement: H-031 Unblock command, usable only by people with write access
 The harness SHALL provide a command that returns a blocked ticket to ready, removing the blocked state as it does. Only a person with write access to the repository, or higher, MAY unblock a ticket; a request from anyone else, or with unconfirmed access, MUST NOT unblock it. Unblock and label-cleanup tests: build-time rule R10.3, design.md Build-time rules, tasks.md 13.2.
 
+Decided: design.md D37-COMMENTS-4 (the unblock command and its two forms)
 Source: interview 2026-11-24 R10.2, R10.4, R4.3
-OPEN: see design.md OPEN-10
 
 #### Scenario: A writer unblocks a ticket
 - **WHEN** a person with write access uses the unblock command on a blocked ticket
@@ -115,6 +115,22 @@ OPEN: see design.md OPEN-10
 #### Scenario: Access cannot be confirmed
 - **WHEN** a person whose access cannot be confirmed uses the unblock command
 - **THEN** the ticket stays blocked
+
+#### Scenario: A writer sets the ready label on a blocked ticket (design.md D37-COMMENTS-4)
+- **WHEN** a person with write access sets the ready label on a blocked ticket, after its blocked label
+- **THEN** the next poll moves the ticket to ready, with one status comment
+
+#### Scenario: Another ready label on a blocked ticket (design.md D37-COMMENTS-4)
+- **WHEN** a blocked ticket gets a ready label from a person without confirmed write access, or a ready label older than its blocked label
+- **THEN** the harness removes the ready label, and the ticket stays blocked with one status comment
+
+#### Scenario: Unblock from the terminal (design.md D37-COMMENTS-4)
+- **WHEN** a person runs the terminal form of the unblock command
+- **THEN** the harness checks the write access of the account signed in to the tracker, and the ticket stays blocked when that account cannot be read or has no confirmed write access
+
+#### Scenario: Unblock inside a harness session (design.md D37-COMMENTS-4)
+- **WHEN** the terminal form of the unblock command runs inside a harness session
+- **THEN** the harness refuses it, and the ticket stays blocked, because only a person may unblock a ticket
 
 ### Requirement: H-032 Questions to a human go to the ticket as numbered items, and the session closes
 When a worker needs a human, or a ticket lacks detail, the harness SHALL ask in the configured tracker's comments (GitHub by default): numbered questions in one new comment, with the ticket marked as waiting for an answer. The worker's session SHALL then close while other tickets continue. Human-need pre-check: agent decision, design.md S8-11. The orchestrator decides how work resumes (R11.4, H-092).

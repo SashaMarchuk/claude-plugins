@@ -218,9 +218,14 @@ for m in zedstopreason zedstopper zederrreason zedclient; do
   esac
 done
 rm -rf "$(draft_of "$out")"
-# Runtime version: only a version-shaped word of the runtime's output is kept.
-rc=0; out=$(cd "$proj" && HO_FAKE_CLAUDE_VERSION="0.0.0 /Users/zedverpath (zedvername)" "$h" feedback preview "$base/d1.txt") || rc=$?
-assert_contains "D43 allow-list runtime version: the version word is kept" "$out" "- Runtime: claude-code 0.0.0"
+# Runtime version: only a version-shaped word of the runtime's output is kept. The probe gets
+# no caller environment, so this runtime is its own outside script, first on PATH.
+mkdir -p "$base/verbin"
+printf '#!/usr/bin/env bash\necho "Zedtool 4.5.6 /Users/zedverpath (zedvername) build zedverbuild"\n' > "$base/verbin/claude"
+chmod +x "$base/verbin/claude"
+rc=0; out=$(cd "$proj" && PATH="$base/verbin:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
+rm -rf "$base/verbin"
+assert_contains "D43 allow-list runtime version: the version word is kept" "$out" "- Runtime: claude-code 4.5.6"
 case $out in
   *zedver*) bad "D43 allow-list runtime version: other words of the runtime output are not copied" "they were" ;;
   *) ok "D43 allow-list runtime version: other words of the runtime output are not copied" ;;

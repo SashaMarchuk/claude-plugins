@@ -1,5 +1,5 @@
 # Readiness check at every pickup (H-012, H-013; D6 default content, D8 no fixed structure).
-# The judge is the main runtime run without a terminal and read-only, from its runtime profile;
+# The judge is the main runtime run without a terminal and with no tools, from its runtime profile;
 # the fake claude prints the verdict set in HO_FAKE_CLAUDE_STDOUT.
 . "$HO_TESTS_DIR/intake-setup.sh"
 judge_calls() { grep -c '^-p	' "$HO_FAKE_CLAUDE_LOG" 2>/dev/null || true; }
@@ -86,3 +86,39 @@ assert_eq "H-012 a timed-out judge gives the verdict unknown" '"unknown" ' "$(ve
 assert_eq "H-012 a timed-out judge does not start the ticket" "" "$(printf '%s' "$out" | grep "start $t9" || true)"
 jq '.tickets.readiness_timeout_seconds = 5' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 assert_exit "H-012 a judge time limit below 10 seconds is refused" 78 "$h" intake "$run" tick
+
+# H-012 H-018 security: ticket text is untrusted, so the judge has nothing to read with. It runs
+# with no tools (the runtime profile's sandbox.no-tools flags), from an empty folder outside the
+# project, and what it returns is bounded before it reaches the ticket: at most 10 questions of
+# at most 300 characters each.
+jq '.tickets.readiness_timeout_seconds = 300' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+t10=$(ticket "Isolated judge")
+label alice "$t10" ready
+: > "$HO_FAKE_CLAUDE_LOG"
+out=$(HO_FAKE_CLAUDE_SHOW_ENV=PWD tick)
+args=$(grep '^-p	' "$HO_FAKE_CLAUDE_LOG" | tail -1)
+assert_contains "H-018 the judge gets no built-in tools" "$args" "--tools		"
+assert_contains "H-018 the judge loads no MCP server" "$args" "--strict-mcp-config"
+assert_contains "H-018 the judge loads no skill or command" "$args" "--disable-slash-commands"
+jcwd=$(sed -n 's/^env PWD=//p' "$HO_FAKE_CLAUDE_LOG" | tail -1)
+assert_eq "H-018 the judge does not run in the project folder" "no" "$(case $jcwd in ("$proj" | "$proj"/*) echo yes ;; (*) echo no ;; esac)"
+assert_eq "H-018 the judge runs from a folder that is gone afterwards" "no" "$([ -n "$jcwd" ] && [ -e "$jcwd" ] && echo yes || echo no)"
+long=$(printf 'x%.0s' $(seq 1 400))
+many=$(jq -cn --arg l "$long" '{ready: false, questions: ([$l] + [range(1; 15) | "Question \(.)?"])}')
+t11=$(ticket "Many long questions")
+label alice "$t11" ready
+out=$(HO_FAKE_CLAUDE_STDOUT="$many" tick)
+q=$(jq -r '.comments[-1].body' "$HO_FAKE_GH_DIR/issues/$t11.json")
+assert_contains "H-032 the judge's questions still reach the ticket" "$q" "2. Question 1?"
+assert_eq "H-018 at most 10 questions of the judge are posted" "" "$(printf '%s\n' "$q" | grep -E '^11\. ' || true)"
+assert_eq "H-018 a question of the judge is cut to 300 characters" "300" "$(printf '%s\n' "$q" | sed -n 's/^1\. //p' | tr -d '\n' | wc -c | tr -d ' ')"
+# A runtime profile without sandbox.no-tools cannot judge: no verdict, so needs-review.
+mkdir -p "$user/runtimes"
+jq 'del(.sandbox["no-tools"])' "$HO_PLUGIN_ROOT/runtimes/claude-code.json" > "$user/runtimes/claude-open.json"
+jq '.runtime.main = "claude-open"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+t12=$(ticket "Profile without isolation")
+label alice "$t12" ready
+: > "$HO_FAKE_CLAUDE_LOG"
+out=$(tick 2>/dev/null)
+assert_contains "H-018 a runtime with no no-tools flags gives no verdict (needs-review)" "$out" "needs-review $t12"
+assert_eq "H-018 a runtime with no no-tools flags is never started as the judge" "0" "$(judge_calls)"

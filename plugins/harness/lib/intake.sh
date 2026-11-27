@@ -15,9 +15,9 @@
 #      that cannot be read means no claim. A bot is judged by its
 #      own access, with no allow-list (H-008 interim rule until OPEN-INTAKE-1 is answered).
 #   2. Claim: ready -> in-progress, then one "picked up" comment.
-#   3. Readiness: the main runtime, run without a terminal and read-only from its runtime
-#      profile, judges the fenced ticket text against the required content (tickets.required_content,
-#      default D6). Its verdict goes to the run ledger at every pickup. ready -> "start <id>" for
+#   3. Readiness: the main runtime, run without a terminal and with no tools (sandbox.no-tools
+#      of its runtime profile), from an empty folder, judges the fenced ticket text against the
+#      required content (tickets.required_content, default D6). Its verdict goes to the run ledger at every pickup. ready -> "start <id>" for
 #      the orchestrator; not ready -> numbered questions on the ticket and blocked (H-032; the
 #      configurable reaction of H-016 belongs to #51); no readable verdict -> needs-review.
 #
@@ -116,14 +116,22 @@ ho_in_record() { # <errors>: write the poll record; its time is now
 
 # ---- readiness judge -------------------------------------------------------------------------
 # ho_in_judge <id> <out-questions-file>: sets HO_IN_VERDICT to ready, not-ready or unknown.
+# The ticket text is untrusted, and the judge's questions are posted to the ticket. So the judge
+# gets nothing to read secrets with: it runs with the runtime profile's sandbox.no-tools flags
+# (no tools at all), from a new empty folder outside the project, and its questions are cut to
+# HO_IN_MAX_Q of at most HO_IN_MAX_QLEN characters. A profile without no-tools flags gives no
+# verdict, and the ticket goes to needs-review.
+HO_IN_MAX_Q=10
+HO_IN_MAX_QLEN=300
 ho_in_judge() {
-  local id=$1 qf=$2 prof timeout sid tmpl prompt out err ticket rc=0 i=0 verdict
+  local id=$1 qf=$2 prof timeout sid tmpl prompt out err ticket rc=0 i=0 verdict cwd
   local -a argv
   HO_IN_VERDICT=unknown
   : > "$qf"
   prof=$(ho_runtime_profile) || return 0
-  if ! jq -e '(.modes | index("noninteractive")) != null and (.sandbox["read-only"] | type == "array")' "$prof" >/dev/null 2>&1; then
-    ho_in_err "runtime profile $prof cannot run read-only without a terminal; the readiness check has no verdict"
+  if ! jq -e '(.modes | index("noninteractive")) != null
+      and (.sandbox["no-tools"] | type == "array" and length > 0 and all(type == "string"))' "$prof" >/dev/null 2>&1; then
+    ho_in_err "runtime profile $prof gives no sandbox.no-tools flags, so it cannot judge untrusted ticket text without tools; the readiness check has no verdict"
     return 0
   fi
   timeout=$(ho_in_seconds readiness_timeout_seconds 300 10 1800) || return 0
@@ -142,14 +150,15 @@ ho_in_judge() {
   argv=()
   while IFS= read -r -d '' a; do argv+=("$a"); done < <(jq -j --arg sid "$sid" --arg p "$prompt" '
     [.command] + (.noninteractive.argv | map(gsub("\\{session_id\\}"; $sid)))
-    + .sandbox["read-only"] + (.noninteractive.prompt | map(if . == "{prompt}" then $p else . end))
+    + .sandbox["no-tools"] + (.noninteractive.prompt | map(if . == "{prompt}" then $p else . end))
     | .[] | ., "\u0000"' "$prof")
   [ "${#argv[@]}" -gt 1 ] || { ho_in_err "runtime profile $prof gives no command line"; return 0; }
   out=$(mktemp "${TMPDIR:-/tmp}/ho-judge.XXXXXX") || return 0
   err=$(mktemp "${TMPDIR:-/tmp}/ho-judge-err.XXXXXX") || { rm -f "$out"; return 0; }
-  # The judge runs in the project, without a terminal, and is stopped by its exact process
-  # group when it runs past the limit.
-  (cd "$HO_PROJECT_DIR" && ho_group_start "${argv[@]}" < /dev/null > "$out" 2> "$err"
+  cwd=$(mktemp -d "${TMPDIR:-/tmp}/ho-judge-cwd.XXXXXX") || { rm -f "$out" "$err"; return 0; }
+  # The judge runs in its own empty folder, without a terminal, and is stopped by its exact
+  # process group when it runs past the limit.
+  (cd "$cwd" && ho_group_start "${argv[@]}" < /dev/null > "$out" 2> "$err"
     pid=$HO_GROUP_PID
     while kill -0 "$pid" 2>/dev/null && [ "$i" -lt $((timeout * 5)) ]; do sleep 0.2; i=$((i + 1)); done
     if kill -0 "$pid" 2>/dev/null; then ho_group_stop "$pid"; exit 124; fi
@@ -160,7 +169,8 @@ ho_in_judge() {
         and (.ready | type) == "boolean" and (.questions | type) == "array"
         and all(.questions[]; type == "string"))' 2>/dev/null | tail -n 1)
     if [ -n "$verdict" ]; then
-      printf '%s' "$verdict" | jq -r '.questions[] | select(test("\\S"))' > "$qf"
+      printf '%s' "$verdict" | jq -r --argjson n "$HO_IN_MAX_Q" --argjson l "$HO_IN_MAX_QLEN" \
+        '[.questions[] | gsub("[[:cntrl:]]"; " ") | select(test("\\S"))][:$n][] | .[:$l]' > "$qf"
       if [ "$(printf '%s' "$verdict" | jq -r .ready)" = true ]; then
         # Ready only with no open question for a human (H-012).
         if [ -s "$qf" ]; then HO_IN_VERDICT=not-ready; else HO_IN_VERDICT=ready; fi
@@ -172,6 +182,7 @@ ho_in_judge() {
     ho_in_err "the readiness check for ticket $id ended with exit $rc"
   fi
   rm -f "$out" "$err"
+  rm -rf "$cwd"
 }
 
 # ---- one pickup ------------------------------------------------------------------------------

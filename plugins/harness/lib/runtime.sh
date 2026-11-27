@@ -10,7 +10,8 @@
 #   "modes"          ["interactive", "noninteractive"]: what the tool can run.
 #   "argv"           interactive launch: new, resume, model, title, prompt (lib/sessions.sh)
 #   "noninteractive" {"argv": [...], "prompt": [...], "resume": [...]}: launch without a terminal
-#   "sandbox"        {"read-only": [...]}: flags for a review step that runs without a terminal
+#   "sandbox"        {"read-only": [...]}: flags for a review step that runs without a terminal;
+#                    "no-tools": [...] runs with no tool at all (the readiness judge, lib/intake.sh)
 #   "skill_call", "session_log", "limits", "capabilities": the other D31 fields (data only here)
 #   "config_dir"     {"env": "<VAR>", "default": "{home}/..."}: the tool's own folder
 #   "check"          {"argv": [...], "expect": "<regex>", "timeout_seconds": n}: present and

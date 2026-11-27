@@ -273,6 +273,12 @@ jq -n --arg d "$base/ah" '{schemaVersion: 2, accounts: {roles: {worker: "work"},
 rc=0; out=$(env -u CLAUDE_CONFIG_DIR -u CODEX_HOME "$h" flow preflight sys 2>&1) || rc=$?
 assert_eq "D31: skills are looked up under the HOME the worker account sets (exit 69)" "69" "$rc"
 assert_contains "D31: the missing skill is named in the account HOME's config folder" "$out" "not installed in $base/ah/.claude"
+# Issue #119: the start check judges the folder a launched session gets. With an account the
+# caller's account variables are removed before the account command, so a caller's
+# CLAUDE_CONFIG_DIR or CODEX_HOME does not hide the account HOME's folder.
+rc=0; out=$(HO_FAKE_CLAUDE_LOG="$base/pf119.log" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR "$h" flow preflight sys 2>&1) || rc=$?
+assert_contains "#119: with an account, the caller's folder variable is not used by the start check" "$out" "not installed in $base/ah/.claude"
+assert_eq "#119: the login check runs without the caller's folder variable" "env CLAUDE_CONFIG_DIR=" "$(grep -m1 '^env CLAUDE_CONFIG_DIR=' "$base/pf119.log" 2>/dev/null || true)"
 for s in acme-plan acme-review; do
   mkdir -p "$base/ah/.claude/skills/$s" "$base/ah/.codex/skills/$s"
   printf 'x\n' > "$base/ah/.claude/skills/$s/SKILL.md"; printf 'x\n' > "$base/ah/.codex/skills/$s/SKILL.md"

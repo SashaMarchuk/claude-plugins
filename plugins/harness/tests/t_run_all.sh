@@ -60,6 +60,7 @@ wait_for 600 test -e "$base/hold.started" || bad "test setup: run A did not star
 # Proof that B met the lock: it says it waits. Then B has started no runner while A holds it.
 if wait_for 600 has "$base/b.out" "waiting"; then ok "run-all lock: a second run says it waits for the first"
 else bad "run-all lock: a second run says it waits for the first" "$(cat "$base/b.out")"; fi
+assert_contains "run-all lock: the waiting run names the PID it waits for" "$(cat "$base/b.out")" "waiting for PID $(cut -d' ' -f1 "$lock/owner" 2>/dev/null) to end"
 assert_eq "run-all lock: the waiting run starts no runner while the first holds the lock" "" "$(grep '^B ' "$base/calls.log" || true)"
 rm -f "$base/hold"
 wait_for 1200 test -s "$base/a.rc" || bad "test setup: run A did not end" ""

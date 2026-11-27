@@ -61,7 +61,11 @@ take_lock() {
       # A waiter that died while taking over leaves an empty takeover folder; after a minute it goes.
       if lock_old "$LOCK/takeover"; then rmdir "$LOCK/takeover" 2>/dev/null; continue; fi
     fi
-    if [ "$said" = 0 ]; then echo "run-all: another full run holds $LOCK (${owner:-starting}); waiting"; said=1; fi
+    if [ "$said" = 0 ]; then
+      if [ -n "$owner" ]; then echo "run-all: another full run holds $LOCK; waiting for PID ${owner%% *} to end"
+      else echo "run-all: another full run is taking $LOCK; waiting"; fi
+      said=1
+    fi
     sleep 1
   done
   write_owner

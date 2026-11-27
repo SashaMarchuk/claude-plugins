@@ -91,7 +91,7 @@ ho_fb_gate() {
 # ho_fb_runtime_version: "<label> <version>", or a word saying why there is none. Never the
 # raw output of the runtime: only a token shaped like a version is kept.
 ho_fb_runtime_version() {
-  local label prof cmd path out v="" rc=0
+  local label prof cmd path out proj v="" rc=0
   label=$( (ho_cfg '.runtime.main' '') 2>/dev/null) || { echo "unknown (the config cannot be read)"; return 0; }
   case $label in
     '') echo "not set (config runtime.main is empty)"; return 0 ;;
@@ -106,7 +106,12 @@ ho_fb_runtime_version() {
   # project, its worktrees folder or a worktree (that would run project code on a preview).
   path=$(PATH=$(ho_session_clean_path) command -v "$cmd" 2>/dev/null) || { echo "$label, not installed"; return 0; }
   case $path in /*) ;; *) echo "$label, not installed"; return 0 ;; esac
-  ho_session_runtime_path_ok "$path" 2>/dev/null || { echo "$label, version unknown"; return 0; }
+  # The guard reads HO_PROJECT_DIR; in real use it is unset, so the project is resolved here.
+  # No project resolved: fail closed (the binary is not run).
+  if ! proj=$( (ho_project_root) 2>/dev/null) ||
+    ! ( HO_PROJECT_DIR=$proj ho_session_runtime_path_ok "$path" ) 2>/dev/null; then
+    echo "$label, version unknown"; return 0
+  fi
   out=$(mktemp "${TMPDIR:-/tmp}/ho-fb-ver.XXXXXX") || { echo "$label, version unknown"; return 0; }
   ho_rt_probe 5 "$out" "$path" --version || rc=$?
   [ "$rc" -eq 0 ] && v=$(head -c 400 "$out" | tr ' \t\r' '\n\n\n' |

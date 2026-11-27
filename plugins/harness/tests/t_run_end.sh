@@ -306,3 +306,17 @@ tk "$base/tk-h" needs-review
 cp "$f16" "$base/tk-h/2-paused.md"
 rc=0; HO_TICKETS_DIR="$base/tk-h" "$h" lifecycle "$r18" check >/dev/null 2>&1 || rc=$?
 assert_eq "D2: a waiting decision beside a ticket in no known state is unknown (exit 2)" 2 "$rc"
+
+# ---- H-079: a stale lifecycle lock is taken over in place, never removed by a waiter -----------
+# A holder killed in the middle leaves its lock. Waiters that find it stale must not delete a lock
+# that another waiter has just taken, or two of them write the run end.
+twice=0
+for round in 1 2 3 4 5 6 7 8 9 10; do
+  rl=$("$h" run new --workers 5)
+  mkdir "$rl/lifecycle.lock"; touch -t 202001010000 "$rl/lifecycle.lock"
+  for i in 1 2 3 4 5 6 7 8; do HO_TICKETS_DIR="$base/tk-f" "$h" lifecycle "$rl" check >/dev/null 2>&1 & done
+  wait
+  [ "$(jq -r 'select(.kind == "run-end") | .kind' "$rl/ledger.jsonl" | wc -l | tr -d ' ')" = 1 ] || twice=$((twice + 1))
+done
+assert_eq "H-079: with a stale lock, eight checks at once write one run-end line (10 rounds)" 0 "$twice"
+assert_eq "H-079: the lock is freed once the run end is written" no "$([ -e "$rl/lifecycle.lock" ] && echo yes || echo no)"

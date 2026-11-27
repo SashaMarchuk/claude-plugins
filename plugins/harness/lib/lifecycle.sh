@@ -17,7 +17,8 @@
 # (tickets ids <state>); a done ticket of an earlier run counts as done. A queue that cannot be
 # read, or that lists a ticket in none of the five states (D2), is "unknown", never "all done".
 #
-# Requires lib/run.sh, lib/config.sh, lib/tickets.sh, lib/sessions.sh and lib/liveness.sh.
+# Requires lib/run.sh, lib/config.sh, lib/tickets.sh, lib/sessions.sh, lib/liveness.sh and
+# lib/loop.sh (its lock).
 
 # ho_life_settings: set HO_LIFE_STANDBY and HO_LIFE_ONB from lifecycle.json. A run without the
 # file (started by older code) uses the defaults; an unreadable file is a config error.
@@ -236,27 +237,19 @@ ho_life_note() {
 
 # ho_life_end_once <reason>: write the run end once (H-079). The ledger is read again under the
 # lifecycle lock, so two checks never both write it. 0 this call ended the run, 1 the run had
-# already ended, 2 the lock stayed held. The lock covers only this read and write, never a close;
-# a lock left by a killed holder counts as stale after 30 s.
+# already ended, 2 the lock stayed held. The lock covers only this read and write, never a close.
+# It is the merge lock's kind (lib/loop.sh): a lock whose holder is dead, or one with no holder
+# after a minute, is taken over in place, never removed by a waiter. Only our own lock is freed.
 ho_life_end_once() {
-  local lock="$HO_RUN_DIR/lifecycle.lock" n=0 t rc=0
-  until mkdir "$lock" 2>/dev/null; do
-    t=$(ho_live_mtime "$lock")
-    if [ -n "$t" ] && [ $(( $(date +%s) - t )) -ge 30 ]; then
-      rm -rf "$lock" 2>/dev/null || true
-      continue
-    fi
-    n=$((n + 1))
-    [ "$n" -lt 1200 ] || { printf 'harness: the lifecycle lock %s is held; nothing changed\n' "$lock" >&2; return 2; }
-    sleep 0.05
-  done
+  local lock="$HO_RUN_DIR/lifecycle.lock" me=$$ rc=0 ho_loop_sig=0 HO_LOOP_TAKEOVER=0
+  ho_loop_lock_take "$lock" "$me" 2>/dev/null || { printf 'harness: the lifecycle lock %s is held; nothing changed\n' "$lock" >&2; return 2; }
   if ho_run_ended; then
     rc=1
   else
     ho_life_note end
     ho_ledger_append run-end reason "$1"
   fi
-  rm -rf "$lock"
+  [ "$(cat "$lock/pid" 2>/dev/null || true)" != "$me" ] || rm -rf "$lock"
   return "$rc"
 }
 

@@ -1,9 +1,18 @@
 {
-  "_comment": "Recognition data for lib/screen.sh (H-113, H-099). Anchor and companion patterns are matched against the lower-cased line, with the frame and the padding removed, and they must match the whole line. The alternatives come from the 0.6.0 watch patterns, which is the only part of that watch the rebuild keeps. There is no typed reaction to any of these shapes.",
+  "_comment": "Recognition data for lib/screen.sh (H-113, H-099). Anchor and companion patterns are matched against the lower-cased line, with the frame and the padding removed, and they must match the whole line. The alternatives come from the 0.6.0 watch patterns, which is the only part of that watch the rebuild keeps. There is no typed reaction to any of these shapes. The input line may end with a no-break space, as the real prompt does. The status area under the input box (issue #104; PR #105 review): status_first_line is the shape of the line right under the box, the status line as the real captures show it (two spaces, text, then a bar of block characters in brackets and a percentage); every other line there must have one of the status_lines shapes (the permission-mode line, the shortcuts hint, and the agent list). These are shapes of the runtime's own interface, not session words. notification_line is the shape of one notification line of the runtime: at least ten spaces, then text. It is set aside only when it is glued to the top rule of a closed input box and ends within 3 columns of the rule's right end (the engine checks that).",
   "frame_start": "^(╭|╮|╰|╯|│|─)",
   "frame_end": "(│)$",
   "frame_only": "^[╭╮╰╯│─ ]*$",
-  "input_box": "^[│ ]*(>|❯)[ │]*$",
+  "input_box": "^[│ ]*(>|❯)([ │]| )*$",
+  "status_first_line": "^  [^ ].* \\[[█░]+\\] [0-9]{1,3}%( |$)",
+  "status_lines": [
+    "^  (⏵⏵|⏸) ",
+    "^  \\? for shortcuts$",
+    "^  ⏺ [^ ]",
+    "^  ◯ [^ ]",
+    "^  ↓ [0-9]+ more$"
+  ],
+  "notification_line": "^ {10,}[^ ]",
   "shapes": [
     {
       "id": "password",

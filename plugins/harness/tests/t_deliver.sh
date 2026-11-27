@@ -944,3 +944,97 @@ assert_eq "PR #105 round 2: a stale notice, then a later line indented 10 above 
 # A plain two-space line right under the box is not the status line: nothing is typed.
 under1() { rbox; printf '  Neutral text that only starts with two spaces.\n'; }
 hold_case rr2-under "PR #105 round 2: a plain two-space line right under the real box" under1
+
+# ==== Real end-to-end check: a linked runtime data folder =====================================
+# A multi-account layout: the account's config folder holds "projects" as a link to another
+# folder. That one link (the glob's fixed leading part) is accepted only while it resolves to
+# the real folder the launch recorded; any other link stays refused.
+set_runtime claude-code
+acct="$base/acct-ln"
+mkdir -p "$acct" "$base/real-projects" "$base/other-projects"
+ln -s "$base/real-projects" "$acct/projects"
+printf '{"schemaVersion": 2, "runtime": {"main": "claude-code"}, "delivery": {"wait_seconds": 2, "message_timeout_seconds": 5, "message_kill_grace_seconds": 2}, "accounts": {"roles": {"worker": "acct-ln"}, "list": {"acct-ln": {"env_command": "echo CLAUDE_CONFIG_DIR=%s"} } } }\n' "$acct" > "$user/config.json"
+ltr() { ls "$acct"/projects/*/"$(rec "$1" .session_id).jsonl" 2>/dev/null | head -n 1; }
+lstart() { local i=0; launch "$1" >/dev/null; while [ -z "$(ltr "$1")" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done; }
+lproof() { # <name> <id>: the proof word, after the cached path is dropped
+  jq 'del(.transcript)' "$run/sessions/$1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/$1.json"
+  printf '%s\n' "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"$2: go\"} }" >> "$(ltr "$1")"
+  "$h" session "$run" proof "$1" "$2" 2>&1 | cut -d' ' -f1-3 || true
+}
+real_pre=$(cd "$base/real-projects" && pwd -P)
+lstart ln1
+screen ln1 idle-empty
+assert_eq "linked data folder: the launch records where the data folder resolves" "$real_pre" "$(rec ln1 .transcript_prefix_real)"
+out=$(deliver ln1 --text "run tests" 2>&1) && rc=0 || rc=$?
+assert_eq "linked data folder: a typed instruction is delivered through the linked projects folder (exit 0)" "0" "$rc"
+assert_eq "linked data folder: proof finds the transcript through the link" "delivered user-turn id=ho-lnk00001" "$(lproof ln1 ho-lnk00001)"
+# The link is swapped after launch to another folder that holds a copy of the transcript.
+lstart ln2
+assert_eq "linked data folder: proof works before the swap" "delivered user-turn id=ho-lnk00002" "$(lproof ln2 ho-lnk00002)"
+cp -R "$base/real-projects/." "$base/other-projects/"
+rm "$acct/projects" && ln -s "$base/other-projects" "$acct/projects"
+assert_eq "linked data folder: a link swapped after launch to another folder is refused" "harness: no transcript" "$(lproof ln2 ho-lnk00003)"
+rm "$acct/projects" && ln -s "$base/real-projects" "$acct/projects"
+# A link below the data folder (inside projects/) stays refused.
+lstart ln3
+assert_eq "linked data folder: proof works before a link is planted below it" "delivered user-turn id=ho-lnk00004" "$(lproof ln3 ho-lnk00004)"
+s3=$(rec ln3 .session_id)
+d3=$(dirname "$(ltr ln3)")
+mkdir -p "$base/elsewhere-ln/x"
+cp "$(ltr ln3)" "$base/elsewhere-ln/x/$s3.jsonl"
+rm -f "$d3/$s3.jsonl"
+ln -s "$base/elsewhere-ln/x" "$base/real-projects/aaa-linked"
+jq 'del(.transcript)' "$run/sessions/ln3.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/ln3.json"
+printf '%s\n' '{"type": "user", "message": {"role": "user", "content": "ho-lnk00005: go"} }' >> "$base/elsewhere-ln/x/$s3.jsonl"
+assert_eq "linked data folder: a link inside the data folder is refused" "harness: no transcript" "$("$h" session "$run" proof ln3 ho-lnk00005 2>&1 | cut -d' ' -f1-3 || true)"
+rm -f "$base/real-projects/aaa-linked"
+# A data folder that resolves inside the project is refused, even when the record names it.
+lstart ln4
+assert_eq "linked data folder: proof works before the link moves into the project" "delivered user-turn id=ho-lnk00006" "$(lproof ln4 ho-lnk00006)"
+mkdir -p "$proj/.harness/lp"
+cp -R "$base/real-projects/." "$proj/.harness/lp/"
+rm "$acct/projects" && ln -s "$proj/.harness/lp" "$acct/projects"
+jq --arg r "$(cd "$proj/.harness/lp" && pwd -P)" '.transcript_prefix_real = $r' "$run/sessions/ln4.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/ln4.json"
+assert_eq "linked data folder: a data folder that resolves inside the project is refused" "harness: no transcript" "$(lproof ln4 ho-lnk00007)"
+rm "$acct/projects" && ln -s "$base/real-projects" "$acct/projects"
+# A record without the new field keeps the old rule: the link is refused.
+lstart ln5
+assert_eq "linked data folder: proof works with the recorded field" "delivered user-turn id=ho-lnk00008" "$(lproof ln5 ho-lnk00008)"
+jq 'del(.transcript_prefix_real)' "$run/sessions/ln5.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/ln5.json"
+assert_eq "linked data folder: a record without the field refuses the linked folder" "harness: no transcript" "$(lproof ln5 ho-lnk00009)"
+write_user
+
+# ==== Real end-to-end check: the session name in the top rule of the input box ================
+# A session launched with a name (-n ho-<role>-<name>) shows the name at the right end of the
+# box's top rule: rule characters, a space, the name, a space, one more rule character. The
+# bottom rule stays plain, of the same width. The frame lines are built here, not copied.
+set_runtime claude-code
+W9=40
+rep9() { local i=0 o=""; while [ "$i" -lt "$1" ]; do o="$o─"; i=$((i + 1)); done; printf '%s' "$o"; }
+named9() { printf '%s %s ─' "$(rep9 $((W9 - ${#1} - 3)))" "$1"; }
+box9() { # <top> <bottom> [prompt text]
+  printf ' Fake runtime 0.0.0\n\nThe session finished its last step.\n%s\n%s> %s\n%s\n' "$1" "$IC" "${3-}" "$2"
+}
+nb_case() { # <name> <expected-rc> <label> <top> <bottom> [prompt text]
+  start "$1"
+  box9 "$4" "$5" "${6-}" > "$(fout "$1")"
+  out=$(deliver "$1" --text "run tests" 2>&1) && rc=0 || rc=$?
+  if [ "$2" = 0 ]; then
+    assert_eq "named top rule: $3: delivered (exit 0)" "0" "$rc"
+  else
+    assert_eq "named top rule: $3: 0 bytes typed (exit 1)" "1 0" "$rc $(inbytes "$1")"
+  fi
+}
+nb_case nb-plain 0 "control: a plain top rule and a plain bottom rule" "$(rep9 $W9)" "$(rep9 $W9)"
+nb_case nb-own 0 "the session's own launch name in the top rule, a plain bottom rule of the same width" "$(named9 ho-worker-nb-own)" "$(rep9 $W9)"
+nb_case nb-other 1 "another session's name in the top rule" "$(named9 ho-worker-nb-else)" "$(rep9 $W9)"
+nb_case nb-role 1 "the right name with another role in the top rule" "$(named9 ho-orchestrator-nb-role)" "$(rep9 $W9)"
+nb_case nb-wide 1 "the own name, but a bottom rule of another width" "$(named9 ho-worker-nb-wide)" "$(rep9 $((W9 + 1)))"
+nb_case nb-both 1 "the own name in the bottom rule too" "$(named9 ho-worker-nb-both)" "$(named9 ho-worker-nb-both)"
+nb_case nb-two 0 "two rule characters after the name, a plain bottom rule of the same width" "$(rep9 $((W9 - 20))) ho-worker-nb-two ──" "$(rep9 $W9)"
+nb_case nb-draft 1 "the own name in the top rule and text in the box" "$(named9 ho-worker-nb-draft)" "$(rep9 $W9)" "owner text"
+assert_contains "named top rule: text in a named box is a draft" "$out" "input line holds text typed by the user"
+# A hold above a named box is still a hold.
+nhold() { sed '$d' "$sf/$1.txt"; printf '%s\n%s> \n%s\n' "$(named9 "ho-worker-$2")" "$IC" "$(rep9 $W9)"; }
+HC_HOLD=1 hold_case nb-hold "a limit notice above a named box" nhold limit-notice-plain nb-hold
+HC_HOLD=1 hold_case nb-trust "a trust dialog above a named box" nhold trust-dialog nb-trust

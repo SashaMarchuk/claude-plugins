@@ -360,6 +360,14 @@ ho_session_launcher_text() {
   printf 'ho_troot=$(ho_live_transcript_root %s "" 2>/dev/null) || ho_troot=""\n' "$(ho_q "$profile")"
   printf '[ -z "$ho_troot" ] || { printf '"'"'%%s\n'"'"' "$ho_troot" > %s && mv -f %s %s; } 2>/dev/null || true\n' \
     "$(ho_q "${pidfile%.pid}.transcript_root.tmp")" "$(ho_q "${pidfile%.pid}.transcript_root.tmp")" "$(ho_q "${pidfile%.pid}.transcript_root")"
+  # The runtime's data folder below it (the glob's fixed leading part) may be a link in a
+  # multi-account layout. Where it resolves now is recorded once, here, so delivery accepts
+  # that one link only while it still leads to the same real folder (lib/deliver.sh).
+  declare -f ho_live_transcript_prefix
+  printf 'ho_tpre=$(ho_live_transcript_prefix %s)\n' "$(ho_q "$(jq -r '.transcript.glob // ""' "$profile" 2>/dev/null)")"
+  printf 'ho_treal=""; [ -z "$ho_troot" ] || [ -z "$ho_tpre" ] || ho_treal=$(cd "$ho_troot/$ho_tpre" 2>/dev/null && pwd -P) || ho_treal=""\n'
+  printf '[ -z "$ho_treal" ] || { printf '"'"'%%s\n'"'"' "$ho_treal" > %s && mv -f %s %s; } 2>/dev/null || true\n' \
+    "$(ho_q "${pidfile%.pid}.transcript_prefix_real.tmp")" "$(ho_q "${pidfile%.pid}.transcript_prefix_real.tmp")" "$(ho_q "${pidfile%.pid}.transcript_prefix_real")"
   if [ -n "$prompt" ]; then
     printf 'HO_PROMPT=$(cat %s) || ho_fatal 65 "cannot read the prompt file"\n' "$(ho_q "$prompt")"
   fi
@@ -517,7 +525,7 @@ ho_session_launch_one() {
   fi
   # Files of an earlier launch of this name (its record was removed) must not speak for this one.
   rm -f "$sdir/$name.pid" "$sdir/$name.closing" "$sdir/$name.failed" "$sdir/$name.launcher" "$sdir/$name.ended" \
-    "$sdir/$name.transcript_root"
+    "$sdir/$name.transcript_root" "$sdir/$name.transcript_prefix_real"
   # The reserved record says "launching" and names this launch command (PID and start time)
   # from its first write. It reads dead only once this command, the launcher and the session
   # process are all gone (lib/liveness.sh), never by its age: a launch may wait for a slot or
@@ -688,8 +696,12 @@ ho_session_launch_one() {
   local troot=""
   troot=$(head -n 1 "$sdir/$name.transcript_root" 2>/dev/null) || troot=""
   case $troot in /*) ;; *) troot="" ;; esac
+  local treal=""
+  treal=$(head -n 1 "$sdir/$name.transcript_prefix_real" 2>/dev/null) || treal=""
+  case $treal in /*) ;; *) treal="" ;; esac
   ho_session_set "$rec" '.pid = ($p | tonumber) | .status = "running" | .started = $ts
-      | (if $t != "" then .transcript_root = $t else . end)' --arg p "$pid" --arg ts "$(ho_now)" --arg t "$troot" || {
+      | (if $t != "" then .transcript_root = $t else . end)
+      | (if $t != "" and $r != "" then .transcript_prefix_real = $r else . end)' --arg p "$pid" --arg ts "$(ho_now)" --arg t "$troot" --arg r "$treal" || {
     printf 'harness: session %s runs as pid %s but its record could not be written\n' "$name" "$pid" >&2
     return 1
   }

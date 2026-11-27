@@ -308,14 +308,50 @@ ho_screen_selftest() {
   return 70
 }
 
-# ho_screen_classify <capture-file> [<runtime-profile>]: print one word and nothing else.
+# ho_screen_named_rule <line> <rule-char> <name>: a session launched with a name shows that name
+# at the right end of its input box's top rule: at least three rule characters, one space, the
+# name, one space, then rule characters only. For exactly that line, print the plain rule of
+# the same width (the name and its two spaces become rule characters) and return 0; return 1
+# for any other line. The name comes from the session's record, so typed text cannot fake it.
+ho_screen_named_rule() {
+  local l=$1 c=$2 nm=$3 head rest mid tail fill i
+  [ -n "$c" ] && [ -n "$nm" ] || return 1
+  head=${l%% *}
+  rest=${l#* }
+  [ "$rest" != "$l" ] || return 1
+  mid=${rest%% *}
+  tail=${rest#* }
+  [ "$tail" != "$rest" ] && [ "$mid" = "$nm" ] || return 1
+  case $head in *"$c$c$c"*) ;; *) return 1 ;; esac
+  case $tail in *"$c"*) ;; *) return 1 ;; esac
+  [ -z "${head//"$c"/}" ] && [ -z "${tail//"$c"/}" ] || return 1
+  fill=$c$c
+  i=0
+  while [ "$i" -lt "${#nm}" ]; do fill=$fill$c; i=$((i + 1)); done
+  printf '%s\n' "$head$fill$tail"
+}
+
+# ho_screen_box_name <record>: the name a session was launched with (ho-<role>-<name>), from its
+# record; nothing when the record does not give both parts.
+ho_screen_box_name() {
+  local r n
+  r=$(jq -r '.role // "" | strings' "$1" 2>/dev/null) || r=""
+  n=$(jq -r '.name // "" | strings' "$1" 2>/dev/null) || n=""
+  case $r$n in *[!A-Za-z0-9_-]*) return 0 ;; esac
+  [ -z "$r" ] || [ -z "$n" ] || printf 'ho-%s-%s\n' "$r" "$n"
+}
+
+# ho_screen_classify <capture-file> [<runtime-profile>] [<box-name>]: print one word and nothing else.
 #   limit | trust | password  a shape was recognised (the first in profile order)
 #   none                      the screen holds text and no shape
 #   unknown                   the capture cannot be read, holds no text, or there is no data
 # Exit 0 when the result is decided (including "none"), 66 for an unreadable or empty
 # capture, 78 when the profile holds no screen patterns, 70 when the match could not run.
+# With <box-name> (the session's launch name), a top rule that carries exactly that name
+# (ho_screen_named_rule) is read as the plain rule it stands for, so the runtime's own tail
+# is still set aside and a dialog above a named box is still seen.
 ho_screen_classify() {
-  local file=${1-} profile=${2-} data n i shape rc
+  local file=${1-} profile=${2-} box=${3-} data n i shape rc
   if [ -z "$file" ] || [ ! -f "$file" ] || [ ! -r "$file" ]; then
     echo unknown
     printf 'harness: cannot read the screen capture %s\n' "${file:-(no file)}" >&2
@@ -323,6 +359,20 @@ ho_screen_classify() {
   fi
   data=$(ho_screen_profile_data "$profile") || { echo unknown; return 78; }
   ho_screen_selftest "$data" || { echo unknown; return 70; }
+  if [ -n "$box" ]; then
+    local rprof rch line plainl norm
+    rprof=$profile
+    [ -n "$rprof" ] || rprof=$(ho_runtime_profile 2>/dev/null) || rprof=""
+    rch=$(jq -r '.screen.rule_char // "" | strings' "$rprof" 2>/dev/null) || rch=""
+    norm=$(umask 077 && mktemp "$(dirname "$file")/.named.XXXXXX" 2>/dev/null) || { echo unknown; return 70; }
+    while IFS= read -r line || [ -n "$line" ]; do
+      if plainl=$(ho_screen_named_rule "$line" "$rch" "$box"); then printf '%s\n' "$plainl"; else printf '%s\n' "$line"; fi
+    done < "$file" > "$norm"
+    rc=0
+    ho_screen_classify "$norm" "$profile" || rc=$?
+    rm -f "$norm"
+    return "$rc"
+  fi
   n=$(printf '%s' "$data" | jq '.shapes | length')
   i=0
   while [ "$i" -lt "$n" ]; do
@@ -611,7 +661,7 @@ ho_screen_watch() {
   mkdir -p "$dir"
   chmod 700 "$dir" 2>/dev/null || true
   ho_session_capture "$name" "$dir/$name.txt" || return $?
-  class=$(ho_screen_classify "$dir/$name.txt") || rc=$?
+  class=$(ho_screen_classify "$dir/$name.txt" "" "$(ho_screen_box_name "$HO_RUN_DIR/sessions/$name.json")") || rc=$?
   case $class in
     none) printf 'none\n'; return 0 ;;
     unknown)

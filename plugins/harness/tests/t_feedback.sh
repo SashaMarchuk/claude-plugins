@@ -70,13 +70,14 @@ cp "$base/body.keep" "$d/body.md"
 assert_eq "H-140 no yes: nothing was sent" "0" "$(creates)"
 
 # ---- Yes: one issue, no labels, exactly the shown text ------------------------------------
-rc=0; res=$("$h" feedback send --draft "$d" --code "$c" --yes) || rc=$?
+# GH_HOST names another server; the issue still goes to github.com.
+rc=0; res=$(GH_HOST=ghe.example.invalid "$h" feedback send --draft "$d" --code "$c" --yes) || rc=$?
 assert_eq "H-140 yes: send exits 0" "0" "$rc"
 assert_contains "H-140 yes: send prints the issue link" "$res" "OK filed https://github.com/fake/repo/issues/1"
 assert_eq "H-140 yes: exactly one issue is created" "1" "$(creates)"
 assert_eq "H-140 yes: the issue has no labels" "[]" "$(jq -c .labels "$HO_FAKE_GH_DIR/issues/1.json")"
 assert_eq "H-140 yes: the call passes no label" "0" "$(gh_calls | grep -c -- '--label' || true)"
-assert_contains "H-140 yes: the issue goes to the plugin's own repository" "$(gh_calls | grep '^issue	create' | head -n 1)" "--repo	$repo	"
+assert_contains "H-140 yes: the issue goes to the plugin's own repository on github.com, whatever GH_HOST says" "$(gh_calls | grep '^issue	create' | head -n 1)" "--repo	github.com/$repo	"
 assert_eq "H-140 yes: the issue body is the shown text, byte for byte" "$(shown_body "$out")" \
   "$(jq -j .body "$HO_FAKE_GH_DIR/issues/1.json")"
 assert_eq "H-140 yes: the issue title is the shown title" "$(printf '%s\n' "$out" | sed -n 's/^Title: //p')" \
@@ -231,21 +232,24 @@ case $out in
   *) ok "D43 allow-list runtime version: other words of the runtime output are not copied" ;;
 esac
 rm -rf "$(draft_of "$out")"
-# OS name: each uname word must have its shape, or it shows as unknown.
+# OS name: uname and the other system tools come from the system folders, never from a
+# folder first on the caller's PATH; each uname word must have its shape, else unknown.
 mkdir -p "$base/fakeuname"
-cat > "$base/fakeuname/uname" <<'EOF'
-#!/usr/bin/env bash
-case ${1:-} in -s) echo "Darwin zedosname" ;; -r) echo "25.5.0/zedrelname" ;; -m) echo "arm64" ;; *) echo "Darwin zedhost" ;; esac
-EOF
-chmod +x "$base/fakeuname/uname"
+for t in uname awk sed cat find; do
+  printf '#!/bin/sh\ntouch "%s/tool-ran-%s"\nexit 1\n' "$base" "$t" > "$base/fakeuname/$t"
+done
+chmod +x "$base/fakeuname"/*
 rc=0; out=$(cd "$proj" && PATH="$base/fakeuname:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
-assert_eq "D43 allow-list OS: a preview with odd uname words exits 0" "0" "$rc"
-assert_contains "D43 allow-list OS: a word with the wrong shape shows as unknown" "$out" "- Operating system: unknown unknown arm64"
-case $out in
-  *zedosname*|*zedrelname*|*zedhost*) bad "D43 allow-list OS: other uname words are not copied" "they were" ;;
-  *) ok "D43 allow-list OS: other uname words are not copied" ;;
-esac
-rm -rf "$(draft_of "$out")"
+rm -rf "$base/fakeuname"
+assert_eq "H-140 tools: a preview with fake system tools first on PATH exits 0" "0" "$rc"
+assert_eq "H-140 tools: no uname, awk, sed, cat or find from the caller's PATH is run" "" \
+  "$(cd "$base" && ls tool-ran-* 2>/dev/null | tr '\n' ' ')"
+assert_contains "H-140 tools: the operating system still comes from the system uname" "$out" "- Operating system: $(uname -s) $(uname -r)"
+rm -f "$base"/tool-ran-*; rm -rf "$(draft_of "$out")"
+fitw() { jq -L "$HO_PLUGIN_ROOT/lib" -nr --arg v "$2" "include \"feedback\"; \$v | fit(shape_$1)"; }
+assert_eq "D43 allow-list OS: a system name with the wrong shape shows as unknown" "unknown" "$(fitw os_s "Darwin zedosname")"
+assert_eq "D43 allow-list OS: a release with the wrong shape shows as unknown" "unknown" "$(fitw os_r "25.5.0/zedrelname")"
+assert_eq "D43 allow-list OS: a machine name with the right shape is kept" "arm64" "$(fitw os_m "arm64")"
 # Plugin version: a manifest version with the wrong shape shows as unknown.
 cp -R "$HO_PLUGIN_ROOT" "$base/pcopy"
 jq '.version = "1.0.0 zedvermark"' "$HO_PLUGIN_ROOT/.claude-plugin/plugin.json" > "$base/pcopy/.claude-plugin/plugin.json"
@@ -271,6 +275,29 @@ case $out in
 esac
 rm -rf "$(draft_of "$out")" "$base/user/runtimes/zedprivate-rt.json"
 cp "$base/config.keep2" "$proj/.harness/config.json"
+
+# ---- A .harness-project pointer to a nested repo does not move the runtime guard ----------
+outer="$base/outer"; mkdir -p "$outer/bin" "$outer/inner/.harness"
+git -C "$outer" init -q; git -C "$outer/inner" init -q
+cp "$proj/.harness/config.json" "$outer/inner/.harness/config.json"
+printf '%s\n' "$outer/inner" > "$outer/.harness-project"
+printf '#!/usr/bin/env bash\ntouch "%s/outer-ran"\necho 9.8.7\n' "$base" > "$outer/bin/claude"
+chmod +x "$outer/bin/claude"
+rc=0; out=$(cd "$outer" && env -u HO_PROJECT_DIR PATH="$outer/bin:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "H-140 runtime guard: a preview through a .harness-project pointer exits 0" "0" "$rc"
+assert_eq "H-140 runtime guard: a runtime in the folder's own git tree is not run, whatever the pointer says" "no" \
+  "$([ -e "$base/outer-ran" ] && echo yes || echo no)"
+rm -rf "$outer" "$base/outer-ran" "$(draft_of "$out")"
+
+# ---- A linked runs folder still has a last run ---------------------------------------------
+proj3="$base/proj3"; mkdir -p "$proj3/.harness" "$base/elsewhere-runs"
+cp "$proj/.harness/config.json" "$proj3/.harness/config.json"
+ln -s "$base/elsewhere-runs" "$proj3/.harness/runs"
+(cd "$proj3" && HO_PROJECT_DIR="$proj3" "$h" run new >/dev/null)
+rc=0; out=$(cd "$proj3" && HO_PROJECT_DIR="$proj3" "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "D43 run state: a project with a linked runs folder gives a preview" "0" "$rc"
+assert_contains "D43 run state: a linked runs folder still has a last run" "$out" "- Last run: not stopped,"
+rm -rf "$proj3" "$base/elsewhere-runs" "$(draft_of "$out")"
 
 # ---- The version probe gets no caller environment but HOME and PATH ---------------------
 # BASH_ENV runs a file before a bash script; NODE_OPTIONS and PYTHONPATH load project code in

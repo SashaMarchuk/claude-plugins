@@ -128,7 +128,7 @@ ho_session_account_env() {
     case $val in
       *$'\n'* | *$'\t'*) printf 'harness: %s has a line break or a tab; the session was not launched\n' "$var" >&2; return 65 ;;
       /*) ;;
-      *) printf 'harness: %s must be an absolute folder path, not %s; the session was not launched\n' "$var" "$val" >&2; return 65 ;;
+      *) printf 'harness: %s must be an absolute folder path; the session was not launched\n' "$var" >&2; return 65 ;;
     esac
     printf '%s\t%s\n' "$var" "$val"
   done

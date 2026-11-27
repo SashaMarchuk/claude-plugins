@@ -101,6 +101,13 @@ bad_dir="$base/a
 b"
 assert_exit "#119: an account folder with a line break is refused" 65 env CLAUDE_CONFIG_DIR="$bad_dir" "$h" session "$run" launch --role worker --name e6 --cwd "$proj/src" --prompt "$base/prompt.md"
 assert_exit "#119: a relative account folder is refused" 65 env CLAUDE_CONFIG_DIR=rel/dir "$h" session "$run" launch --role worker --name e7 --cwd "$proj/src" --prompt "$base/prompt.md"
+assert_eq "#119: the refusal never prints the value" "" "$(env CLAUDE_CONFIG_DIR=rel/secret-x "$h" session "$run" launch --role worker --name e8 --cwd "$proj/src" --prompt "$base/prompt.md" 2>&1 | grep -F secret-x || true)"
+assert_eq "#119: the record keeps the caller's account folder" "$ax" "$(rec e1 '.account_env.CLAUDE_CONFIG_DIR')"
+assert_eq "#119: the record shows a caller with none as null" "true" "$(rec e3 '.account_env | has("CLAUDE_CONFIG_DIR") and .CLAUDE_CONFIG_DIR == null')"
+assert_eq "#119: with an account the record keeps no caller folder" "null" "$(rec e4 '.account_env')"
+# A profile without account_env falls back to config_dir.env and transcript.root_env.
+printf '%s\n' '{"config_dir": {"env": "FAKE_HOME_X"}, "transcript": {"root_env": "FAKE_ROOT_Y"}}' > "$base/rt-noaenv.json"
+assert_eq "#119: without account_env the folder variables of the profile are used" "FAKE_HOME_X	/x FAKE_ROOT_Y " "$(FAKE_HOME_X=/x bash -c '. "$1/lib/sessions.sh" 2>/dev/null; ho_session_account_env "$2"' _ "$HO_PLUGIN_ROOT" "$base/rt-noaenv.json" | tr '\n' ' ')"
 
 # ---- model chain a|b: a start failure falls through, the PID is the one that runs ------
 jq '.models.worker = "m-bad | m-good"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"

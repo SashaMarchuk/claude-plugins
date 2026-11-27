@@ -236,3 +236,16 @@ git -C "$PWD/w-m" commit -q --allow-empty -m "finalize(m): done"
 rc=0; (cd "$projB" && env -u HO_PROJECT_DIR "$h" loop "$runM" merge m >/dev/null 2>"$PWD/err-m") || rc=$?
 assert_eq "H-036: a loop merge from another project set to full is refused by the run's safe profile (65)" 65 "$rc"
 assert_eq "H-036: the merge caches the run's own profile (safe)" safe "$(jq -r '.name // empty' "$runM/autonomy.json" 2>/dev/null)"
+
+# H-042 H-036: "autonomy <run> end <ticket>" called from another project with HO_TICKETS_DIR unset
+# ends the ticket of the run's own project, never a ticket in the caller's folder.
+ta=$("$h" tickets add "End from elsewhere" "$PWD/body.md" in-progress | sed -n 's/^OK created ticket \([0-9]*\).*/\1/p')
+bf="$PWD/body.md"
+for i in $(seq 1 "$ta"); do
+  (cd "$projB" && env -u HO_TICKETS_DIR "$h" tickets add "B ticket $i" "$bf" in-progress >/dev/null)
+done
+rc=0; (cd "$projB" && env -u HO_PROJECT_DIR -u HO_TICKETS_DIR "$h" autonomy "$runA" end "$ta" >/dev/null 2>&1) || rc=$?
+assert_eq "H-042 an end from another project succeeds for the run's ticket" 0 "$rc"
+assert_contains "H-042 the run's own ticket ends in needs-review" "$("$h" tickets show "$ta")" "needs-review"
+assert_contains "H-042 the caller's ticket with the same number is untouched" \
+  "$(cd "$projB" && env -u HO_TICKETS_DIR "$h" tickets show "$ta")" "in-progress"

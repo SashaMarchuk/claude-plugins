@@ -60,6 +60,13 @@ USAGE
 
 ho_tk_err() { printf 'harness tickets: %s\n' "$*" >&2; }
 
+# ho_tk_bind_project_dir: for a command bound to a run's project (HO_PROJECT_DIR), the local
+# ticket folder defaults to that project's .harness/tickets, never the caller's $PWD. An explicit
+# HO_TICKETS_DIR wins. Used by intake, autonomy and lifecycle.
+ho_tk_bind_project_dir() {
+  [ -n "${HO_TICKETS_DIR:-}" ] || export HO_TICKETS_DIR="$HO_PROJECT_DIR/.harness/tickets"
+}
+
 ho_tk_settings() {
   HO_TK_SOURCE=${HO_TICKETS_SOURCE:-local}
   HO_TK_REPO=${HO_TICKETS_REPO:-}

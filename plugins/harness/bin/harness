@@ -38,6 +38,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/flow.sh"
 # shellcheck source=../lib/loop.sh
 . "$HO_ROOT/lib/loop.sh"
+# shellcheck source=../lib/autonomy.sh
+. "$HO_ROOT/lib/autonomy.sh"
 # shellcheck source=../lib/runtime.sh
 . "$HO_ROOT/lib/runtime.sh"
 # shellcheck source=../lib/screen.sh
@@ -62,6 +64,7 @@ verbs:
   session    session <run-dir> launch|close|list|status|read|deliver|proof: sessions, their liveness and instructions
   slot       slot <run-dir> acquire|release|list|limits|heavy-ops|heavy-add: engine-enforced limits
   loop       loop <run-dir> integration|ready|verdict|merge|status: the engine-checked merge
+  autonomy   autonomy show|list|migrate, or autonomy <run-dir> check|approve|end: profile checks
   flow       flows: list | check | steps | plan | preflight <flow> | copy <flow> <new> | render <flow> <role> ...
   screen     screen text: classify a capture, watch a session, pre-trust a folder, wait
   intake     intake <run-dir> interval|tick|poll: take labelled tickets, check access and readiness
@@ -84,6 +87,7 @@ case $verb in
   slot)     ho_slot_main "$@" ;;
   flow)     ho_flow_main "$@" ;;
   loop)     ho_loop_main "$@" ;;
+  autonomy) ho_autonomy_main "$@" ;;
   screen)   ho_screen_main "$@" ;;
   intake)   ho_intake_main "$@" ;;
   lifecycle) ho_life_main "$@" ;;

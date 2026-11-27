@@ -29,8 +29,8 @@
 # (70) the integration branch is put back at its old tip, but only while it is still at the old
 # tip or at this merge's commit. When it moved to anything else, or the roll back fails, it is
 # left for a person (70) and the message never says "rolled back".
-# Requires lib/run.sh, lib/config.sh, lib/files.sh, lib/common.sh and ho_cfg_user from
-# lib/sessions.sh.
+# Requires lib/run.sh, lib/config.sh, lib/files.sh, lib/common.sh, ho_cfg_user from
+# lib/sessions.sh, and ho_au_profile and ho_au_decide from lib/autonomy.sh.
 
 HO_EXIT_NOOP=69
 HO_EXIT_UNCONFIRMED=70
@@ -306,7 +306,7 @@ ho_loop_undo() {
 # ---- merge <lane> ------------------------------------------------------------------------
 ho_loop_merge_locked() {
   local lane=$1 ij="$HO_RUN_DIR/integration.json" lj="$HO_RUN_DIR/lanes/$1.json"
-  local iwt branch old lwt lbranch lsha worker why vsnap gate mc stopped=0 rc=0 new gw log grc=0 gpid
+  local iwt branch old lwt lbranch lsha worker why vsnap gate mc stopped=0 rc=0 new gw log grc=0 gpid prof
   # A stop refuses the merge, except for the lane of a ticket that a soft:ticket stop lets run to
   # its end (H-086, D25a); a lane with no ticket counts as new work.
   ho_stop_gate "$(jq -r '.ticket // ""' "$lj" 2>/dev/null || true)" || stopped=$?
@@ -319,6 +319,11 @@ ho_loop_merge_locked() {
   lwt=$(ho_loop_field "$lj" worktree) && lbranch=$(ho_loop_field "$lj" branch) && lsha=$(ho_loop_field "$lj" sha) \
     || ho_loop_refuse 65 "$lane" "lane record is unreadable" || return
   worker=$(jq -r '.worker_session // ""' "$lj" 2>/dev/null) || worker=""
+  # D12, S8-08a: the run's autonomy profile decides whether it merges at all (lib/autonomy.sh).
+  # A refusal is recorded by the merge's own ledger line.
+  prof=$(ho_au_profile) || ho_loop_refuse 78 "$lane" "the autonomy profile cannot be read" || return
+  ho_au_decide "$prof" merge "$lane" "" "" 1
+  [ "$HO_AU_RC" -eq 0 ] || ho_loop_refuse 65 "$lane" "profile $(printf '%s' "$prof" | jq -r .name): $HO_AU_WHY" || return
   gate=$(ho_loop_gate_cmd) || { rc=$?; ho_loop_ledger merge-refused lane "$lane" reason "gate not configured"; return "$rc"; }
 
   # H-055: a plain "passed" verdict of the independent validator for the exact finalize commit.

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "name": "draft-pr",
+  "description": "No human gates until the end. It runs through verification, pushes, opens a draft PR and stops. A human marks it ready and merges.",
+  "gates": {},
+  "push": true,
+  "pr": "draft",
+  "pr_open": "after-validator",
+  "merge": "never",
+  "post_merge": false,
+  "deploy_production": false,
+  "remarks": "human",
+  "allow_zero_tests": false
+}

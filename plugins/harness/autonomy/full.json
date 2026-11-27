@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "name": "full",
+  "description": "No human gates. It pushes, opens the PR, marks it ready and merges only when every mechanical merge condition holds. Then it runs the project's post-merge steps, if any. Any doubt waits for a human.",
+  "gates": {},
+  "push": true,
+  "pr": "ready",
+  "pr_open": "after-validator",
+  "merge": "always",
+  "post_merge": true,
+  "deploy_production": false,
+  "remarks": "fix",
+  "allow_zero_tests": false
+}

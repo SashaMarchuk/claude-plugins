@@ -115,9 +115,14 @@ ho_runtime_profile() {
 # session's account never depends on what the terminal inherited: an iTerm2 tab starts a fresh
 # login shell, and a tmux server keeps the environment of its first start. These variables
 # hold folders, never secrets: a value must be one absolute path, or the launch is refused (65).
+# ho_session_account_env_names <profile>: those names, one per line (the start check uses them too).
+ho_session_account_env_names() {
+  jq -r '(.account_env // [.config_dir.env, .transcript.root_env]) | map(strings) | unique | .[]' "$1"
+}
+
 ho_session_account_env() {
   local profile=$1 var val
-  for var in $(jq -r '(.account_env // [.config_dir.env, .transcript.root_env]) | map(strings) | unique | .[]' "$profile"); do
+  for var in $(ho_session_account_env_names "$profile"); do
     case $var in [!A-Z_]* | *[!A-Z0-9_]* | PATH | HO_*)
       printf 'harness: account_env name %s in runtime %s is not a variable the harness may set\n' "$var" "$profile" >&2; return 65 ;;
     esac

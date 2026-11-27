@@ -174,7 +174,7 @@ chmod +x "$proj/bin/claude"
 rc=0; out=$(cd "$proj" && PATH="$proj/bin:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
 assert_eq "H-140 runtime guard: a preview with a project claude first on PATH exits 0" "0" "$rc"
 assert_eq "H-140 runtime guard: the project's own claude is not run" "no" "$([ -e "$base/ran" ] && echo yes || echo no)"
-assert_contains "H-140 runtime guard: its version shows as unknown" "$out" "- Runtime: claude-code version unknown"
+assert_contains "H-140 runtime guard: its version shows as unknown" "$out" "- Runtime: claude-code, version unknown"
 rm -rf "$proj/bin" "$base/ran" "$(draft_of "$out")"
 
 # ---- Allow-list context: a private value next to each field does not appear ----------------

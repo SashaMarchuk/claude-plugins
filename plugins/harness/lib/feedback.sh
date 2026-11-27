@@ -102,7 +102,11 @@ ho_fb_runtime_version() {
   prof=$( (ho_rt_file "$label") 2>/dev/null) || { echo "$label, version unknown"; return 0; }
   cmd=$(jq -r '.command // ""' "$prof" 2>/dev/null) || cmd=""
   case $cmd in ''|*/*|-*) echo "$label, version unknown"; return 0 ;; esac
-  path=$(command -v "$cmd" 2>/dev/null) || { echo "$label, not installed"; return 0; }
+  # The same lookup and guard as a session launch: the clean PATH, and never a binary from the
+  # project, its worktrees folder or a worktree (that would run project code on a preview).
+  path=$(PATH=$(ho_session_clean_path) command -v "$cmd" 2>/dev/null) || { echo "$label, not installed"; return 0; }
+  case $path in /*) ;; *) echo "$label, not installed"; return 0 ;; esac
+  ho_session_runtime_path_ok "$path" 2>/dev/null || { echo "$label, version unknown"; return 0; }
   out=$(mktemp "${TMPDIR:-/tmp}/ho-fb-ver.XXXXXX") || { echo "$label, version unknown"; return 0; }
   ho_rt_probe 5 "$out" "$path" --version || rc=$?
   [ "$rc" -eq 0 ] && v=$(head -c 400 "$out" | tr ' \t\r' '\n\n\n' |
@@ -139,7 +143,7 @@ ho_fb_tickets() {
 
 # ho_fb_summary: the state summary of the last run, one line per fact.
 ho_fb_summary() {
-  local run proj
+  local run proj file
   if ! run=$(ho_fb_last_run); then
     echo "- Last run: there is no last run of this engine in this project"
     return 0
@@ -148,9 +152,12 @@ ho_fb_summary() {
   (
     # shellcheck disable=SC2034 # read by ho_ledger_events
     HO_RUN_DIR=$run
+    # A STOP file counts first, as in ho_stopped; it is only looked at, never recorded.
+    file=false
+    [ -e "$(ho_stop_file)" ] && file=true
     # shellcheck disable=SC2016 # jq text, not shell
     ho_ledger_events 2>/dev/null | ho_fb_jq '
-      ([.[] | select(.kind == "stop" or .kind == "resume") | .kind] | last) as $stop
+      (if $file then "stop" else [.[] | select(.kind == "stop" or .kind == "resume") | .kind] | last end) as $stop
       | [.[] | select(.kind == "session-launch") | .role
           | if (type == "string") and IN(fb_roles[]) then . else "other" end] as $r
       | [.[] | .kind | select(type == "string" and IN(fb_error_kinds[]))] as $err
@@ -158,7 +165,7 @@ ho_fb_summary() {
         "- Steps (session roles launched): \(if ($r | length) == 0 then "none"
             else ($r | group_by(.) | map("\(.[0]) \(length)") | join(", ")) end)",
         "- Engine error codes: \(if ($err | length) == 0 then "none"
-            else ($err | group_by(.) | map("\(.[0]) x\(length)") | join(", ")) end)"' -rs
+            else ($err | group_by(.) | map("\(.[0]) x\(length)") | join(", ")) end)"' -rs --argjson file "$file"
   ) || echo "- Last run: found, but its ledger could not be read"
   printf -- '- Tickets per state: %s\n' "$(ho_fb_tickets "$proj")"
 }

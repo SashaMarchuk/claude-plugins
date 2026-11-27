@@ -230,7 +230,7 @@ Zedacme|G1 /srv/x/Client Files (2026)/Zedacme Budget/zedplan.xlsx
 Zed Corp|G1 "/Users/x/Documents/Zed Corp (old)/zedplan.md"
 zedspec|G1 <project folder>/docs/Zedclient (draft)/zedspec.md
 zedsecret|G1 ~/Documents/Zedacme (old)/zedsecret-plan.md
-Zed, Inc|G1 /Volumes/Zed, Inc/a/zedf.md
+, Inc|G1 /Volumes/Zed, Inc/a/zedf.md
 zedpage|G1 /Users/x/other/app/(auth)/login/zedpage.tsx
 zedf|G1 /srv/x/[draft]/zedf
 zedg|G1 /srv/x/{a}/zedg

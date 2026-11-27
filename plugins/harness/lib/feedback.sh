@@ -8,25 +8,21 @@
 #       source it reads ticket counts only).
 #   harness feedback send --draft <dir> --code <code> --yes
 #       Send exactly the draft that was shown. Refused without --yes, with a wrong code, or
-#       when the draft holds a token or a path outside the plugin.
+#       when the draft fails the privacy rule of lib/feedback.jq.
 #
-# The technical context is fixed (D43): plugin version, runtime version, operating system and
-# a state summary of the last run. The summary is built from allow-listed facts only: the
-# run's stop state, counts, the fixed role names of launched sessions, ticket counts per state
-# and the engine's own failure event kinds from a fixed list. No ledger value (reason, name,
-# path, account, title, session ID) is ever copied. The person's own words are cleaned too, by
-# the steps in lib/feedback.jq: a path inside the plugin is made relative to the plugin root;
-# any other path, token, secret value, e-mail address and the local account name are removed.
-# The send refuses a draft that any of those steps would still change.
+# The technical context is built from named fields only (D43): plugin version, runtime label
+# and version, operating system words, and a state summary of the last run (stop state, event
+# count, fixed role names, ticket counts per state, engine error kinds from a fixed list). Each
+# field has a fixed shape or vocabulary; anything else shows as "unknown" or "other". No free
+# text (ledger value, ticket text, runtime output) is ever copied. The person's description is
+# judged line by line by lib/feedback.jq: a line that holds the start of a path outside the
+# plugin, a secret or the account name is replaced whole by a placeholder. The send refuses a
+# draft whose description still has such a line or whose context has a line outside the
+# fixed fields.
 #
 # Exit codes: 64 usage, 65 refused (no yes, wrong code, private data found), 66 no draft,
 # 1 the tracker call failed. Requires lib/feedback.jq, lib/common.sh, lib/config.sh, lib/run.sh,
 # lib/runtime.sh and lib/tickets.sh.
-
-HO_FB_ROLES="orchestrator worker validator"
-# The engine's own event kinds that report a failure or an owner step. Only these are copied.
-HO_FB_ERROR_KINDS="deliver-failed marker-foreign owner-action pretrust-refused session-boot-failed
-session-close-failed session-close-refused session-close-timeout session-dead session-launch-failed unreadable"
 
 ho_fb_usage() {
   cat <<'USAGE'
@@ -54,42 +50,50 @@ ho_fb_sha() {
   printf '%s\n' "${s:0:16}"
 }
 
-# ho_fb_jq <jq-expr> [jq-options...]: run jq over stdin with the shared privacy steps of
-# lib/feedback.jq loaded (one definition for the cleaner and the gate, so they cannot drift).
+# ho_fb_jq <jq-expr> [jq-options...]: run jq over stdin with lib/feedback.jq loaded (one rule
+# set for the cleaner and the gate, so they cannot drift).
 ho_fb_jq() {
   local expr=$1
   shift
   jq -L "$HO_ROOT/lib" "$@" "include \"feedback\"; $expr"
 }
 
-# ho_fb_clean <roots-json> <accounts-json> <private-paths-json>: stdin text -> cleaned text.
-# The plugin root becomes "plugin-root" first, so a plugin path stays readable and relative.
+# ho_fb_fit <shape> <value>: the value when it has the fixed shape (shape_<name> in
+# lib/feedback.jq), else "unknown".
+ho_fb_fit() { ho_fb_jq "\$v | fit(shape_$1)" -nr --arg v "$2" 2>/dev/null || echo unknown; }
+
+# ho_fb_clean <roots-json> <accounts-json>: stdin description -> cleaned description.
 ho_fb_clean() {
   # shellcheck disable=SC2016 # jq text, not shell
-  ho_fb_jq 'clean($roots; $accts; $priv)' -Rrs --argjson roots "$1" --argjson accts "$2" --argjson priv "$3"
+  ho_fb_jq 'clean($roots; $accts)' -Rrs --argjson roots "$1" --argjson accts "$2"
 }
 
-# ho_fb_gate <file> <accounts-json> <private-paths-json>: exit 0 when no cleaning step would
-# change the text (no token, secret value, e-mail address, path outside the plugin or account
-# name); else print the kinds found (never the text) and exit 65.
+# ho_fb_fixed: the fixed vocabularies the gate checks the context against, as JSON.
+ho_fb_fixed() {
+  jq -cn --arg rts "$(ho_fb_shipped_runtimes)" --arg st "$HO_STATES" \
+    '{rts: ($rts | split("\n") | map(select(length > 0))), states: ($st | split(" "))}'
+}
+
+# ho_fb_shipped_runtimes: the runtime names the plugin ships, one per line.
+ho_fb_shipped_runtimes() {
+  local f n
+  for f in "$HO_ROOT"/runtimes/*.json; do
+    n=$(basename "$f" .json)
+    case $n in ''|*[!a-z0-9-]*) ;; *) printf '%s\n' "$n" ;; esac
+  done
+}
+
+# ho_fb_gate <title-file> <body-file> <accounts-json>: exit 0 when the draft passes the rule;
+# else print the kinds found (never the text) and exit 65. The fixed title prefix is not judged.
 ho_fb_gate() {
   local found
   # shellcheck disable=SC2016 # jq text, not shell
-  found=$(ho_fb_jq 'kinds($accts; $priv)' -Rrs --argjson accts "$2" --argjson priv "$3" < "$1") ||
+  found=$( { sed '1s/^Harness feedback: //' "$1"; cat "$2"; } |
+    ho_fb_jq 'kinds($accts; $fixed)' -Rrs --argjson accts "$3" --argjson fixed "$(ho_fb_fixed)") ||
     { echo "the privacy check could not run"; return 65; }
   [ -z "$found" ] && return 0
   printf '%s\n' "$found"
   return 65
-}
-
-# ho_fb_private_paths: home, the current folder and the project, as given and resolved.
-ho_fb_private_paths() {
-  local proj
-  proj=$( (ho_project_root) 2>/dev/null) || proj=""
-  jq -cn --arg h "${HOME:-}" --arg hp "$(cd -P "${HOME:-/nonexistent}" 2>/dev/null && pwd -P || true)" \
-    --arg w "$PWD" --arg wp "$(pwd -P 2>/dev/null || true)" --arg p "$proj" \
-    --arg pp "$( [ -n "$proj" ] && cd -P "$proj" 2>/dev/null && pwd -P || true)" \
-    '[$h, $hp, $w, $wp, $p, $pp] | map(select(length >= 4 and . != "/")) | unique'
 }
 
 # ho_fb_accounts: the local account names to keep out, as a JSON array.
@@ -117,8 +121,9 @@ ho_fb_runtime_version() {
     '') echo "not set (config runtime.main is empty)"; return 0 ;;
     *[!a-z0-9-]*) echo "unknown (runtime.main is not a runtime name)"; return 0 ;;
   esac
-  # A label with no shipped or user profile may be a private name: it is not copied.
-  prof=$( (ho_rt_file "$label") 2>/dev/null) || { echo "unknown (no runtime profile has that name)"; return 0; }
+  # Only a runtime the plugin ships is named: a user profile's own name may be private.
+  [ -f "$HO_ROOT/runtimes/$label.json" ] || { echo "unknown (not a runtime the plugin ships)"; return 0; }
+  prof=$( (ho_rt_file "$label") 2>/dev/null) || { echo "$label, version unknown"; return 0; }
   cmd=$(jq -r '.command // ""' "$prof" 2>/dev/null) || cmd=""
   case $cmd in ''|*/*|-*) echo "$label, version unknown"; return 0 ;; esac
   path=$(command -v "$cmd" 2>/dev/null) || { echo "$label, not installed"; return 0; }
@@ -167,25 +172,24 @@ ho_fb_summary() {
   (
     # shellcheck disable=SC2034 # read by ho_ledger_events
     HO_RUN_DIR=$run
-    ho_ledger_events 2>/dev/null | jq -rs --arg roles "$HO_FB_ROLES" --arg errs "$HO_FB_ERROR_KINDS" '
-      ($errs | split("\\s+"; null) | map(select(length > 0))) as $errkinds
-      | ([.[] | select(.kind == "stop" or .kind == "resume") | .kind] | last) as $stop
-      | ($roles | split(" ")) as $known
+    # shellcheck disable=SC2016 # jq text, not shell
+    ho_ledger_events 2>/dev/null | ho_fb_jq '
+      ([.[] | select(.kind == "stop" or .kind == "resume") | .kind] | last) as $stop
       | [.[] | select(.kind == "session-launch") | .role
-          | if (type == "string") and IN($known[]) then . else "other" end] as $r
-      | [.[] | .kind | select(type == "string" and IN($errkinds[]))] as $err
+          | if (type == "string") and IN(fb_roles[]) then . else "other" end] as $r
+      | [.[] | .kind | select(type == "string" and IN(fb_error_kinds[]))] as $err
       | "- Last run: \(if $stop == "stop" then "stopped" else "not stopped" end), \(length) ledger events",
         "- Steps (session roles launched): \(if ($r | length) == 0 then "none"
             else ($r | group_by(.) | map("\(.[0]) \(length)") | join(", ")) end)",
         "- Engine error codes: \(if ($err | length) == 0 then "none"
-            else ($err | group_by(.) | map("\(.[0]) x\(length)") | join(", ")) end)"'
+            else ($err | group_by(.) | map("\(.[0]) x\(length)") | join(", ")) end)"' -rs
   ) || echo "- Last run: found, but its ledger could not be read"
   printf -- '- Tickets per state: %s\n' "$(ho_fb_tickets "$proj")"
 }
 
 # ho_fb_preview <description-file>
 ho_fb_preview() {
-  local desc=${1-} repo roots accts priv draft first title os why
+  local desc=${1-} repo roots accts draft first title os why
   [ -n "$desc" ] && [ $# -eq 1 ] || { ho_fb_usage >&2; return 64; }
   [ -f "$desc" ] && [ -r "$desc" ] || { ho_fb_err "cannot read the description file"; return 74; }
   [ -n "$(tr -d ' \t\r\n' < "$desc")" ] || { ho_fb_err "the description is empty; describe the problem first"; return 64; }
@@ -193,35 +197,38 @@ ho_fb_preview() {
   [ -n "$repo" ] || { ho_fb_err "the plugin manifest names no repository"; return 78; }
   roots=$(ho_fb_roots)
   accts=$(ho_fb_accounts)
-  priv=$(ho_fb_private_paths)
   draft=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/ho-feedback.XXXXXX") || { ho_fb_err "cannot make a draft folder"; return 1; }
   # The person's words are cleaned on their own first, so a failed clean is never hidden.
-  if ! head -c 20000 "$desc" | ho_fb_clean "$roots" "$accts" "$priv" > "$draft/desc.txt"; then
+  if ! head -c 20000 "$desc" | ho_fb_clean "$roots" "$accts" > "$draft/desc.txt"; then
     ho_fb_err "cannot clean the description"; rm -rf "$draft"; return 1
   fi
-  os="$(uname -s 2>/dev/null || echo unknown) $(uname -r 2>/dev/null || true)"
+  os="$(ho_fb_fit os_s "$(uname -s 2>/dev/null)") $(ho_fb_fit os_r "$(uname -r 2>/dev/null)") $(ho_fb_fit os_m "$(uname -m 2>/dev/null)")"
+  # The context is built from named fields with fixed shapes; it is not passed through the
+  # description cleaner (the gate checks it against the field grammar instead).
   if ! {
     awk '{ l[NR] = $0 } END { n = NR; while (n > 0 && l[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print l[i] }' "$draft/desc.txt"
     printf '\n---\n'
     printf 'Technical context (added by the harness feedback command):\n'
-    printf -- '- Plugin version: %s\n' "$( (ho_version) 2>/dev/null || echo unknown)"
+    printf -- '- Plugin version: %s\n' "$(ho_fb_fit ver "$( (ho_version) 2>/dev/null)")"
     printf -- '- Runtime: %s\n' "$(ho_fb_runtime_version)"
-    printf -- '- Operating system: %s %s\n' "$os" "$(uname -m 2>/dev/null || true)"
+    printf -- '- Operating system: %s\n' "$os"
     ho_fb_summary
-  } | ho_fb_clean "$roots" "$accts" "$priv" > "$draft/body.md"; then
+  } > "$draft/body.md"; then
     ho_fb_err "cannot build the draft"; rm -rf "$draft"; return 1
   fi
-  first=$(awk 'NF { gsub(/[\t\r]/, " "); sub(/^ +/, ""); print substr($0, 1, 70); exit }' "$draft/desc.txt")
+  first=$(awk 'NF && !/^<line removed: [a-z]+>$/ { gsub(/[\t\r]/, " "); sub(/^ +/, ""); print substr($0, 1, 70); exit }' "$draft/desc.txt")
   title="Harness feedback: ${first:-problem report}"
   printf '%s\n' "$title" > "$draft/title.txt"
   printf '%s\n' "$repo" > "$draft/repo.txt"
   rm -f "$draft/desc.txt"
-  if why=$(cat "$draft/title.txt" "$draft/body.md" > "$draft/all.txt" && ho_fb_gate "$draft/all.txt" "$accts" "$priv"); then :; else
+  if why=$(ho_fb_gate "$draft/title.txt" "$draft/body.md" "$accts"); then :; else
     ho_fb_err "the draft still holds private data ($why); edit the description and preview again"
     rm -rf "$draft"
     return 65
   fi
-  ho_fb_sha "$draft/all.txt" > "$draft/code.txt" || { ho_fb_err "no SHA-256 tool found"; return 1; }
+  if ! { cat "$draft/title.txt" "$draft/body.md" > "$draft/all.txt" && ho_fb_sha "$draft/all.txt" > "$draft/code.txt"; }; then
+    ho_fb_err "no SHA-256 tool found"; rm -rf "$draft"; return 1
+  fi
   printf 'This issue will be filed in %s under your own GitHub login, with no labels.\n' "$repo"
   printf 'Nothing is sent until you say yes.\n\n'
   printf 'Title: %s\n\n' "$title"
@@ -232,7 +239,7 @@ ho_fb_preview() {
 
 # ho_fb_send --draft <dir> --code <code> --yes
 ho_fb_send() {
-  local draft="" code="" yes=0 repo accts want why url
+  local draft="" code="" yes=0 repo want why url
   while [ $# -gt 0 ]; do
     case $1 in
       --draft) [ $# -ge 2 ] || { ho_fb_usage >&2; return 64; }; draft=$2; shift 2 ;;
@@ -249,8 +256,7 @@ ho_fb_send() {
   cat "$draft/title.txt" "$draft/body.md" > "$draft/all.txt" || { ho_fb_err "cannot read the draft"; return 66; }
   want=$(ho_fb_sha "$draft/all.txt") || { ho_fb_err "no SHA-256 tool found"; return 1; }
   [ "$code" = "$want" ] || { ho_fb_err "nothing sent: the draft is not the text that was shown (code mismatch); preview again"; return 65; }
-  accts=$(ho_fb_accounts)
-  why=$(ho_fb_gate "$draft/all.txt" "$accts" "$(ho_fb_private_paths)") || { ho_fb_err "nothing sent: the draft holds private data ($why)"; return 65; }
+  why=$(ho_fb_gate "$draft/title.txt" "$draft/body.md" "$(ho_fb_accounts)") || { ho_fb_err "nothing sent: the draft holds private data ($why)"; return 65; }
   repo=$(ho_fb_repo)
   [ -n "$repo" ] && [ "$repo" = "$(cat "$draft/repo.txt")" ] || { ho_fb_err "nothing sent: the draft names another repository"; return 65; }
   url=$(gh issue create --repo "$repo" --title "$(cat "$draft/title.txt")" --body-file "$draft/body.md") ||

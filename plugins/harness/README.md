@@ -131,6 +131,8 @@ The technical context is built from named fields only, and nothing outside this 
 
 The person's description is sent as written: D60 (owner decision 2026-11-27 on #92). The harness does not scrub it: the person is responsible for what they paste, so a path, a token or a name they type reaches the issue. The preview shows the full text, description and context, exactly as it will be sent, and nothing is sent without the exact `--yes` and the confirm code of that text. The issue title is `Harness feedback: ` plus the first non-blank line of the description, cut at 70 characters. A description over 60000 bytes is refused (exit 64), because the tracker limits the issue body.
 
+Every feedback command runs with a fixed PATH: the folders of `jq`, `git` and `gh` from the person's PATH (each only when it is outside the project and the current git tree), then the system folders. `uname` is called by its absolute path with an empty environment, and variables that make an interpreter load extra code (`BASH_ENV`, `NODE_OPTIONS`, `PYTHONPATH`, `PERL5OPT` and similar) are dropped. The runtime binary must lie outside the project and outside the current folder's own git tree, so a `.harness-project` pointer cannot move that check. The issue goes to `github.com/<owner>/<repo>` even when `GH_HOST` names another server. A linked `.harness/runs` folder is followed when the last run is looked up.
+
 `send` checks the context part again: from the last `---` and context header on, every line must be one of the fixed fields above with its fixed shape (exit 65 otherwise, naming only what is wrong). Any probe that fails gives `unknown`, so a broken config or no run still gives a report. The preview writes nothing in the run folder.
 
 ## Tests

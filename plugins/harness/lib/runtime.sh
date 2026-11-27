@@ -68,6 +68,8 @@ ho_rt_check() {
     elif (.config_dir.default | line | not)
       or ((.config_dir | has("env")) and (.config_dir.env | (type != "string") or (test("\\A[A-Z_][A-Z0-9_]*\\z") | not))) then
       "config_dir needs a default and, if set, an env variable name"
+    elif has("account_env") and ((.account_env | type) != "array" or (.account_env | any((type != "string") or (test("\\A[A-Z_][A-Z0-9_]*\\z") | not)))) then
+      "account_env must list variable names"
     elif (.check.argv | strs | not) or ((.check | has("expect")) and (.check.expect | line | not)) then
       "check needs argv, and an optional expect"
     elif (.check | has("timeout_seconds")) and ((.check.timeout_seconds | type) != "number"

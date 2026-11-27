@@ -222,9 +222,11 @@ ho_stop_id_new() { printf 'stop-%s\n' "$(od -An -N4 -tx1 /dev/urandom | tr -d ' 
 
 # ho_stop_gate [ticket]: may new work of this ticket start? 0 yes (no stop, or a soft:ticket stop
 # that covers a ticket begun before it), 75 no, 2 the stop state is unknown. Work that names no
-# ticket counts as new work.
+# ticket counts as new work. An ended run (ho_run_ended) starts nothing new either (75, H-079),
+# until "state <run> resume" opens it again.
 ho_stop_gate() {
   local t=${1-} st=0
+  ! ho_run_ended || { echo "harness: the run has ended; nothing new starts (record a resume to open it again)" >&2; return 75; }
   ho_stopped || st=$?
   case $st in 1) return 0 ;; 2) return 2 ;; esac
   ho_stop_read
@@ -235,9 +237,11 @@ ho_stop_gate() {
 }
 
 # ho_stop_gate_soft: may a session that already runs keep finishing its work (a heavy or stage
-# slot)? 0 with no stop or a soft stop, 75 otherwise, 2 unknown (D25a).
+# slot)? 0 with no stop or a soft stop, 75 otherwise, 2 unknown (D25a). An ended run has no work
+# left to finish (75, H-079).
 ho_stop_gate_soft() {
   local st=0
+  ! ho_run_ended || { echo "harness: the run has ended; no work goes on (record a resume to open it again)" >&2; return 75; }
   ho_stopped || st=$?
   case $st in 1) return 0 ;; 2) return 2 ;; esac
   ho_stop_read

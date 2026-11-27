@@ -535,3 +535,18 @@ assert_eq "H-086: the merge started from the earlier tip" "$before" "$(git -C "$
 "$h" state "$run" stop >/dev/null
 assert_eq "H-086: the default soft:step refuses every merge (75)" 75 "$(merge_rc st2)"
 "$h" state "$run" resume >/dev/null
+
+# ---- H-079: an ended run merges nothing and begins no step, until a recorded resume ------------
+mkdir -p "$PWD/no-tickets"
+HO_TICKETS_DIR="$PWD/no-tickets" "$h" lifecycle "$run" check >/dev/null 2>&1 || true
+assert_eq "test setup: the run has ended" 1 "$(ledger_has run-end)"
+before=$(tip) confirmed_before=$(ledger_has merge-confirmed)
+assert_eq "H-079: an ended run refuses a merge (75)" 75 "$(merge_rc st2)"
+assert_eq "H-079: the refused merge leaves the integration branch and the ledger as they were" "$before $confirmed_before" \
+  "$(tip) $(ledger_has merge-confirmed)"
+assert_exit "H-079: an ended run refuses a new step (75)" 75 "$h" state "$run" begin --ticket 9 --step s1
+assert_eq "H-079: no step-begin is written after the run end" 0 \
+  "$(jq -r 'select(.kind == "run-end" or (.kind == "step-begin" and .ticket == "9")) | .kind' "$run/ledger.jsonl" | grep -c step-begin || true)"
+"$h" state "$run" resume >/dev/null
+assert_exit "H-079: after a recorded resume a step begins again" 0 "$h" state "$run" begin --ticket 9 --step s1
+assert_eq "H-079: after a recorded resume the merge goes through" 0 "$(merge_rc st2)"

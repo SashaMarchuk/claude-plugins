@@ -15,7 +15,7 @@
 #
 # The run keeps no list of its own tickets. Its tickets are the tickets of the queue it runs
 # (tickets ids <state>); a done ticket of an earlier run counts as done. A queue that cannot be
-# read is "unknown", never "all done".
+# read, or that lists a ticket in none of the five states (D2), is "unknown", never "all done".
 #
 # Requires lib/run.sh, lib/config.sh, lib/tickets.sh, lib/sessions.sh and lib/liveness.sh.
 
@@ -42,6 +42,30 @@ ho_life_ids() {
       exit 74
     fi
     ho_tickets ids "$1"
+  )
+}
+
+# ho_life_unstated: the queue's tickets that are in none of the five states (D2), read-only, from
+# one listing. Local: a ticket file whose status is not a known state (or cannot be read). GitHub:
+# an open issue with a harness label (<prefix>:...) but no state label; an issue with no harness
+# label is not a harness ticket. Such a ticket may or may not be done, so it is never "all done".
+ho_life_unstated() {
+  (
+    [ -n "${HO_TICKETS_DIR:-}" ] || export HO_TICKETS_DIR="$HO_PROJECT_DIR/.harness/tickets"
+    ho_tk_settings || exit $?
+    if ho_tk_gh; then
+      local json
+      json=$(gh issue list --repo "$HO_TK_REPO" --state open --limit 200 --json number,labels) || exit 1
+      printf '%s' "$json" |
+        jq -r --arg p "$HO_TK_PREFIX:" --arg s "$HO_STATES" '($s | split(" ") | map($p + .)) as $known
+          | .[] | [.labels[].name] as $l
+          | select(any($l[]; startswith($p)) and all($l[]; . as $x | $known | index($x) | not)) | .number'
+    else
+      local n f
+      ho_tk_l_each | while IFS=$'\t' read -r n f; do
+        [ "$(ho_tk_l_state "$f")" != unknown ] || printf '%s\n' "$n"
+      done
+    fi
   )
 }
 
@@ -120,11 +144,11 @@ ho_life_has() { printf '%s\n' $2 | grep -qx -- "$1"; }
 #   standby       all tickets done, standby on: finished terminals close (H-080)
 #   end           the run ends: every session of this run closes (H-079, D37-LIFECYCLE-3)
 #   ended         the run ended earlier; a session still open is closed again
-#   unknown       the stop state or the ticket queue cannot be read: nothing changes (exit 2)
+#   unknown       the stop state or the ticket queue cannot be read, or a ticket of the queue is
+#                 in none of the five states (D2): nothing changes (exit 2)
 ho_life_check() {
-  local last st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live prev
-  last=$(ho_ledger_events | jq -r 'select(.kind == "run-end" or .kind == "resume") | .kind' | tail -n 1)
-  if [ "$last" = run-end ]; then
+  local st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live
+  if ho_run_ended; then
     # A close that failed at the run end (a busy session, a terminal that could not be reached)
     # is tried again at every later call; closed records are skipped.
     ho_life_say ended
@@ -141,6 +165,13 @@ ho_life_check() {
       ready) ready=$ids ;; in-progress) inprog=$ids ;; blocked) blocked=$ids ;; needs-review) review=$ids ;;
     esac
   done
+  # A ticket in none of the five states might still be open work: fail closed, as above.
+  ids=$(ho_life_unstated 2>/dev/null) || { ho_life_say unknown; echo "harness: the ticket states cannot be read; nothing changed" >&2; return 2; }
+  if [ -n "$ids" ]; then
+    ho_life_say unknown
+    printf 'harness: ticket(s) %s are in none of the states ready, in-progress, blocked, needs-review, done; nothing changed\n' "$(printf '%s ' $ids)" >&2
+    return 2
+  fi
   if [ "$st" -eq 0 ]; then
     # D25a: a soft stop lets running work finish. soft:ticket also lets each covered ticket
     # begun before the stop run on while it is ready or in progress.
@@ -164,19 +195,60 @@ ho_life_check() {
   else
     decision=end reason=all-done
   fi
-  # One ledger line per change of decision, so a polling orchestrator does not fill the ledger.
-  prev=$(ho_ledger_events | jq -r 'select(.kind == "lifecycle") | .decision' | tail -n 1)
-  [ "$prev" = "$decision" ] || ho_ledger_append lifecycle decision "$decision" standby "$HO_LIFE_STANDBY"
+  if [ "$decision" = end ]; then
+    # Of checks that decide "end" at the same time, only the first writes the run end; the
+    # others read "ended". Both close what is still open.
+    local erc=0
+    ho_life_end_once "$reason" || erc=$?
+    case $erc in
+      0) ho_life_say end ;;
+      1) ho_life_say ended ;;
+      *) ho_life_say unknown; return 2 ;;
+    esac
+    ho_life_sweep workers
+    ho_life_sweep keepers
+    return 0
+  fi
+  ho_life_note "$decision"
   ho_life_say "$decision"
   case $decision in
     wait-review | wait-blocked | standby) ho_life_sweep workers ;;
-    end)
-      ho_ledger_append run-end reason "$reason"
-      ho_life_sweep workers
-      ho_life_sweep keepers
-      ;;
   esac
   return 0
+}
+
+# ho_life_note <decision>: one ledger line per change of decision, so a polling orchestrator does
+# not fill the ledger.
+ho_life_note() {
+  local prev
+  prev=$(ho_ledger_events | jq -r 'select(.kind == "lifecycle") | .decision' | tail -n 1)
+  [ "$prev" = "$1" ] || ho_ledger_append lifecycle decision "$1" standby "$HO_LIFE_STANDBY"
+}
+
+# ho_life_end_once <reason>: write the run end once (H-079). The ledger is read again under the
+# lifecycle lock, so two checks never both write it. 0 this call ended the run, 1 the run had
+# already ended, 2 the lock stayed held. The lock covers only this read and write, never a close;
+# a lock left by a killed holder counts as stale after 30 s.
+ho_life_end_once() {
+  local lock="$HO_RUN_DIR/lifecycle.lock" n=0 t rc=0
+  until mkdir "$lock" 2>/dev/null; do
+    t=$(ho_live_mtime "$lock")
+    if [ -n "$t" ] && [ $(( $(date +%s) - t )) -ge 30 ]; then
+      rm -rf "$lock" 2>/dev/null || true
+      continue
+    fi
+    n=$((n + 1))
+    [ "$n" -lt 1200 ] || { printf 'harness: the lifecycle lock %s is held; nothing changed\n' "$lock" >&2; return 2; }
+    sleep 0.05
+  done
+  if ho_run_ended; then
+    rc=1
+  else
+    ho_life_note end
+    ho_ledger_append run-end reason "$1"
+  fi
+  rm -rf "$lock"
+  return "$rc"
 }
 
 # harness lifecycle <run> done <name>: the task of that session ended (H-081). One ledger line,

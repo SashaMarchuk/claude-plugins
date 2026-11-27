@@ -221,3 +221,67 @@ rm -f "$r10/sessions/x1.json"
 # ---- H-081: no check closed the session of the other run ---------------------------------------
 assert_eq "H-081: the session of another run is never closed" alive "$(up "$px")"
 assert_eq "H-081: its record is untouched" running "$(rec x1 .status "$other")"
+
+# ---- D2, H-079: a ticket in no known state is never "all done" ---------------------------------
+# The queue lists it, but not under one of the five states, so the run cannot tell whether it is
+# done: the decision is unknown (exit 2), as for a queue that cannot be read.
+r11=$("$h" run new --workers 5)
+sess "$r11" worker w1
+p11=$(pid "$r11" w1)
+tk "$base/tk-f" done
+tk "$base/tk-f" done
+f11=$(ls "$base/tk-f"/2-*.md)
+sed 's/^status: done$/status: paused/' "$f11" > "$base/t11.md" && cat "$base/t11.md" > "$f11"
+rc=0; HO_TICKETS_DIR="$base/tk-f" "$h" lifecycle "$r11" check >/dev/null 2>&1 || rc=$?
+assert_eq "D2: a local ticket whose state is none of the five gives unknown (exit 2)" 2 "$rc"
+ends=$(jq -r 'select(.kind == "run-end") | .kind' "$r11/ledger.jsonl")
+assert_eq "D2: that unknown closes nothing and ends nothing" "alive none" "$(up "$p11") ${ends:-none}"
+sed 's/^status: paused$/status: done/' "$f11" > "$base/t11.md" && cat "$base/t11.md" > "$f11"
+assert_eq "H-079: once that ticket reads done the same queue ends the run" "end" "$(HO_TICKETS_DIR="$base/tk-f" decision "$r11")"
+
+# GitHub: an open issue with a harness label but no state label is a ticket in no known state.
+# An issue with no harness label at all is not a harness ticket and does not hold the run.
+export HO_FAKE_GH_DIR="$base/gh"
+gh_check() { HO_TICKETS_SOURCE=github HO_TICKETS_REPO=fake/repo "$h" lifecycle "$1" check 2>"$base/check.err"; }
+r12=$("$h" run new --workers 5)
+HO_TICKETS_SOURCE=github HO_TICKETS_REPO=fake/repo "$h" tickets add "t-done" "$(body)" done >/dev/null
+gh issue create --repo fake/repo --title "not a harness ticket" --body-file "$(body)" >/dev/null
+gh issue create --repo fake/repo --title "urgent, no state" --body-file "$(body)" --label harness:urgent >/dev/null
+rc=0; gh_check "$r12" >/dev/null || rc=$?
+assert_eq "D2: an open issue with a harness label but no state label gives unknown (exit 2)" 2 "$rc"
+ends=$(jq -r 'select(.kind == "run-end") | .kind' "$r12/ledger.jsonl")
+assert_eq "D2: that unknown ends nothing" "none" "${ends:-none}"
+gh issue edit 3 --repo fake/repo --add-label harness:done >/dev/null
+o=$(gh_check "$r12" || true)
+assert_eq "H-079: once it carries a state label the run ends; an unlabelled issue does not hold it" "end" "$(printf '%s\n' "$o" | head -n 1)"
+
+# ---- H-079: an ended run launches nothing new; a recorded resume opens it again ----------------
+r13=$("$h" run new --workers 5)
+assert_eq "test setup: the run ends" "end" "$(HO_TICKETS_DIR="$base/tk-f" decision "$r13")"
+assert_exit "H-079: an ended run refuses a new session launch (75)" 75 sess "$r13" worker late1
+assert_exit "H-079: an ended run refuses a session resume too (75)" 75 \
+  "$h" session "$r13" launch --role worker --name late2 --cwd "$proj/src" --resume 0b6f2a8e-1c3d-4e5f-8a9b-0c1d2e3f4a5b
+assert_eq "H-079: the refused launches leave no record" "" "$(ls "$r13/sessions" 2>/dev/null | grep -E '^late' || true)"
+"$h" state "$r13" resume >/dev/null
+assert_exit "H-079: after a recorded resume the run launches again" 0 sess "$r13" worker late3
+
+# ---- H-079: checks that run at the same time write one run end ----------------------------------
+r14=$("$h" run new --workers 5)
+for i in 1 2 3 4 5 6 7 8; do HO_TICKETS_DIR="$base/tk-f" "$h" lifecycle "$r14" check >/dev/null 2>&1 & done
+wait
+assert_eq "H-079: eight checks at the same time write exactly one run-end line" 1 \
+  "$(jq -r 'select(.kind == "run-end") | .kind' "$r14/ledger.jsonl" | wc -l | tr -d ' ')"
+
+# ---- H-079: a launch that waits for a worker slot and gets it after the run end starts nothing ---
+r15=$("$h" run new --workers 1)
+sess "$r15" worker e1
+(c=0; "$h" session "$r15" launch --role worker --name e2 --cwd "$proj/src" --prompt "$base/prompt.md" --slot-wait 30 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-e2") &
+waiter=$!
+sleep 2
+assert_eq "test setup: the second launch waits for the slot" "" "$(cat "$base/rc-e2" 2>/dev/null || true)"
+# The run end closes e1, which frees the slot the waiting launch gets.
+HO_TICKETS_DIR="$base/tk-f" "$h" lifecycle "$r15" check >/dev/null 2>&1 || true
+wait "$waiter"
+assert_eq "H-079: the launch that got its slot after the run end is refused (75)" 75 "$(cat "$base/rc-e2")"
+assert_eq "H-079: it leaves no record, no launcher and no slot" "no no no" \
+  "$([ -e "$r15/sessions/e2.json" ] && echo yes || echo no) $([ -e "$r15/launchers/e2.sh" ] && echo yes || echo no) $([ -e "$r15/slots/worker/e2.json" ] && echo yes || echo no)"

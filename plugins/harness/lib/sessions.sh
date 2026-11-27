@@ -476,6 +476,8 @@ ho_session_launch_one() {
   local stopped=0
   ho_stop_gate "$ticket" || stopped=$?
   [ "$stopped" -eq 0 ] || { echo "harness: the run is stopped (or its stop state is unknown); no session is launched" >&2; return 75; }
+  # An ended run launches nothing (H-079); a recorded resume ("state <run> resume") opens it again.
+  ! ho_run_ended || { echo "harness: the run has ended; no session is launched (record a resume to open it again)" >&2; return 75; }
   ho_assert_safe_cwd "$cwd" "$HO_PROJECT_DIR" || return 65
   cwd=$(cd "$cwd" && pwd -P) || return 65
   case $cwd in *$'\n'*) echo "harness: working folder name has a line break" >&2; return 65 ;; esac
@@ -561,6 +563,11 @@ ho_session_launch_one() {
       echo "harness: the run was stopped (or its stop state is unknown) while the launch waited; no session is launched" >&2
       return 75
     fi
+    if ho_run_ended; then
+      rm -f "$rec"
+      echo "harness: the run ended while the launch waited; no session is launched" >&2
+      return 75
+    fi
   fi
 
   local sid tag ldir launcher title pidfile closing group attempts
@@ -574,9 +581,9 @@ ho_session_launch_one() {
   # the other and stops.
   if [ -n "$resume" ]; then
     jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg sid "$sid" --arg pidfile "$sdir/$name.pid" --arg ts "$(ho_now)" \
-      --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" \
+      --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg ticket "$ticket" \
       '{schemaVersion: 2, run: $run, name: $name, session_id: $sid, pid: null, pid_file: $pidfile, status: "launching", created: $ts,
-        launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
+        launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end)}' \
       | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
     local f other=""
     for f in "$sdir"/*.json; do
@@ -651,11 +658,11 @@ ho_session_launch_one() {
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg account "$acct_name" \
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
-    --arg rpath "$cmdpath" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" \
+    --arg rpath "$cmdpath" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg ticket "$ticket" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
       runtime: $runtime, runtime_path: $rpath, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
-      transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
+      transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end)}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name" ticket "$ticket"
 

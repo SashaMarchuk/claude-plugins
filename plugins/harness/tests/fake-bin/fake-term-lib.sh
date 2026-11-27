@@ -28,7 +28,8 @@ ft_start() {
   printf '%s\n' "$!" > "$f.pid"
 }
 # ft_screen <handle>: the session's screen. Text typed after the last Enter shows on the input
-# line (the last line that starts with ">"), after a draft and in place of dim suggested text,
+# line (the last line that starts with ">", or with the runtime's real prompt mark once colour
+# codes are set aside, issue #104), after a draft and in place of dim suggested text,
 # as a terminal echoes it. HO_FAKE_TERM_ECHO_EXTRA is shown after it too, as if someone typed
 # a key between the engine's typing and its check.
 ft_screen() {
@@ -39,8 +40,9 @@ ft_screen() {
   fi
   [ -z "$p" ] || p="$p${HO_FAKE_TERM_ECHO_EXTRA:-}"
   FT_P=$p awk -v e="$(printf '\033')" '
-    { l[NR] = $0 }
-    /^>( |$)/ { k = NR }
+    { l[NR] = $0; s = $0; gsub(e "\\[[0-9;]*m", "", s) }
+    s ~ /^>( |$)/ { k = NR }
+    index(s, "\342\235\257") == 1 { k = NR }
     END {
       for (i = 1; i <= NR; i++) {
         if (i == k && ENVIRON["FT_P"] != "") {

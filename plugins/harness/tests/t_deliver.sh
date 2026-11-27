@@ -350,7 +350,12 @@ screen v9 busy
 mkdir -p "$base/evil"
 printf '#!/bin/sh\n: > "%s/evil-ran"\necho 9.9.9\n' "$base" > "$base/evil/claude"
 chmod 700 "$base/evil/claude"
+# A positive force-send passes through the queue: a longer wait, as for the other force-sends.
+# With 2 s the wait could end before the fake took the queued line (a timing flake, PR #105);
+# with 10 s it still failed under heavy load. The wait ends as soon as the proof shows.
+set_wait 30
 out=$(PATH="$base/evil:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver v9 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+set_wait 2
 assert_eq "Codex P2: a claude found first on PATH after launch is never run" "no" "$([ -e "$base/evil-ran" ] && echo yes || echo no)"
 assert_eq "Codex P2: the force-send still works with the launch-checked runtime" "0" "$rc"
 
@@ -431,7 +436,9 @@ screen z4 idle-empty
 t0=$(date +%s)
 out=$(HO_FAKE_MSG_MODE=term-ignore deliver z4 --text "run tests" 2>&1) && rc=0 || rc=$?
 el=$(( $(date +%s) - t0 ))
-assert_eq "N4: deliver returns within the timeout plus the grace and the proof wait (at most 7 s)" "yes" "$([ "$el" -le 7 ] && echo yes || echo "no (${el}s)")"
+# The bound proves the SIGKILL: the command would sleep 15 s. 12 s leaves room for a loaded
+# machine (it was 7 s, and took 9 s under load; PR #105 review round 2).
+assert_eq "N4: deliver returns within the timeout plus the grace and the proof wait (at most 12 s)" "yes" "$([ "$el" -le 12 ] && echo yes || echo "no (${el}s)")"
 tp=$(cat "$base/extra.pids.term" 2>/dev/null || true)
 assert_eq "N4: the command that ignored SIGTERM is gone" "no" "$([ -n "$tp" ] && alive "$tp" && echo yes || echo no)"
 assert_eq "N4: a stopped command is not followed by typing (0 bytes)" "0" "$(inbytes z4)"
@@ -542,10 +549,12 @@ assert_eq "item 2D: a cached transcript of another session is not used" "none id
 # The screen fixtures of T14 are used as shapes only; no test prints them.
 set_runtime claude-code
 R6='────────────────────────────────────────'
+# IC: the idle prompt colour. An idle screen must show it, or idle is not proven (PR #105).
+IC=$(printf '\033[39m')
 sf="$HO_TESTS_DIR/fixtures/screen"
 # frame <fixture>: the fixture without its last line (a bare prompt or a frame end), then a
 # framed empty prompt, as the idle screen shows it.
-frame() { sed '$d' "$sf/$1.txt"; printf '%s\n> \n%s\n' "$R6" "$R6"; }
+frame() { sed '$d' "$sf/$1.txt"; printf '%s\n%s> \n%s\n' "$R6" "$IC" "$R6"; }
 hold_case() { # <name> <label> <screen-builder...>
   local nm=$1 label=$2
   shift 2
@@ -554,13 +563,16 @@ hold_case() { # <name> <label> <screen-builder...>
   out=$(deliver "$nm" --text "run tests" 2>&1) && rc=0 || rc=$?
   assert_eq "B4, D42g: $label: 0 bytes typed, no Enter (exit 1)" "1 0" "$rc $(inbytes "$nm")"
   assert_eq "B4, D42g: $label: no Enter key reached the session" "" "$(calls | grep -F "key $(rec "$nm" .handle) Enter" || true)"
+  # HC_HOLD=1: the screen shows the idle colour, so the refusal must name the hold itself,
+  # not "idle is not proven" (PR #105 review round 2, m4).
+  [ "${HC_HOLD:-}" != 1 ] || assert_contains "B4: $label: refused because of the hold" "$out" "hold (D42g)"
 }
 for fx in limit-notice-plain limit-notice-short limit-notice-contraction; do
-  hold_case "h-$fx" "a limit notice above a framed empty prompt ($fx)" frame "$fx"
+  HC_HOLD=1 hold_case "h-$fx" "a limit notice above a framed empty prompt ($fx)" frame "$fx"
 done
-hold_case h-trust "a trust dialog above a framed empty prompt" frame trust-dialog
+HC_HOLD=1 hold_case h-trust "a trust dialog above a framed empty prompt" frame trust-dialog
 pw() { cat "$screens/idle-empty.txt"; tail -n 1 "$sf/password-prompt.txt"; }
-hold_case h-pass "the idle screen with a password prompt line below it" pw
+HC_HOLD=1 hold_case h-pass "the idle screen with a password prompt line below it" pw
 assert_contains "B4: the report names the hold" "$out" "hold"
 # No chord on a hold, with --force-send on a busy session.
 start h-chord
@@ -569,7 +581,7 @@ frame limit-notice-plain > "$(fout h-chord)"
 out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 deliver h-chord --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 assert_eq "B4: a hold gets no chord and no typed text, also with --force-send" "1 0" "$rc $(inbytes h-chord)"
 # A stale notice with later text below it reads as no hold: the continue message goes through.
-stale() { sed '$d' "$sf/limit-notice-plain.txt"; printf 'Later the session went on with other work.\nIt wrote a summary of the tests.\n%s\n> \n%s\n' "$R6" "$R6"; }
+stale() { sed '$d' "$sf/limit-notice-plain.txt"; printf 'Later the session went on with other work.\nIt wrote a summary of the tests.\n%s\n%s> \n%s\n' "$R6" "$IC" "$R6"; }
 start h-stale
 stale > "$(fout h-stale)"
 out=$(deliver h-stale --text "continue" 2>&1) && rc=0 || rc=$?
@@ -605,7 +617,7 @@ R7='─────────────────────────�
 tall() {
   local n=$1 first=$2 i=1
   shift 2
-  printf ' Fake runtime 0.0.0\n\n%s\n>%s\n' "$R7" "$first"
+  printf ' Fake runtime 0.0.0\n\n%s\n%s>%s\n' "$R7" "$IC" "$first"
   for l in "$@"; do printf '%s\n' "$l"; i=$((i + 1)); done
   while [ "$i" -lt "$n" ]; do printf '\n'; i=$((i + 1)); done
   printf '%s\n  ? for shortcuts\n' "$R7"
@@ -652,7 +664,7 @@ jq '.shapes |= map(select(.id == "password"))' "$plug/runtimes/claude-code.scree
 jq '.screen_file = "other.screen.json"' "$plug/runtimes/claude-code.json" > "$plug/runtimes/claude-other.json"
 set_runtime claude-code
 start c7-own
-{ sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n> \n%s\n' "$R7" "$R7"; } > "$(fout c7-own)"
+{ sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n%s> \n%s\n' "$R7" "$IC" "$R7"; } > "$(fout c7-own)"
 set_runtime claude-other
 out=$(deliver c7-own --text "run tests" 2>&1) && rc=0 || rc=$?
 assert_eq "minor 3: a hold is read with the pattern file of the session's runtime, not runtime.main (0 bytes)" "1 0" "$rc $(inbytes c7-own)"
@@ -661,7 +673,7 @@ set_runtime claude-code
 # ---- minor 6: every CSI code is stripped before the screen is read ----------------------------
 E7=$(printf '\033')
 start c7-csi
-{ sed '$d' "$sf/limit-notice-plain.txt" | sed "s/^/${E7}[2K${E7}[38:2::255:0:0m/; s/\$/${E7}[0m/"; printf '%s\n> \n%s\n' "$R7" "$R7"; } > "$(fout c7-csi)"
+{ sed '$d' "$sf/limit-notice-plain.txt" | sed "s/^/${E7}[2K${E7}[38:2::255:0:0m/; s/\$/${E7}[0m/"; printf '%s\n%s> \n%s\n' "$R7" "$IC" "$R7"; } > "$(fout c7-csi)"
 out=$(deliver c7-csi --text "run tests" 2>&1) && rc=0 || rc=$?
 assert_eq "minor 6: a hold wrapped in colon-form and non-colour CSI codes is still a hold (0 bytes)" "1 0" "$rc $(inbytes c7-csi)"
 start c7-esc
@@ -726,8 +738,8 @@ for fx in idle-empty suggestion; do
 done
 
 # ---- a hold or a busy mark that appears between typing and Enter ----------------------------
-hf8() { sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n> \n%s\n' "$R8" "$R8"; }
-tf8() { sed '$d' "$sf/trust-dialog.txt"; printf '%s\n> \n%s\n' "$R8" "$R8"; }
+hf8() { sed '$d' "$sf/limit-notice-plain.txt"; printf '%s\n%s> \n%s\n' "$R8" "$IC" "$R8"; }
+tf8() { sed '$d' "$sf/trust-dialog.txt"; printf '%s\n%s> \n%s\n' "$R8" "$IC" "$R8"; }
 busy8() { cat "$screens/busy.txt"; }
 cp "$proj/.harness/config.json" "$base/proj8.bak"
 dcase8() { # <name> <label> <delay> <builder>
@@ -807,9 +819,128 @@ screen d9-ver busy
 : > "$(fbusy d9-ver)"
 set_wait 10
 t0=$(date +%s)
-out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 HO_FAKE_CLAUDE_VERSION_SLEEP=20 deliver d9-ver --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 HO_FAKE_CLAUDE_VERSION_SLEEP=60 deliver d9-ver --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 el=$(( $(date +%s) - t0 ))
 set_wait 2
-assert_eq "Codex P2: a version check that hangs is stopped; deliver returns within the bound (at most 16 s)" "yes" "$([ "$el" -le 16 ] && echo yes || echo "no (${el}s)")"
+# The version check would hang 60 s; returning within 40 s proves it was stopped, with room
+# for a loaded machine (the bound was 16 s against a 20 s hang, and took 20 s under load).
+assert_eq "Codex P2: a version check that hangs is stopped; deliver returns within the bound (at most 40 s)" "yes" "$([ "$el" -le 40 ] && echo yes || echo "no (${el}s)")"
 assert_eq "Codex P2: with the version unknown no chord is sent" "" "$(calls | grep "byte $(rec d9-ver .handle) " || true)"
 assert_contains "Codex P2: the skipped chord names the unknown version" "$(ledger | grep -F deliver-force-send | tail -n 1)" "unknown"
+
+# ==== Issue #104: the real Claude Code screen layout ============================================
+# tests/fixtures/screens-real holds styled screens in the real layout: the prompt is the
+# runtime's mark with a no-break space, and the runtime's status lines and agent list sit under
+# the box. At 64 columns the busy hint shows only there, cut short. No test prints a screen.
+set_runtime claude-code
+set_wait 2
+real="$HO_TESTS_DIR/fixtures/screens-real"
+rscreen() { cat "$real/$2.txt" > "$(fout "$1")"; }
+for fx in idle-full idle-status idle-box-only wide-idle-full idle-notification; do
+  start "r104-$fx"
+  rscreen "r104-$fx" "$fx"
+  out=$(deliver "r104-$fx" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "#104, H-099: the real idle screen ($fx) gets the instruction typed and proven (exit 0)" "0" "$rc"
+done
+for fx in draft-one-line draft-multi-line draft-separator-only busy-draft; do
+  start "r104-$fx"
+  rscreen "r104-$fx" "$fx"
+  out=$(deliver "r104-$fx" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "#104, H-099: a draft in the real box ($fx) gets 0 bytes (exit 1)" "1 0" "$rc $(inbytes "r104-$fx")"
+  assert_contains "#104, H-099: the real draft ($fx) is reported as the user's text" "$out" "input line holds text typed by the user"
+  assert_eq "#104, H-099: no Enter key reached the session ($fx)" "" "$(calls | grep -F "key $(rec "r104-$fx" .handle) Enter" || true)"
+done
+# busy-cut-before-hint: the status line is cut before the busy hint; the dim prompt still shows it.
+for fx in busy-full busy-status wide-busy-full busy-cut-before-hint; do
+  start "r104-$fx"
+  rscreen "r104-$fx" "$fx"
+  out=$(deliver "r104-$fx" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "#104, D42g: the real busy screen ($fx) gets 0 bytes (exit 1)" "1 0" "$rc $(inbytes "r104-$fx")"
+  assert_contains "#104, D42g: the real busy screen ($fx) is reported as busy" "$out" "the session is busy; nothing was typed"
+done
+# A hold above the real box: the T14 fixtures spliced in by script.
+rhead() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*m//g" "$real/idle-full.txt" | awk '/^────/ { exit } { print }'; }
+rtail() { awk -v e="$(printf '\033')" 'index($0, e "[38;5;244m─") == 1 { t = 1 } t { print }' "$real/$1.txt"; }
+# rhold <fixture> <real screen> <lines to drop>: a T14 fixture between the real text and the box.
+rhold() { local n; n=$(awk 'END { print NR }' "$sf/$1.txt"); rhead; head -n "$((n - $3))" "$sf/$1.txt"; rtail "$2"; }
+for tl in idle-full draft-one-line busy-full; do
+  for fx in limit-notice-plain limit-notice-short; do
+    hold_case "r104-h-$fx-$tl" "a hold ($fx) above the real box ($tl)" rhold "$fx" "$tl" 1
+  done
+  hold_case "r104-h-trust-$tl" "a hold (trust-dialog) above the real box ($tl)" rhold trust-dialog "$tl" 0
+  hold_case "r104-h-pass-$tl" "a hold (password-prompt) above the real box ($tl)" rhold password-prompt "$tl" 0
+done
+# A hold above the runtime's notification line, which is glued to the top rule of the box.
+rntail() { awk -v e="$(printf '\033')" 'index($0, e "[38;5;244m─") == 1 && !t { print prev; t = 1 } t { print } { prev = $0 }' "$real/idle-notification.txt"; }
+rnhold() { local n; n=$(awk 'END { print NR }' "$sf/$1.txt"); rhead; head -n "$((n - $2))" "$sf/$1.txt"; rntail; }
+hold_case r104-hn-limit "a hold (limit-notice-plain) above the notification line and the real box" rnhold limit-notice-plain 1
+hold_case r104-hn-limit-glued "a hold (limit-notice-plain, glued) above the notification line and the real box" rnhold limit-notice-plain 2
+hold_case r104-hn-trust "a hold (trust-dialog) above the notification line and the real box" rnhold trust-dialog 0
+
+# ==== PR #105 review round 1 (Codex P1): idle is proven, never read from a missing busy mark ====
+# A capture without colour (iTerm2 keeps none) cannot show the busy prompt colour. When the
+# status line is cut before the busy hint, such a screen looks idle. Each cut point of the real
+# busy status line, without colour, must get 0 bytes.
+plainc() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*m//g" "$1"; }
+s2=$(plainc "$real/busy-full.txt" | grep -n '⏵⏵' | cut -d: -f1)
+s2line=$(plainc "$real/busy-full.txt" | sed -n "${s2}p")
+s2len=$(printf '%s' "$s2line" | LC_ALL=C wc -c | tr -d ' ')
+cuts=0
+c=4
+while [ "$c" -lt "$s2len" ]; do
+  cut=$(printf '%s' "$s2line" | LC_ALL=C head -c "$c")
+  # a cut inside a multi-byte character is no screen line: skip it
+  if printf '%s' "$cut" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+    nm="rr1-cut-$c"
+    start "$nm"
+    plainc "$real/busy-full.txt" | awk -v n="$s2" -v l="$cut…" 'NR == n { print l; next } { print }' > "$(fout "$nm")"
+    out=$(deliver "$nm" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+    assert_eq "PR #105 round 1: a colourless busy screen, status line cut at byte $c, gets 0 bytes (exit 1)" "1 0" "$rc $(inbytes "$nm")"
+    cuts=$((cuts + 1))
+  fi
+  c=$((c + 2))
+done
+assert_eq "PR #105 round 1: the sweep covered at least 20 cut points" "yes" "$([ "$cuts" -ge 20 ] && echo yes || echo "no ($cuts)")"
+# The real idle screen without colour: idle is not proven, so nothing is typed.
+for fx in idle-full idle-status idle-box-only; do
+  start "rr1-plain-$fx"
+  plainc "$real/$fx.txt" > "$(fout "rr1-plain-$fx")"
+  out=$(deliver "rr1-plain-$fx" --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+  assert_eq "PR #105 round 1: the real idle screen without colour ($fx) gets 0 bytes (exit 1)" "1 0" "$rc $(inbytes "rr1-plain-$fx")"
+  assert_contains "PR #105 round 1: it is reported as not proven idle ($fx)" "$out" "idle is not proven"
+done
+# A styled screen whose status line is cut with no hint and whose prompt has no idle colour.
+start rr1-nohint
+{ awk -v e="$(printf '\033')" -v n="$s2" 'NR == n { print "  " e "[38;5;211m⏵⏵ bypass permissions on" e "[38;5;246m · " e "[38;5;44m12 backgrou…" e "[39m"; next }
+  index($0, "❯") { sub(/^\033\[[0-9;]*m/, "\033[1m"); print; next } { print }' "$real/idle-full.txt"; } > "$(fout rr1-nohint)"
+out=$(deliver rr1-nohint --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+assert_eq "PR #105 round 1: a cut status line with no hint and no idle prompt colour gets 0 bytes (exit 1)" "1 0" "$rc $(inbytes rr1-nohint)"
+# The real idle screen on iTerm2 (no colours): nothing is typed.
+jq '.terminal.app = "iterm2"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+start rr1-iterm
+rscreen rr1-iterm idle-full
+out=$(deliver rr1-iterm --text "run the unit tests" 2>&1) && rc=0 || rc=$?
+assert_eq "PR #105 round 1: on iTerm2 the real idle screen gets 0 bytes, idle cannot be proven (exit 1)" "1 0" "$rc $(inbytes rr1-iterm)"
+jq '.terminal.app = "tmux"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+# M1: a hold between the empty box and the status lines gets nothing typed. Only status-area
+# lines may sit under the box.
+rbox() { awk -v e="$(printf '\033')" 'index($0, e "[38;5;244m─") == 1 { c++ } { print } c == 2 { exit }' "$real/idle-full.txt"; }
+rstatus() { awk -v e="$(printf '\033')" 'index($0, e "[38;5;244m─") == 1 { c++; next } c == 2 { print }' "$real/idle-full.txt"; }
+rmid() { local n; n=$(awk 'END { print NR }' "$sf/$1.txt"); rbox; head -n "$((n - $2))" "$sf/$1.txt"; rstatus; }
+hold_case rr1-m1-trust "M1: a trust dialog between the real box and its status lines" rmid trust-dialog 0
+hold_case rr1-m1-pass "M1: a password prompt between the real box and its status lines" rmid password-prompt 0
+hold_case rr1-m1-limit "M1: a limit notice (last line dropped) between the real box and its status lines" rmid limit-notice-plain 1
+hold_case rr1-m1-limit-whole "M1: a whole limit notice between the real box and its status lines" rmid limit-notice-plain 0
+# M2: a line with two leading spaces is not the status area unless it has a status shape.
+prose2() { rbox; printf '  Neutral text that only starts with two spaces.\n'; rstatus; }
+hold_case rr1-m2-prose "M2: a two-space text line between the real box and its status lines" prose2
+# PR #105 review round 2: a stale hold, then a later indented line glued to the top rule, then
+# the real box: no hold, so the continue message is delivered.
+rlater() { local n; n=$(awk 'END { print NR }' "$sf/$1.txt"); rhead; head -n "$((n - $2))" "$sf/$1.txt"; printf '%*sThis is example output, not an active hold.\n' "$3" ''; rtail idle-full; }
+start rr2-stale
+rlater limit-notice-plain 1 10 > "$(fout rr2-stale)"
+out=$(deliver rr2-stale --text "continue" 2>&1) && rc=0 || rc=$?
+assert_eq "PR #105 round 2: a stale notice, then a later line indented 10 above the real box: no hold, delivered (exit 0)" "0" "$rc"
+# A plain two-space line right under the box is not the status line: nothing is typed.
+under1() { rbox; printf '  Neutral text that only starts with two spaces.\n'; }
+hold_case rr2-under "PR #105 round 2: a plain two-space line right under the real box" under1

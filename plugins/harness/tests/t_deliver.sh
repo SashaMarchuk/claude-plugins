@@ -1038,3 +1038,35 @@ assert_contains "named top rule: text in a named box is a draft" "$out" "input l
 nhold() { sed '$d' "$sf/$1.txt"; printf '%s\n%s> \n%s\n' "$(named9 "ho-worker-$2")" "$IC" "$(rep9 $W9)"; }
 HC_HOLD=1 hold_case nb-hold "a limit notice above a named box" nhold limit-notice-plain nb-hold
 HC_HOLD=1 hold_case nb-trust "a trust dialog above a named box" nhold trust-dialog nb-trust
+
+# ==== PR #118 validator, minors 1 and 2: no transcript folder above the project ===============
+# A forged record may name a folder that holds the project. A glob or a cached path from there
+# could reach a transcript planted inside the project. Such a root or data folder is refused,
+# and every candidate's own folder must lie outside the project.
+set_runtime claude-code
+jq '.transcript.glob = "*/{session_id}.jsonl"' "$plug/runtimes/claude-code.json" > "$plug/runtimes/claude-wide.json"
+above=$(cd "$(dirname "$proj")" && pwd -P)
+aproof() { "$h" session "$run" proof "$1" "$2" 2>&1 | cut -d' ' -f1-3 || true; }
+plant() { printf '%s\n' "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"$2: go\"} }" > "$proj/$(rec "$1" .session_id).jsonl"; }
+# M1: the linked data folder resolves to a folder above the project, and the record names it.
+start ab1
+mkdir -p "$base/acct-ab1"
+ln -s "$above" "$base/acct-ab1/projects"
+plant ab1 ho-abv00001
+jq --arg r "$base/acct-ab1" --arg p "$above" '.transcript_root = $r | .transcript_prefix_real = $p | del(.transcript)' \
+  "$run/sessions/ab1.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/ab1.json"
+assert_eq "M1: a linked data folder that holds the project is refused" "harness: no transcript" "$(aproof ab1 ho-abv00001)"
+# M2: a recorded transcript folder above the project, reached by the glob.
+start ab2
+plant ab2 ho-abv00002
+jq --arg r "$above" '.runtime = "claude-wide" | .transcript_root = $r | del(.transcript)' \
+  "$run/sessions/ab2.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/ab2.json"
+assert_eq "M2: a transcript folder above the project cannot reach a planted transcript by the glob" "harness: no transcript" "$(aproof ab2 ho-abv00002)"
+# M2: the same folder, reached by a cached path into the project.
+start ab3
+plant ab3 ho-abv00003
+jq --arg r "$above" --arg t "$proj/$(rec ab3 .session_id).jsonl" '.transcript_root = $r | .transcript = $t | del(.transcript_prefix_real)' \
+  "$run/sessions/ab3.json" > "$base/r.json" && mv "$base/r.json" "$run/sessions/ab3.json"
+assert_eq "M2: a transcript folder above the project cannot reach a planted transcript by a cached path" "harness: no transcript" "$(aproof ab3 ho-abv00003)"
+rm -f "$proj"/*.jsonl
+write_user

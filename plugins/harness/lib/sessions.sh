@@ -15,6 +15,9 @@
 #   <run>/sessions/<name>.transcript_root
 #                                  the transcript folder, worked out by the launcher in the
 #                                  session's own folder and environment; copied into the record
+#   <run>/sessions/<name>.transcript_prefix_real
+#                                  where the runtime's data folder below it resolved at launch
+#                                  (it may be a link); copied into the record
 #   <run>/sessions/<name>.closing  present while a close is under way (stops model fallback)
 #   <run>/sessions/<name>.failed   written by the launcher when the session could not start
 #   <run>/launchers/<name>.sh      the generated launcher

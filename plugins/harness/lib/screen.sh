@@ -365,12 +365,17 @@ ho_screen_classify() {
     [ -n "$rprof" ] || rprof=$(ho_runtime_profile 2>/dev/null) || rprof=""
     rch=$(jq -r '.screen.rule_char // "" | strings' "$rprof" 2>/dev/null) || rch=""
     norm=$(umask 077 && mktemp "$(dirname "$file")/.named.XXXXXX" 2>/dev/null) || { echo unknown; return 70; }
+    # The copy holds screen text: it is removed if this step is stopped (callers run this in
+    # a command substitution, so the trap is this subshell's own).
+    HO_SCREEN_NORM=$norm
+    trap 'rm -f "$HO_SCREEN_NORM"' EXIT HUP INT TERM
     while IFS= read -r line || [ -n "$line" ]; do
       if plainl=$(ho_screen_named_rule "$line" "$rch" "$box"); then printf '%s\n' "$plainl"; else printf '%s\n' "$line"; fi
     done < "$file" > "$norm"
     rc=0
     ho_screen_classify "$norm" "$profile" || rc=$?
     rm -f "$norm"
+    trap - EXIT HUP INT TERM
     return "$rc"
   fi
   n=$(printf '%s' "$data" | jq '.shapes | length')

@@ -284,14 +284,20 @@ rm -rf "$(draft_of "$out")" "$base/user/runtimes/zedprivate-rt.json"
 cp "$base/config.keep2" "$proj/.harness/config.json"
 
 # ---- A linked runs folder still has a last run ---------------------------------------------
-proj3="$base/proj3"; mkdir -p "$proj3/.harness" "$base/elsewhere-runs"
+proj3="$base/proj3"; mkdir -p "$proj3/.harness" "$base/far/runs"
 cp "$proj/.harness/config.json" "$proj3/.harness/config.json"
-ln -s "$base/elsewhere-runs" "$proj3/.harness/runs"
+ln -s "$base/far/runs" "$proj3/.harness/runs"
 (cd "$proj3" && HO_PROJECT_DIR="$proj3" "$h" run new >/dev/null)
 rc=0; out=$(cd "$proj3" && HO_PROJECT_DIR="$proj3" "$h" feedback preview "$base/d1.txt") || rc=$?
 assert_eq "D43 run state: a project with a linked runs folder gives a preview" "0" "$rc"
 assert_contains "D43 run state: a linked runs folder still has a last run" "$out" "- Last run: not stopped,"
-rm -rf "$proj3" "$base/elsewhere-runs" "$(draft_of "$out")"
+rm -rf "$(draft_of "$out")"
+# A STOP file beside the physical runs folder stops the run, as ho_stopped sees it.
+: > "$base/far/STOP"
+rc=0; out=$(cd "$proj3" && HO_PROJECT_DIR="$proj3" "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "D43 run state: a preview with a STOP file at the physical runs location exits 0" "0" "$rc"
+assert_contains "D43 run state: a STOP file beside the physical runs folder counts as stopped" "$out" "- Last run: stopped,"
+rm -rf "$proj3" "$base/far" "$(draft_of "$out")"
 
 # ---- The version probe gets no caller environment but HOME and PATH ---------------------
 # BASH_ENV runs a file before a bash script; NODE_OPTIONS and PYTHONPATH load project code in

@@ -407,14 +407,7 @@ ho_in_tick() {
   ho_in_targets >/dev/null || return
   ho_in_seconds readiness_timeout_seconds 300 10 1800 >/dev/null || return
   ho_tk_settings || return
-  ho_stopped || rc=$?
-  if [ "$rc" -ne 1 ]; then echo stopped; return "$HO_EXIT_STOPPED"; fi
-  # An ended run (its newest run-end line has no later resume, as lifecycle check reads it)
-  # claims nothing: a ticket taken now would have no run to work in (H-079).
-  if ho_run_ended; then
-    echo ended
-    return "$HO_EXIT_STOPPED"
-  fi
+  ho_in_halted || return
   if [ -f "$(ho_in_state)" ]; then
     wait=$(ho_in_wait "$interval" "$(ho_in_errors)")
     mtime=$(ho_tk_lock_mtime "$(ho_in_state)")
@@ -433,9 +426,23 @@ ho_in_tick() {
   [ -n "$max" ] && [ "$max" -lt "$free" ] && free=$max
   for id in $ids; do
     [ "$started" -lt "$free" ] || break
+    # A stop or a run end recorded during an earlier pickup (a readiness check can take
+    # minutes) is seen before the next claim (D25a).
+    ho_in_halted || return
     if ho_in_pickup "$id"; then started=$((started + 1)); fi
   done
   return 0
+}
+
+# ho_in_halted: 0 when intake may claim; otherwise prints "stopped" or "ended" and returns 75.
+# A stop state that cannot be read counts as stopped. An ended run (its newest run-end line has
+# no later resume, as lifecycle check reads it) claims nothing: a ticket taken now would have
+# no run to work in (H-079).
+ho_in_halted() {
+  local rc=0
+  ho_stopped || rc=$?
+  if [ "$rc" -ne 1 ]; then echo stopped; return "$HO_EXIT_STOPPED"; fi
+  if ho_run_ended; then echo ended; return "$HO_EXIT_STOPPED"; fi
 }
 
 ho_in_poll() {

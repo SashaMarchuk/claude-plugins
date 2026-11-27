@@ -120,3 +120,24 @@ assert_eq "H-086 D25a a ticket not picked up before the soft:ticket stop does no
   assert_eq "H-005 the run's own ticket is the one claimed" "in-progress" "$sa"
 )
 
+
+# D25a H-086: a stop recorded while the first ticket's readiness check runs stops the tick before
+# the next claim; the tickets after it stay ready.
+run4=$(cd "$proj" && "$h" run new --workers 5)
+mkdir -p "$base/stop-shim"
+cat > "$base/stop-shim/claude" <<SHIM
+#!/usr/bin/env bash
+# The first judge records a stop, as an owner would while it runs; then the fake claude answers.
+[ -e "$base/stop-shim/done" ] || { : > "$base/stop-shim/done"; "$h" state "$run4" stop "stop during the judge" >/dev/null; }
+exec "$HO_TESTS_DIR/fake-bin/claude" "\$@"
+SHIM
+chmod +x "$base/stop-shim/claude"
+ts1=$(ticket "Before the stop")
+ts2=$(ticket "After the stop")
+label alice "$ts1" ready
+label alice "$ts2" ready
+rc=0; out=$(PATH="$base/stop-shim:$PATH" "$h" intake "$run4" tick) || rc=$?
+assert_eq "D25a a stop during the tick allows exactly one claim" "1" "$(jq -c 'select(.kind == "pickup")' "$run4/ledger.jsonl" | grep -c . || true)"
+assert_eq "D25a the ticket after the stop is not claimed" '["harness:ready"]' "$(labels "$ts2")"
+assert_contains "D25a the tick says the run is stopped" "$out" "stopped"
+assert_eq "D25a a tick that sees a stop before a claim exits 75" "75" "$rc"

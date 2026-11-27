@@ -120,7 +120,8 @@ ho_au_profile() {
   [ ! -L "$f" ] || { ho_au_err "$f is a link; a profile is never read through a link"; return 78; }
   if [ -f "$f" ]; then
     prof=$(cat "$f") || return 78
-    [ -z "$(printf '%s' "$prof" | jq 'del(.name, .source)' 2>/dev/null | ho_au_problems 0)" ] \
+    printf '%s' "$prof" | jq -e 'type == "object" and (.name | type) == "string"' >/dev/null 2>&1 \
+      && [ -z "$(printf '%s' "$prof" | jq 'del(.name, .source)' 2>/dev/null | ho_au_problems 0)" ] \
       || { ho_au_err "the run's profile $f is unreadable or damaged"; return 78; }
     printf '%s\n' "$prof"
     return 0
@@ -154,17 +155,18 @@ ho_au_merge_conditions() {
   if [ -L "$facts" ] || [ ! -f "$facts" ] || ! jq -e 'type == "object"' "$facts" >/dev/null 2>&1; then
     echo "no readable merge facts"; return 0
   fi
-  jq -r --argjson zero "$(printf '%s' "$prof" | jq '.allow_zero_tests')" '
+  out=$(jq -r --argjson zero "$(printf '%s' "$prof" | jq '.allow_zero_tests')" '
     def int: type == "number" and . == floor and . >= 0;
     (if .validator == "passed" then empty else "no clean validator pass" end),
-    (if (.tests.total | int) and (.tests.failed | int) then
+    (if (.tests | type) == "object" and (.tests.total | int) and (.tests.failed | int) then
        (if .tests.failed == 0 then empty else "\(.tests.failed) test(s) failed" end),
        (if .tests.total > 0 or $zero then empty else "zero tests ran" end)
      else "the test count is unknown" end),
     (if .ci == "green" then empty else "CI is not green" end),
     (if (.open_questions | int) and .open_questions == 0 then empty else "an open question is not answered (or the count is unknown)" end),
     (if (.paths | type) == "array" and (.paths | all(type == "string" and (test("[\u0000-\u001f]") | not)))
-     then empty else "the changed paths are unknown" end)' "$facts"
+     then empty else "the changed paths are unknown" end)' "$facts" 2>/dev/null) || out="the merge facts cannot be read"
+  [ -z "$out" ] || printf '%s\n' "$out"
   jq -e '(.paths | type) == "array" and (.paths | all(type == "string" and (test("[\u0000-\u001f]") | not)))' "$facts" >/dev/null 2>&1 || return 0
   pats=$(ho_au_always_human) || { echo "the always-a-human list cannot be read"; return 0; }
   [ -n "$pats" ] || return 0
@@ -217,6 +219,11 @@ ho_au_decide() {
         pr-ready:draft) HO_AU_RC=$HO_EXIT_DENIED; HO_AU_WHY="the profile opens a draft PR only; a human marks it ready"; return ;;
       esac
       [ "$push" = true ] || { HO_AU_RC=$HO_EXIT_DENIED; HO_AU_WHY="the profile allows no push, so no PR can open"; return; }
+      # The pr gate is passed after the draft PR opens: a human approves the PR before it is
+      # marked ready (D12 gated opens its draft and stops there).
+      if [ "$action" = pr-ready ]; then
+        ho_au_gate_point "$prof" "$for" pr || { HO_AU_RC=$?; HO_AU_WHY="pr is a human gate: a human approves the PR with harness autonomy approve before it is marked ready"; return; }
+      fi
       HO_AU_WHY="a $pr PR is allowed" ;;
     merge)
       if [ "$local" = 1 ]; then
@@ -245,6 +252,7 @@ ho_au_decide() {
       [ "$rc" -eq 0 ] || { HO_AU_RC=78; HO_AU_WHY="the deploy setting cannot be read"; return; }
       [ -n "$dep" ] || { HO_AU_RC=$HO_EXIT_DENIED; HO_AU_WHY="the project has no deployment configured (deploy.use)"; return; }
       HO_AU_WHY="production deploy is allowed by the user's own profile" ;;
+    *) HO_AU_RC=$HO_EXIT_DENIED; HO_AU_WHY="unknown action $action" ;;
   esac
 }
 

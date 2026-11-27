@@ -119,6 +119,10 @@ assert_contains "S8-08b full: the refusal names the path" "$(cat "$PWD/err")" "s
 facts '.paths = ["docs/x.md"]'
 assert_eq "S8-08b full: a change outside the list may merge" 0 "$(check_rc merge --facts "$PWD/facts.json")"
 printf '%s\n' '{"schemaVersion":2}' > "$PWD/user/config.json"
+facts '.tests = 12'
+assert_eq "S8-08b full: tests that are not an object with counts are refused" 77 "$(check_rc merge --facts "$PWD/facts.json")"
+facts '.tests = "x"'
+assert_eq "S8-08b full: a test count jq cannot read is refused, never taken as held" 77 "$(check_rc merge --facts "$PWD/facts.json")"
 printf '%s\n' 'not json' > "$PWD/facts.json"
 assert_eq "S8-08b full: unreadable facts are refused" 77 "$(check_rc merge --facts "$PWD/facts.json")"
 "$h" tickets add "Ticket three" "$PWD/body.md" in-progress >/dev/null
@@ -166,6 +170,23 @@ profile full
 assert_exit "H-048: a ready-made profile that deploys to production is refused" 78 env HO_AUTONOMY_DIR="$PWD/au" "$h" autonomy show
 jq '.merge = "classifier"' "$dir/full.json" > "$PWD/au/full.json"
 assert_exit "H-047 D12: a ready-made profile with the classifier is refused" 78 env HO_AUTONOMY_DIR="$PWD/au" "$h" autonomy show
+
+# ---- a damaged run profile is refused, never read as empty -------------------------------------
+profile full
+newrun
+check_rc push >/dev/null
+: > "$run/autonomy.json"
+assert_eq "H-036: an empty run profile is a config error, not an allow" 78 "$(check_rc merge --local --for a)"
+printf '%s\n' '"text"' > "$run/autonomy.json"
+assert_eq "H-036: a run profile that is not an object is a config error" 78 "$(check_rc step --step plan)"
+
+# ---- the pr gate: a draft opens, marking it ready waits for a human -----------------------------
+custom "$(printf '%s' "$base" | jq -c '.push = true | .pr = "ready" | .gates = {"pr": "human"}')"
+newrun
+assert_eq "H-037 custom: with a pr gate the draft PR may open" 0 "$(check_rc pr --for 5)"
+assert_eq "H-037 custom: with a pr gate marking the PR ready waits for a human" 76 "$(check_rc pr-ready --for 5)"
+"$h" autonomy "$run" approve 5 pr >/dev/null
+assert_eq "H-037 custom: after approval the PR may be marked ready" 0 "$(check_rc pr-ready --for 5)"
 
 # ---- H-036: a run keeps the profile it read at its start ---------------------------------------
 profile safe

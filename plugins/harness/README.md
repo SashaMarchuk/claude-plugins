@@ -150,7 +150,7 @@ A runtime profile is one data file per tool (D31, D37-RUNTIME-2). Two ship in `r
 - **`soft:ticket`** lets each ticket that began before the stop run to its end: its next steps may begin, their sessions launch, and its lane merges. No new ticket begins. With `--ticket`, only the named tickets go on, and the other tickets get `soft:step`.
 - **The newest stop is in force** until `state <run-dir> resume`. While the STOP file exists the run is at least as strict as `soft:step`.
 - **Stop text.** The verb prints the stop id and the variant's standard text. It does not deliver it: send it with `session deliver <name> --text "<text>" --id <stop id>`. Hard stops and the own message come later (#67).
-- **Step gate.** `state <run-dir> begin --ticket T --step S` asks before a step begins: exit 0 and one `step-begin` ledger line, or 75 when a stop lets nothing new start. An unknown stop state also gives 75. A ticket counts as begun when a `step-begin` line for it, or the launch of a session with `--ticket` for it, comes before the stop.
+- **Step gate.** `state <run-dir> begin --ticket T --step S` asks before a step begins: exit 0 and one `step-begin` ledger line, or 75 when a stop lets nothing new start. An unknown stop state also gives 75. A ticket counts as begun when a `step-begin` line for it, the launch of a session with `--ticket` for it, or its intake `pickup` line comes before the stop.
 - `state <run-dir> stop-state` prints the stop in force as one JSON line.
 
 ## End of run and standby

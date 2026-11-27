@@ -92,3 +92,11 @@ assert_eq "H-079 an ended run: poll exits 75" "75" "$rc"
 "$h" state "$run2" resume >/dev/null
 out=$("$h" intake "$run2" tick)
 assert_contains "H-079 after a resume the ended run takes work again" "$out" "start $te"
+
+# H-086 D25a: a ticket that intake took before a soft:ticket stop counts as begun, so its first
+# step and its worker may still start; a ticket intake did not take stays refused.
+"$h" state "$run2" stop --type soft:ticket "finish what runs" >/dev/null
+rc=0; "$h" state "$run2" begin --ticket "$te" --step plan >/dev/null 2>&1 || rc=$?
+assert_eq "H-086 D25a a ticket picked up before a soft:ticket stop may begin its first step" "0" "$rc"
+rc=0; "$h" state "$run2" begin --ticket 999 --step plan >/dev/null 2>&1 || rc=$?
+assert_eq "H-086 D25a a ticket not picked up before the soft:ticket stop does not begin (75)" "75" "$rc"

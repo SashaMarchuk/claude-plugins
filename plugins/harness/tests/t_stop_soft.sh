@@ -75,6 +75,15 @@ assert_eq "D25a: soft:ticket launches no worker for a ticket that never began (7
 assert_eq "D25a: soft:ticket launches no worker that names no ticket (75)" 75 "$(wl_rc "$r3" t4)"
 assert_eq "H-086: a ticket id given as 01 is ticket 1" 0 "$(begin_rc "$r3" 01 s3)"
 
+# ---- soft:ticket: a ticket whose session launched before the stop counts as begun -----------
+# No begin call came first: the launch with --ticket is enough, so the ticket can still finish.
+r3b=$("$h" run new --workers 5)
+wl "$r3b" l1 --ticket 4 >/dev/null
+"$h" state "$r3b" stop --type soft:ticket >/dev/null
+assert_eq "H-086: soft:ticket launches the next session of a ticket that launched before the stop" 0 "$(wl_rc "$r3b" l2 --ticket 4)"
+assert_eq "H-086: that ticket's next step may begin" 0 "$(begin_rc "$r3b" 4 s2)"
+assert_eq "D25a: a ticket that only launched after the stop does not count as begun (75)" 75 "$(wl_rc "$r3b" l3 --ticket 5)"
+
 # ---- soft:ticket per ticket: the named tickets run to their end, the others get soft:step -----
 r4=$("$h" run new --workers 5)
 "$h" state "$r4" begin --ticket 1 --step s1 >/dev/null

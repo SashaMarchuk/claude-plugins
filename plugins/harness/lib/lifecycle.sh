@@ -36,6 +36,11 @@ ho_life_settings() {
 ho_life_ids() {
   (
     [ -n "${HO_TICKETS_DIR:-}" ] || export HO_TICKETS_DIR="$HO_PROJECT_DIR/.harness/tickets"
+    # A missing local ticket folder lists nothing, which must never read as "all done".
+    if [ "${HO_TICKETS_SOURCE:-local}" = local ] && [ ! -d "$HO_TICKETS_DIR" ]; then
+      printf 'harness: the ticket folder %s does not exist\n' "$HO_TICKETS_DIR" >&2
+      exit 74
+    fi
     ho_tickets ids "$1"
   )
 }
@@ -62,9 +67,10 @@ ho_life_close() {
   if [ "$rc" -eq 0 ]; then ho_life_say "closed $1"; else ho_life_say "left-open $1 exit $rc"; fi
 }
 
-# ho_life_sweep <all|workers>: close the sessions of this run that are not closed. "workers"
-# keeps the orchestrator and the watcher. The calling session is never closed by itself: it is
-# named as "self <name>" and ends its own session. A record of another run is never touched.
+# ho_life_sweep <workers|keepers>: close the sessions of this run that are not closed. "workers"
+# is every session but the orchestrator and the watcher; "keepers" is those two. The calling
+# session is never closed by itself: it is named as "self <name>" and ends its own session. A
+# record of another run is never touched.
 ho_life_sweep() {
   local which=$1 f name role
   for f in "$HO_RUN_DIR"/sessions/*.json; do
@@ -74,11 +80,14 @@ ho_life_sweep() {
     name=$(jq -r '.name // ""' "$f" 2>/dev/null)
     role=$(jq -r '.role // ""' "$f" 2>/dev/null)
     [ "$name" = "$(basename "$f" .json)" ] || continue
-    if [ "$which" = workers ]; then
-      case $role in orchestrator | watcher) continue ;; esac
-    fi
+    case $which:$role in
+      workers:orchestrator | workers:watcher) continue ;;
+      keepers:orchestrator | keepers:watcher) ;;
+      keepers:*) continue ;;
+    esac
     if ho_life_self "$f"; then
-      ho_ledger_append session-close-self-skipped name "$name"
+      ho_ledger_events | jq -e --arg n "$name" 'select(.kind == "session-close-self-skipped" and .name == $n)' >/dev/null 2>&1 \
+        || ho_ledger_append session-close-self-skipped name "$name"
       ho_life_say "self $name: this session ends itself"
       continue
     fi
@@ -92,6 +101,7 @@ ho_life_live_others() {
   local f
   for f in "$HO_RUN_DIR"/sessions/*.json; do
     [ -f "$f" ] || continue
+    [ "$(jq -r 'if type == "object" then (.run // "") else "" end' "$f" 2>/dev/null)" = "$HO_RUN_ID" ] || continue
     case $(jq -r '.role // ""' "$f" 2>/dev/null) in orchestrator | watcher) continue ;; esac
     case $(ho_live_verdict "$f") in dead | closed) ;; *) basename "$f" .json ;; esac
   done
@@ -109,12 +119,19 @@ ho_life_has() { printf '%s\n' $2 | grep -qx -- "$1"; }
 #   wait-blocked  only human-blocked tickets remain: workers close, nothing is sent (S8-20a)
 #   standby       all tickets done, standby on: finished terminals close (H-080)
 #   end           the run ends: every session of this run closes (H-079, D37-LIFECYCLE-3)
-#   ended         the run ended earlier
+#   ended         the run ended earlier; a session still open is closed again
 #   unknown       the stop state or the ticket queue cannot be read: nothing changes (exit 2)
 ho_life_check() {
   local last st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live prev
   last=$(ho_ledger_events | jq -r 'select(.kind == "run-end" or .kind == "resume") | .kind' | tail -n 1)
-  [ "$last" != run-end ] || { ho_life_say ended; return 0; }
+  if [ "$last" = run-end ]; then
+    # A close that failed at the run end (a busy session, a terminal that could not be reached)
+    # is tried again at every later call; closed records are skipped.
+    ho_life_say ended
+    ho_life_sweep workers
+    ho_life_sweep keepers
+    return 0
+  fi
   ho_life_settings || return $?
   ho_stopped 2>/dev/null || st=$?
   [ "$st" -ne 2 ] || { ho_life_say unknown; echo "harness: the stop state is unknown; nothing changed" >&2; return 2; }
@@ -156,7 +173,7 @@ ho_life_check() {
     end)
       ho_ledger_append run-end reason "$reason"
       ho_life_sweep workers
-      ho_life_sweep all
+      ho_life_sweep keepers
       ;;
   esac
   return 0

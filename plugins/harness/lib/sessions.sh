@@ -650,7 +650,7 @@ ho_session_launch_one() {
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
       transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
-  ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"
+  ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name" ticket "$ticket"
 
   # A worker opens a terminal only while it holds its slot. Only a proven end frees a slot, and
   # this launch is alive, so this holds; the check keeps any later change from opening a worker

@@ -133,6 +133,33 @@ p6=$(pid "$r6" orch)
 assert_eq "H-079: a check from outside the run's sessions ends the run" "end" "$(decision "$r6")"
 assert_eq "D37-LIFECYCLE-3: then the orchestrator closes too" gone "$(gone "$p6")"
 
+# ---- H-079: a close that fails at the run end is tried again by the next check ---------------
+r5b=$("$h" run new --workers 5)
+sess "$r5b" worker w1
+sess "$r5b" worker w2
+p1=$(pid "$r5b" w1) p2=$(pid "$r5b" w2)
+cp "$r5b/sessions/w2.json" "$base/w2.json"
+jq 'del(.term_tag)' "$base/w2.json" > "$r5b/sessions/w2.json"
+out=$(check "$r5b")
+assert_eq "H-079: the run ends" "end" "$(printf '%s\n' "$out" | head -n 1)"
+assert_contains "H-079: a session that could not be closed is named as left open" "$out" "left-open w2"
+assert_eq "H-079: the other worker closed" gone "$(gone "$p1")"
+assert_eq "test setup: w2 is still running" alive "$(up "$p2")"
+cp "$base/w2.json" "$r5b/sessions/w2.json"
+assert_eq "H-079: the next check still reads ended" "ended" "$(decision "$r5b")"
+assert_eq "H-079: and it closes the session left open at the run end" gone "$(gone "$p2")"
+
+# ---- D37-LIFECYCLE-3: a worker that calls check at run end is named once ----------------------
+r5c=$("$h" run new --workers 5)
+sess "$r5c" worker w1
+wsid=$(rec w1 .session_id "$r5c")
+out=$(HO_SESSION_NAME=w1 HO_SESSION_ID=$wsid "$h" lifecycle "$r5c" check)
+assert_eq "D37-LIFECYCLE-3: the calling worker is named once" 1 "$(printf '%s\n' "$out" | grep -c '^self w1')"
+HO_SESSION_NAME=w1 HO_SESSION_ID=$wsid "$h" lifecycle "$r5c" check >/dev/null
+assert_eq "D37-LIFECYCLE-3: its self line is written to the ledger once" 1 \
+  "$(jq -r 'select(.kind == "session-close-self-skipped") | .name' "$r5c/ledger.jsonl" | wc -l | tr -d ' ')"
+"$h" session "$r5c" close w1 >/dev/null 2>&1 || true
+
 # ---- H-080: standby on: finished terminals close, the orchestrator keeps watching -------------
 r7=$("$h" run new --workers 5 --standby on)
 sess "$r7" orchestrator orch
@@ -175,6 +202,21 @@ rc=0; HO_TICKETS_SOURCE=nowhere "$h" lifecycle "$r9" check >/dev/null 2>&1 || rc
 assert_eq "I3: an unreadable ticket list gives unknown (exit 2)" 2 "$rc"
 ends=$(jq -r 'select(.kind == "run-end") | .kind' "$r9/ledger.jsonl")
 assert_eq "I3: unknown closes nothing and ends nothing" "alive none" "$(up "$p9") ${ends:-none}"
+
+# ---- a missing ticket folder is never "all done" ------------------------------------------------
+r10=$("$h" run new --workers 5)
+sess "$r10" orchestrator orch
+p10=$(pid "$r10" orch)
+rc=0; HO_TICKETS_DIR="$base/no-such-folder" "$h" lifecycle "$r10" check >/dev/null 2>&1 || rc=$?
+assert_eq "I3: a missing ticket folder gives unknown (exit 2)" 2 "$rc"
+assert_eq "I3: and closes nothing" alive "$(up "$p10")"
+
+# ---- H-081: a record of another run inside this run's folder is never closed ------------------
+cp "$other/sessions/x1.json" "$r10/sessions/x1.json"
+"$h" lifecycle "$r10" done x1 >/dev/null 2>&1 || true
+HO_TICKETS_DIR="$base/tk-d" "$h" lifecycle "$r10" check >/dev/null 2>&1 || true
+assert_eq "H-081: a copied record of another run is left alone by done and by the run-end sweep" alive "$(up "$px")"
+rm -f "$r10/sessions/x1.json"
 
 # ---- H-081: no check closed the session of the other run ---------------------------------------
 assert_eq "H-081: the session of another run is never closed" alive "$(up "$px")"

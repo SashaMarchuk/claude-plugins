@@ -129,7 +129,7 @@ A runtime profile is one data file per tool (D31, D37-RUNTIME-2). Two ship in `r
 - **`soft:ticket`** lets each ticket that began before the stop run to its end: its next steps may begin, their sessions launch, and its lane merges. No new ticket begins. With `--ticket`, only the named tickets go on, and the other tickets get `soft:step`.
 - **The newest stop is in force** until `state <run-dir> resume`. While the STOP file exists the run is at least as strict as `soft:step`.
 - **Stop text.** The verb prints the stop id and the variant's standard text. It does not deliver it: send it with `session deliver <name> --text "<text>" --id <stop id>`. Hard stops and the own message come later (#67).
-- **Step gate.** `state <run-dir> begin --ticket T --step S` asks before a step begins: exit 0 and one `step-begin` ledger line, or 75 when a stop lets nothing new start. An unknown stop state also gives 75. A ticket counts as begun when a `step-begin` line for it comes before the stop.
+- **Step gate.** `state <run-dir> begin --ticket T --step S` asks before a step begins: exit 0 and one `step-begin` ledger line, or 75 when a stop lets nothing new start. An unknown stop state also gives 75. A ticket counts as begun when a `step-begin` line for it, or the launch of a session with `--ticket` for it, comes before the stop.
 - `state <run-dir> stop-state` prints the stop in force as one JSON line.
 
 ## End of run and standby
@@ -142,7 +142,8 @@ A runtime profile is one data file per tool (D31, D37-RUNTIME-2). Two ship in `r
 - **`wait-blocked`**: only human-blocked tickets remain. The same as `wait-review`, with no nudges.
 - **`standby`**: all tickets are done and standby is on. The finished sessions close. The orchestrator and the watcher keep running, and no other session starts.
 - **`end`**: all tickets are done and standby is off, or only human-blocked tickets remain with `on_only_human_blocked` set to `end`, or a soft stop has nothing left to finish. One `run-end` line goes to the ledger, and every session of the run closes. The calling session is never closed by itself; the output names it as `self <name>`.
-- **`ended`**: the run ended earlier. **`unknown`** (exit 2): the stop state or the ticket queue cannot be read, and nothing changes.
+- **`ended`**: the run ended earlier. A session that could not be closed at the run end (busy, or its terminal could not be reached) is tried again at every later call.
+- **`unknown`** (exit 2): the stop state or the ticket queue cannot be read, or the local ticket folder does not exist, and nothing changes.
 
 `lifecycle <run-dir> done <name>` records that a session's task ended and closes it (H-081). It refuses the orchestrator and the watcher, which close only at run end, and a session of another run.
 

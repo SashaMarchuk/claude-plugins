@@ -1,8 +1,9 @@
-# Context check of /harness:feedback (H-140, D43, owner decision 2026-11-27 on #92), loaded by lib/feedback.sh with
+# Context check of /harness:feedback (H-140, D43, D60), loaded by lib/feedback.sh with
 # `jq -L lib 'include "feedback"; ...'`.
 #
-# The person's description is sent as written (owner decision 2026-11-27 on #92). The added context is built from named
-# fields only; the send gate checks each of its lines against the fixed field grammar below.
+# The person's description is sent as written: D60 (owner decision 2026-11-27 on #92). The
+# added context is built from named fields only; the send gate checks each of its lines
+# against the fixed field grammar below.
 
 def HEADER: "Technical context (added by the harness feedback command):";
 def esc: gsub("(?<c>[.^$*+?()\\[\\]{}|\\\\/-])"; "\\\(.c)");

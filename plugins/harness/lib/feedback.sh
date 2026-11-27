@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Feedback (H-140, D43, owner decision 2026-11-27 on #92): file a problem with the harness as one issue in the plugin's own
+# Feedback (H-140, D43, D60): file a problem with the harness as one issue in the plugin's own
 # repository, with no labels, after the person's yes.
 #
 #   harness feedback preview <description-file>
@@ -15,7 +15,8 @@
 # count, fixed role names, ticket counts per state, engine error kinds from a fixed list). Each
 # field has a fixed shape or vocabulary; anything else shows as "unknown" or "other". No free
 # text (ledger value, ticket text, runtime output) is ever copied. The person's description is
-# sent as written (owner decision 2026-11-27 on #92): the person answers for what they paste, and the preview shows it all.
+# sent as written: D60 (owner decision 2026-11-27 on #92). The person answers for what they
+# paste, and the preview shows it all.
 #
 # Exit codes: 64 usage (also a description over 60000 bytes: the tracker limits the issue
 # body), 65 refused (no yes, wrong code, a context line outside the fixed fields), 66 no draft,

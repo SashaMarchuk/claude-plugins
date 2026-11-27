@@ -323,7 +323,8 @@ rm -f "$PWD/gate.pid" "$PWD/gsleep.pid"
 setgate "echo \$\$ > '$PWD/gate.pid'; sleep 30 & echo \$! > '$PWD/gsleep.pid'; wait"
 confirmed_before=$(ledger_has merge-confirmed)
 "$h" loop "$run" merge p >/dev/null 2>"$PWD/err" & hp=$!
-n=0; while [ ! -s "$PWD/gsleep.pid" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+n=0; while [ ! -s "$PWD/gsleep.pid" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+[ -s "$PWD/gsleep.pid" ] || bad "test setup: the gate did not start" ""
 kill -TERM "$hp"
 rc=0; wait "$hp" || rc=$?
 assert_eq "H-046 signal: a merge stopped by TERM exits 75" 75 "$rc"
@@ -387,16 +388,21 @@ user_gate
 mkdir -p "$PWD/tshim"
 cat > "$PWD/tshim/tail" <<EOS
 #!/bin/bash
-if [ -e "$PWD/stall-armed" ]; then rm -f "$PWD/stall-armed"; touch "$PWD/stalling"; sleep 2; fi
+if [ -e "$PWD/stall-armed" ]; then rm -f "$PWD/stall-armed"; touch "$PWD/stalling"
+  i=0; while [ -e "$PWD/stall-hold" ] && [ \$i -lt 600 ]; do sleep 0.1; i=\$((i + 1)); done; fi
 exec "$(command -v tail)" "\$@"
 EOS
 chmod +x "$PWD/tshim/tail"
 lane v v.txt "from v"; verdict v passed
 rm -f "$PWD/stalling"
+: > "$PWD/stall-hold"
 setgate "test -f shared.txt && touch '$PWD/stall-armed'"
 PATH="$PWD/tshim:$PATH" "$h" loop "$run" merge v >/dev/null 2>"$PWD/err" & hp=$!
-n=0; while [ ! -e "$PWD/stalling" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+n=0; while [ ! -e "$PWD/stalling" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+[ -e "$PWD/stalling" ] || bad "test setup: the merge-confirmed line did not start" ""
+# The shim holds the line until the signal is sent: the signal lands inside it, at any load.
 kill -TERM "$hp"
+rm -f "$PWD/stall-hold"
 rc=0; wait "$hp" || rc=$?
 assert_eq "H-046 signal: TERM during the merge-confirmed line lets the merge finish (exit 0)" 0 "$rc"
 assert_eq "H-046 signal: that merge has its merge-confirmed line" "v" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "v") | .lane' "$run/ledger.jsonl")"
@@ -443,12 +449,15 @@ for sig in TERM HUP; do
   l=g$(printf %s "$sig" | tr A-Z a-z)
   lane "$l" "$l.txt" "from $sig" >/dev/null; verdict "$l" passed
   rm -f "$PWD/stalling"
+  : > "$PWD/stall-hold"
   setgate "test -f shared.txt && touch '$PWD/stall-armed'"
   set -m
   PATH="$PWD/tshim:$PATH" "$h" loop "$run" merge "$l" >/dev/null 2>"$PWD/err" & hp=$!
   set +m
-  n=0; while [ ! -e "$PWD/stalling" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+  n=0; while [ ! -e "$PWD/stalling" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+  [ -e "$PWD/stalling" ] || bad "test setup: the merge-confirmed line did not start ($sig)" ""
   kill "-$sig" -- "-$hp" 2>/dev/null || true
+  rm -f "$PWD/stall-hold"
   rc=0; wait "$hp" || rc=$?
   assert_eq "B2: $sig to the whole group during the merge-confirmed line lets the merge finish (exit 0)" 0 "$rc"
   assert_eq "B2: after $sig to the group the merge has its merge-confirmed line" "$l" \
@@ -462,22 +471,30 @@ cur=$(tip)
 # Codex 4701970612: a signal while the gate's worktree is made stops the merge before the gate.
 cat > "$PWD/shim/git" <<EOS
 #!/bin/bash
-if [ -n "\${HO_T_SLOW_WT:-}" ] && [ "\$3" = worktree ] && [ "\$4" = add ]; then touch "$PWD/wt-adding"; sleep 2; fi
+if [ -n "\${HO_T_SLOW_WT:-}" ] && [ "\$3" = worktree ] && [ "\$4" = add ]; then touch "$PWD/wt-adding"
+  i=0; while [ -e "$PWD/wt-hold" ] && [ \$i -lt 600 ]; do sleep 0.1; i=\$((i + 1)); done; fi
 exec "$(command -v git)" "\$@"
 EOS
 chmod +x "$PWD/shim/git"
 lane x1 x1.txt "from x1"; verdict x1 passed
-rm -f "$PWD/wt-adding" "$PWD/gate2.pid"
-setgate "echo \$\$ > '$PWD/gate2.pid'; sleep 6"
-t0=$(date +%s)
+rm -f "$PWD/wt-adding" "$PWD/gate2.pid" "$PWD/gate2.release"
+: > "$PWD/wt-hold"
+# The gate would wait until the test releases it, so a merge that waited for the gate could not
+# end on its own: the merge ending while the gate was never released proves the stop did not
+# wait for it (no clock involved).
+setgate "echo \$\$ > '$PWD/gate2.pid'; while [ ! -e '$PWD/gate2.release' ]; do sleep 0.1; done"
 HO_T_SLOW_WT=1 PATH="$PWD/shim:$PATH" "$h" loop "$run" merge x1 >/dev/null 2>"$PWD/err" & hp=$!
-n=0; while [ ! -e "$PWD/wt-adding" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+n=0; while [ ! -e "$PWD/wt-adding" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+[ -e "$PWD/wt-adding" ] || bad "test setup: the gate worktree was not being made" ""
+# The shim holds the worktree step until the signal is sent: the signal lands inside it.
 kill -TERM "$hp"
+rm -f "$PWD/wt-hold"
+n=0; while kill -0 "$hp" 2>/dev/null && [ "$n" -lt 1200 ]; do sleep 0.1; n=$((n + 1)); done
+if kill -0 "$hp" 2>/dev/null; then waited=yes; : > "$PWD/gate2.release"; else waited=no; fi
 rc=0; wait "$hp" || rc=$?
-t1=$(date +%s)
 assert_eq "H-046 signal: a signal while the gate worktree is made stops the merge (exit 75)" 75 "$rc"
 assert_eq "H-046 signal: the gate never starts after that signal" "no" "$([ -e "$PWD/gate2.pid" ] && echo yes || echo no)"
-if [ $((t1 - t0)) -lt 5 ]; then ok "H-046 signal: the stop does not wait for the gate"; else bad "H-046 signal: the stop does not wait for the gate" "took $((t1 - t0)) s"; fi
+assert_eq "H-046 signal: the stop does not wait for the gate (it ended with the gate never released)" no "$waited"
 p=$(cat "$PWD/gate2.pid" 2>/dev/null || echo 0); [ "$p" = 0 ] || kill -KILL "$p" 2>/dev/null || true
 assert_eq "H-046 signal: the branch is back at its tip" "$cur" "$(tip)"
 user_gate

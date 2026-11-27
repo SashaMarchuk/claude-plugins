@@ -8,7 +8,8 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t
 proj="$PWD/proj"
 mkdir -p "$proj/.harness" "$PWD/user"
 git -C "$proj" init -q -b main
-printf '%s\n' '{"schemaVersion":2}' > "$proj/.harness/config.json"
+# D12: the run's autonomy profile must allow the local integration merge (safe, the default, does not).
+printf '%s\n' '{"schemaVersion":2,"autonomy":{"profile":"draft-pr"}}' > "$proj/.harness/config.json"
 printf '.harness/\n' >> "$proj/.git/info/exclude"
 printf 'base\n' > "$proj/shared.txt"
 git -C "$proj" add shared.txt && git -C "$proj" commit -qm base
@@ -123,7 +124,7 @@ printf '%s\n' '{"schemaVersion":2,"gate":{"list":{"t":{"command":"true"}}}}' > "
 user_gate
 assert_eq "D37-FLOW-8: a gate command in the project config refuses the merge" 65 "$(merge_rc a)"
 assert_contains "D37-FLOW-8: the message says to move the command to the user config" "$(cat "$PWD/err")" "user config"
-printf '%s\n' '{"schemaVersion":2}' > "$proj/.harness/config.json"
+printf '%s\n' '{"schemaVersion":2,"autonomy":{"profile":"draft-pr"}}' > "$proj/.harness/config.json"
 assert_eq "D37-FLOW-8: nothing was merged while the config was refused" "$base_tip" "$(tip)"
 
 # ---- STOP ---------------------------------------------------------------------------------

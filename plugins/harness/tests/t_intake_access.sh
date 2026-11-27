@@ -259,3 +259,25 @@ assert_contains "D2 a claim edit that failed half way prints one error line" "$o
 assert_eq "D2 a claim edit that set the in-progress label and then failed moves the ticket to blocked" '["harness:blocked"]' "$(labels "$t15")"
 assert_contains "D2 the ledger records the half claim as left blocked" \
   "$(jq -c --arg t "$t15" 'select(.kind == "pickup-error" and .ticket == $t)' "$run/ledger.jsonl")" '"state":"blocked"'
+
+# H-002 H-008: the ready label is checked on the ticket as it is now, just before the claim. A
+# ready label removed while an earlier ticket's readiness check runs stops that ticket's pickup,
+# although an old labeled event by a writer still exists.
+runR=$(cd "$proj" && "$h" run new --workers 5)
+ra=$(ticket "Ready stays")
+rb=$(ticket "Ready withdrawn")
+mkdir -p "$base/unlabel-shim"
+cat > "$base/unlabel-shim/claude" <<SHIM
+#!/usr/bin/env bash
+# During the first readiness check a writer removes the ready label of the later ticket.
+[ -e "$base/unlabel-shim/done" ] || { : > "$base/unlabel-shim/done"; HO_FAKE_GH_USER=alice gh issue edit "$rb" --repo fake/repo --remove-label harness:ready >/dev/null; }
+exec "$HO_TESTS_DIR/fake-bin/claude" "\$@"
+SHIM
+chmod +x "$base/unlabel-shim/claude"
+label alice "$ra" ready
+label alice "$rb" ready
+out=$(PATH="$base/unlabel-shim:$PATH" "$h" intake "$runR" tick)
+assert_contains "H-002 the ticket that keeps its ready label is taken" "$out" "start $ra"
+assert_eq "H-002 a ticket whose ready label was removed during the tick is not taken" "" "$(printf '%s\n' "$out" | grep -x "start $rb" || true)"
+assert_eq "H-002 the withdrawn ticket is not claimed (no state label)" '[]' "$(labels "$rb")"
+assert_eq "H-002 the withdrawn ticket gets no comment" "0" "$(ncomments "$rb")"

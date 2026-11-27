@@ -238,6 +238,13 @@ ho_in_pickup_steps() {
   local id=$1 state events ready blocked login="" ridx=-1 bidx=-1 repo body="" raw targets qf
   if ho_tk_gh; then
     state=$(ho_tk_gh_state "$id") || { ho_in_err "cannot read the labels of #$id"; return 2; }
+    # The listing is a snapshot from the start of the tick. A ready label removed since then (for
+    # example during an earlier ticket's readiness check) withdraws the ticket: an old labeled
+    # event alone never authorises a claim (H-002).
+    case " $state " in *" ready "*) ;; *)
+      ho_ledger_append pickup-skipped ticket "$id" state "${state:-none}" reason "no ready label"
+      return 1 ;;
+    esac
     if events=$(ho_tk_gh_events "$id"); then
       ready=$(ho_tk_last_labeled "$events" "$HO_TK_PREFIX:ready")
       blocked=$(ho_tk_last_labeled "$events" "$HO_TK_PREFIX:blocked")

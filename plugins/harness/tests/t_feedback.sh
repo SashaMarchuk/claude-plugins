@@ -112,16 +112,30 @@ mkdir -p "$proj/.harness/tickets"
 printf '## Goal\nCANARY-TICKET-BODY secret plan\n\n## Acceptance\n- [ ] it works\n' > "$base/tb.md"
 (cd "$proj" && HO_TICKETS_DIR="$proj/.harness/tickets" "$h" tickets add "CANARY-TICKET-TITLE private" "$base/tb.md" blocked >/dev/null 2>&1) || true
 before=$(tree_sum "$run")
-printf 'It hangs. My notes are in %s/notes.md and %s/private.txt.\nThe plugin script %s/lib/run.sh looks wrong.\nTokens: %s\nMail me at canary@example.com, password=hunter2secret, I am canaryacct.\n' \
-  "$proj" "$HOME" "$HO_PLUGIN_ROOT" "$tokens" > "$base/d2.txt"
-# Shapes found in review: secret keys with a prefix, a base64 secret with "/", paths after -I,
-# ">", "../" and file://, a path with spaces, and an account name in other case.
+# One private shape per line: the line rule removes a whole line, so a second shape on the
+# same line would hide a missed rule.
+{
+  printf 'It hangs. My notes are in %s/notes.md\n' "$proj"
+  printf 'and in %s/private.txt.\n' "$HOME"
+  printf 'The plugin script %s/lib/run.sh looks wrong.\n' "$HO_PLUGIN_ROOT"
+  for t in $tokens; do printf 'Token: %s\n' "$t"; done
+  printf 'Mail me at canary@example.com\n'
+  printf 'password=hunter2secret\n'
+  printf 'I am canaryacct.\n'
+} > "$base/d2.txt"
 cat >> "$base/d2.txt" <<'EOF'
-DB_PASSWORD=canarypw1 client_secret=canarysec2 GITHUB_TOKEN=canarytok3 "api_key": "canarykey4"
+DB_PASSWORD=canarypw1
+client_secret=canarysec2
+GITHUB_TOKEN=canarytok3
+"api_key": "canarykey4"
 blob wJalrXUtnFEMI/K7MDENG/bPxRfiCYcanaryKEYabcd end
-cc -I/home/canary/include; see ../../canary/notes.txt; echo hi >/tmp/canary/out.log
-open file:///Users/canary/x.html and /home/bob/My canary Acme/file.txt then words
-I am Canaryacct, also CANARYACCT.
+cc -I/home/canary/include
+see ../../canary/notes.txt
+echo hi >/tmp/canary/out.log
+open file:///Users/canary/x.html
+/home/bob/My canary Acme/file.txt then words
+I am Canaryacct,
+also CANARYACCT.
 EOF
 printf '/harness:run hangs after /harness:status; see https://github.com/acme/tools/issues/12345/comments-and-a-long-tail.\n' >> "$base/d2.txt"
 rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d2.txt") || rc=$?
@@ -142,8 +156,12 @@ for where in shown stored; do
   assert_eq "H-140 / D43 private: the $where text holds no ticket text, path outside the plugin, token or account name" "" "$leaks"
 done
 assert_contains "H-140 / D43: a path inside the plugin is written relative to the plugin root" "$stored" "plugin-root/lib/run.sh"
-assert_contains "H-140: slash commands in the description reach the issue" "$stored" "/harness:run hangs after /harness:status;"
-assert_contains "H-140: a web link in the description reaches the issue" "$stored" "https://github.com/acme/tools/issues/12345/comments-and-a-long-tail."
+assert_contains "H-140: slash commands and a web link in the description reach the issue" "$stored" \
+  "/harness:run hangs after /harness:status; see https://github.com/acme/tools/issues/12345/comments-and-a-long-tail."
+assert_contains "H-140 / D43 line rule: a line with a path is replaced whole by a placeholder" "$stored" \
+  "$(printf '<line removed: path>\n<line removed: path>\nThe plugin script')"
+assert_contains "H-140 / D43 line rule: a line with a secret value is replaced whole" "$stored" \
+  "$(printf '<line removed: account>\n<line removed: secret>\n<line removed: account>\n<line removed: secret>')"
 # Any "/x/y" left after web links and plugin-root paths are taken out is a path that leaked,
 # wherever it starts (after a letter, ":" or "/" too).
 no_abs_paths() {
@@ -160,9 +178,9 @@ assert_contains "D43 summary: ticket counts per state" "$stored" "- Tickets per 
 assert_eq "H-140: the preview leaves the run folder byte-identical" "$before" "$(tree_sum "$run")"
 unset USER LOGNAME HO_FAKE_GH_USER HO_TICKETS_REPO
 
-# ---- Token shapes and paths from validation round 1, one marker and one check each -----------
-# Every fake secret is built by concatenation, so no whole secret sits in this file. Each one
-# carries a marker word in its secret part; the check is that the marker does not reach the text.
+# ---- The description rule: one shape per line, checked by its marker ----------------------
+# Every fake secret is built by concatenation, so no whole secret sits in this file. Each line
+# holds one shape with a marker word; the check is that the marker does not reach the text.
 v_stripe="sk""_live_""ZedStripeLiveMark""4eC39Hq"
 v_stripe_t="sk""_test_""ZedStripeTestMark""4eC3"
 v_glpat="glp""at-""ZedGitlabMark""x1y2z3w4v5u6"
@@ -174,82 +192,230 @@ v_sg="${v_sg}ZedSendgridTailMark""abcdefghijklmnopqrstuvwx12345"
 v_hook="https://hooks.slack.com/services/""T0ZedSlackTeam/B0ZedSlackBot/""ZedSlackHookMark""XXXXXXXX"
 v_hex="dead""beefcafebabe""0123456789abcdef"
 v_basic="ZedBasicMark""dXNlcjpwYXNzd29yZA=="
-{
-  printf 'Token shapes from review.\n'
-  printf 'stripe %s and %s\n' "$v_stripe" "$v_stripe_t"
-  printf 'gitlab %s hf %s\n' "$v_glpat" "$v_hf"
-  printf 'telegram %s\n' "$v_tg"
-  printf 'google %s sendgrid %s\n' "$v_ya29" "$v_sg"
-  printf 'webhook %s\n' "$v_hook"
-  printf 'hex key %s\n' "$v_hex"
-  printf 'Authorization: Basic %s\n' "$v_basic"
-  printf 'DB_PASS=ZedDbPassMark passphrase=ZedPhraseMark run --password ZedFlagPwMark now\n'
-  printf 'password="ZedQuoteOneMark ZedQuoteTwoMark words"\n'
-  printf 'redis://:ZedRedisPwMark@localhost:6379 and postgres://ZedPgUserMark:ZedPgPassMark!x@db.internal/app\n'
-  printf 'host:/Projects/zedhostmark/x and -L/Projects/zedlinkmark/lib and file:///Projects/zedfilemark/x.html\n'
-  printf 'share //nas/zednasmark/f and ~/Documents/Zed Corp/zedtildemark.md\n'
-  printf 'and /Projects/My Zedspacemark/s.txt and "/Applications/Zed App/zedquotemark"\n'
-  printf 'sibling %s-private/tickets/zedsibmark.md\n' "$HO_PLUGIN_ROOT"
-  # A path with a part that looks like a token: no end of it may stay.
-  printf 'archive /srv/ZedClientProject2026Arch/zqm.md\n'
-  printf 'budget /Projects/acme.io/ZedClient2026Q4MigrationPlan/zbm.xlsx\n'
-  printf 'temp /var/folders/8c/lgj8t4xj4fg4st79311kj1f40000gn/T/zedtmp.dir/zedcsvmark.csv\n'
-  printf 'hex /a/%s/zedhexmark.txt\n' "$v_hex"
-  printf 'keep read/write and and/or, the plugin file %s/lib/feedback.sh and %s\n' "$HO_PLUGIN_ROOT" "$HO_PLUGIN_ROOT"
-} > "$base/d3.txt"
+v_lower="zedlowertok""9x2k4m7q1w8e5r3t6y0u"
+# marker|line. Round 1 shapes (attempt 1 review), then G1 (paths with brackets, commas or
+# quotes) and G2 (credential shapes) of the attempt 2 verdict, then the clarified rule.
+cat > "$base/shapes.txt" <<EOF
+ZedStripeLiveMark|stripe $v_stripe
+ZedStripeTestMark|stripe $v_stripe_t
+ZedGitlabMark|gitlab $v_glpat
+ZedHuggingMark|hf $v_hf
+ZedTelegramMark|telegram $v_tg
+ZedGoogleMark|google $v_ya29
+ZedSendgridTailMark|sendgrid $v_sg
+ZedSlackHookMark|webhook $v_hook
+deadbeefcafebabe|hex key $v_hex
+ZedBasicMark|Authorization: Basic $v_basic
+ZedDbPassMark|DB_PASS=ZedDbPassMark
+ZedPhraseMark|passphrase=ZedPhraseMark
+ZedFlagPwMark|run --password ZedFlagPwMark now
+ZedQuoteTwoMark|password="ZedQuoteOneMark ZedQuoteTwoMark words"
+ZedRedisPwMark|redis://:ZedRedisPwMark@localhost:6379
+ZedPgPassMark|postgres://ZedPgUserMark:ZedPgPassMark!x@db.internal/app
+zedhostmark|host:/Projects/zedhostmark/x
+zedlinkmark|-L/Projects/zedlinkmark/lib
+zedfilemark|file:///Projects/zedfilemark/x.html
+zednasmark|share //nas/zednasmark/f
+zedtildemark|~/Documents/Zed Corp/zedtildemark.md
+Zedspacemark|and /Projects/My Zedspacemark/s.txt
+zedquotemark|and "/Applications/Zed App/zedquotemark"
+zedsibmark|sibling $HO_PLUGIN_ROOT-private/tickets/zedsibmark.md
+zqm.md|archive /srv/ZedClientProject2026Arch/zqm.md
+zbm.xlsx|budget /Projects/acme.io/ZedClient2026Q4MigrationPlan/zbm.xlsx
+zedcsvmark|temp /var/folders/8c/lgj8t4xj4fg4st79311kj1f40000gn/T/zedtmp.dir/zedcsvmark.csv
+zedhexmark|hex /a/$v_hex/zedhexmark.txt
+zedplan|G1 ~/Dropbox (Zed Corp)/clients/zedplan.md
+zedplan|G1 /Users/x/Dropbox (Zed Corp)/clients/zedplan.md
+Zedacme|G1 /srv/x/Client Files (2026)/Zedacme Budget/zedplan.xlsx
+Zed Corp|G1 "/Users/x/Documents/Zed Corp (old)/zedplan.md"
+zedspec|G1 <project folder>/docs/Zedclient (draft)/zedspec.md
+zedsecret|G1 ~/Documents/Zedacme (old)/zedsecret-plan.md
+Zed, Inc|G1 /Volumes/Zed, Inc/a/zedf.md
+zedpage|G1 /Users/x/other/app/(auth)/login/zedpage.tsx
+zedf|G1 /srv/x/[draft]/zedf
+zedg|G1 /srv/x/{a}/zedg
+zedz|G1 /opt/x/a;y/zedz
+zedmine|G1 /mnt/c/Users/x/it's/zedmine.txt
+zedunterminated|G2 password="zedunterminated more
+zedbracket|G2 password=[zedbracket]
+zeduser|G2 https://zeduser:zed/pw@host.example/x
+zedwinmark|rule C:\\Users\\Zed Corp\\zedwinmark.txt
+zeduncmark|rule \\\\server\\share\\zeduncmark
+zedotheruser|rule ~zedotheruser/a/b
+zedfolder|rule /My zedfolder/sub/f
+zedhomevar|rule \$HOME/zedhomevar/x
+zedrootup|rule $HO_PLUGIN_ROOT/../../zedrootup/x
+zedcurluser|rule curl -u zedcurluser:pw https://example.com
+zedsession|rule Cookie: session=zedsession
+zedlowertok|rule $v_lower
+EOF
+shapes=$(cat "$base/shapes.txt")
+printf '%s\n' "$shapes" | cut -d'|' -f2- > "$base/d3.txt"
+cat >> "$base/d3.txt" <<'EOF'
+keep read/write and and/or
+EOF
+printf 'the plugin file %s/lib/feedback.sh and %s\n' "$HO_PLUGIN_ROOT" "$HO_PLUGIN_ROOT" >> "$base/d3.txt"
 rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d3.txt") || rc=$?
-assert_eq "H-140 round 1: a description with every known shape still gives a preview" "0" "$rc"
+assert_eq "H-140 rule: a description with every known shape still gives a preview" "0" "$rc"
 shown=$(printf '%s\n' "$out" | sed '/^DRAFT /,$d')
-for m in ZedStripeLiveMark ZedStripeTestMark ZedGitlabMark ZedHuggingMark ZedTelegramMark \
-  ZedGoogleMark ZedSendgridHeadMark ZedSendgridTailMark ZedSlackTeam ZedSlackBot ZedSlackHookMark \
-  "$v_hex" ZedBasicMark ZedDbPassMark ZedPhraseMark ZedFlagPwMark ZedQuoteOneMark ZedQuoteTwoMark \
-  ZedRedisPwMark ZedPgUserMark ZedPgPassMark zedhostmark zedlinkmark zedfilemark zednasmark \
-  "Corp/" zedtildemark Zedspacemark zedquotemark "App/" zedsibmark "plugin-root-private" \
-  zqm.md zbm.xlsx zedcsvmark zedtmp.dir zedhexmark; do
+while IFS='|' read -r m line; do
   case $shown in
-    *"$m"*) bad "H-140 / D43 round 1: [$m] does not reach the shown text" "it does" ;;
-    *) ok "H-140 / D43 round 1: [$m] does not reach the shown text" ;;
+    *"$m"*) bad "H-140 / D43 rule: [$m] of [${line:0:40}] does not reach the shown text" "it does" ;;
+    *) ok "H-140 / D43 rule: [$m] of [${line:0:40}] does not reach the shown text" ;;
   esac
-done
-assert_eq "H-140 / D43 round 1: no absolute path of two parts reaches the shown text" "0" "$(no_abs_paths "$shown")"
-assert_contains "H-140 round 1: a webhook link keeps its host, only the secret goes" "$shown" "https://hooks.slack.com/"
-assert_contains "H-140 round 1: a word pair with one slash stays" "$shown" "keep read/write and and/or,"
-assert_contains "H-140 / D43 round 1: a plugin file stays relative to the plugin root" "$shown" "the plugin file plugin-root/lib/feedback.sh and plugin-root"
+done <<< "$shapes"
+assert_eq "H-140 / D43 rule: no absolute path of two parts reaches the shown text" "0" "$(no_abs_paths "$shown")"
+assert_eq "H-140 / D43 rule: every shape line became one placeholder line" "$(printf '%s\n' "$shapes" | wc -l | tr -d ' ')" \
+  "$(printf '%s\n' "$shown" | grep -cE '^<line removed: (path|secret|account)>$' || true)"
+assert_contains "H-140 rule: a word pair with one slash stays" "$shown" "keep read/write and and/or"
+assert_contains "H-140 / D43 rule: a plugin file stays relative to the plugin root" "$shown" "the plugin file plugin-root/lib/feedback.sh and plugin-root"
 # Cleaning is a fixed point: the shown description, sent in again, comes out the same.
 desc_of() { shown_body "$1" | awk '/^---$/{exit} {print}'; }
 desc_of "$out" > "$base/d3b.txt"
 rc=0; out2=$(cd "$proj" && "$h" feedback preview "$base/d3b.txt") || rc=$?
-assert_eq "H-140 round 1: the shown text passes the privacy check when sent in again" "0" "$rc"
-assert_eq "H-140 round 1: cleaning the shown text again changes nothing" "$(desc_of "$out")" "$(desc_of "$out2")"
+assert_eq "H-140 rule: the shown text passes the privacy check when sent in again" "0" "$rc"
+assert_eq "H-140 rule: cleaning the shown text again changes nothing" "$(desc_of "$out")" "$(desc_of "$out2")"
 rm -rf "$(draft_of "$out")" "$(draft_of "$out2")"
+
+# ---- A realistic report does not get worse (the attempt 2 verdict's over-removal table) ------
+cat > "$base/d4.txt" <<'EOF'
+The run stopped. I ran bash plugins/harness/tests/run.sh
+plugins/harness/tests/t_deliver.sh, line 212
+.harness/runs/20261126-163833/state
+PASS/FAIL/SKIP was 3/1/0. Roles: orchestrator/worker/validator. It works on macOS/Linux, not on WSL.
+harness tests: PASS=1828  FAIL=1
+max_tokens=4096
+TCP/IP/UDP stack
+Ratio 1/2/3
+/harness:run hangs after /harness:status
+at lib/run.sh:120 in ho_run_open
+run 20261126-163833-abc123 on branch harness/feedback-3 at commit b28c2b3
+see https://github.com/acme/tools/issues/12345
+id 123e4567-e89b-12d3-a456-426614174000
+read/write and/or a/b I/O
+passed=true passes: 3 bypass: no
+tokens: 150000 used, --max-tokens 100, token_count=12
+echo hi >/dev/null 2>/dev/stderr
+// comment and </details> and +/- and a / b and "/"
+EOF
+rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d4.txt") || rc=$?
+assert_eq "H-140 realistic report: preview exits 0" "0" "$rc"
+shown=$(shown_body "$out")
+while IFS= read -r line; do
+  if printf '%s\n' "$shown" | grep -qxF -- "$line"; then ok "H-140 realistic report: [${line:0:48}] stays as written"
+  else bad "H-140 realistic report: [${line:0:48}] stays as written" "changed"; fi
+done < "$base/d4.txt"
+rm -rf "$(draft_of "$out")"
+
+# ---- No false refusal: the plugin's own files as descriptions give a preview ---------------
+for f in README.md lib/feedback.jq tests/t_feedback.sh; do
+  rc=0; out=$(cd "$proj" && "$h" feedback preview "$HO_PLUGIN_ROOT/$f" 2>&1) || rc=$?
+  assert_eq "H-140 rule: [$f] as a description gives a preview (exit 0)" "0" "$rc"
+  rm -rf "$(draft_of "$out")"
+done
+
+# ---- A short account name does not touch the fixed context ---------------------------------
+rc=0; out=$(cd "$proj" && USER=tim LOGNAME=tim "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "H-140 account rule: the account name tim still gives a preview (exit 0)" "0" "$rc"
+assert_contains "H-140 account rule: with the account tim the runtime line stays" "$out" "- Runtime: claude-code 0.0.0"
+assert_contains "H-140 account rule: with the account tim the steps line stays" "$out" "- Steps (session roles launched):"
+rm -rf "$(draft_of "$out")"
+printf 'Timing is off for timothy.\n' > "$base/d5.txt"
+out=$(cd "$proj" && USER=tim LOGNAME=tim "$h" feedback preview "$base/d5.txt")
+assert_contains "H-140 account rule: the account name glued to other letters removes the line" "$(shown_body "$out")" "<line removed: account>"
+rm -rf "$(draft_of "$out")"
 
 # The send gate on its own: a draft edited after the preview, with a fresh code, is refused.
 out=$(cd "$proj" && "$h" feedback preview "$base/d1.txt"); d=$(draft_of "$out")
 cp "$d/body.md" "$base/body3.keep"
 for shape in "$v_stripe" "$v_tg" "$v_hook" "redis://:ZedRedisPwMark@localhost" "DB_PASS=ZedDbPassMark" \
   "Authorization: Basic $v_basic" "$v_hex" "host:/Projects/zedhostmark/x" "-L/Projects/zedlinkmark/lib" \
-  "//nas/zednasmark/f" "$HO_PLUGIN_ROOT-private/tickets/zedsibmark.md"; do
-  cp "$base/body3.keep" "$d/body.md"
-  printf 'edited %s\n' "$shape" >> "$d/body.md"
-  cat "$d/title.txt" "$d/body.md" > "$base/all.txt"
-  rc=0; err=$("$h" feedback send --draft "$d" --code "$(sha16 "$base/all.txt")" --yes 2>&1) || rc=$?
-  assert_eq "H-140 / D43 round 1: the send gate refuses an edited draft with [${shape:0:24}...] (exit 65)" "65" "$rc"
+  "//nas/zednasmark/f" "$HO_PLUGIN_ROOT-private/tickets/zedsibmark.md" "~/Dropbox (Zed Corp)/x" \
+  "password=[zedbracket]" "https://zeduser:zed/pw@host.example/x" "a note in plain words"; do
+  # A copy per shape, so a wrongly sent draft cannot take the next check's draft with it.
+  rm -rf "$base/gd"; cp -R "$d" "$base/gd"
+  printf 'edited %s\n' "$shape" >> "$base/gd/body.md"
+  cat "$base/gd/title.txt" "$base/gd/body.md" > "$base/all.txt"
+  rc=0; err=$("$h" feedback send --draft "$base/gd" --code "$(sha16 "$base/all.txt")" --yes 2>&1) || rc=$?
+  assert_eq "H-140 / D43 gate: the send gate refuses an edited draft with [${shape:0:24}...] (exit 65)" "65" "$rc"
   case $err in
-    *"private data ("*) ok "H-140 / D43 round 1: the refusal names the kind for [${shape:0:24}...]" ;;
-    *) bad "H-140 / D43 round 1: the refusal names the kind for [${shape:0:24}...]" "$err" ;;
+    *"private data ("*) ok "H-140 / D43 gate: the refusal names the kind for [${shape:0:24}...]" ;;
+    *) bad "H-140 / D43 gate: the refusal names the kind for [${shape:0:24}...]" "$err" ;;
   esac
 done
+# An edit above the context block goes through the same line rule.
+cp "$base/body3.keep" "$d/body.md"
+{ printf 'see ~/Dropbox (Zed Corp)/x\n'; cat "$base/body3.keep"; } > "$d/body.md"
+cat "$d/title.txt" "$d/body.md" > "$base/all.txt"
+assert_exit "H-140 / D43 gate: a path added to the description part is refused (exit 65)" 65 \
+  "$h" feedback send --draft "$d" --code "$(sha16 "$base/all.txt")" --yes
 rm -rf "$d"
 
-# The state summary copies only known engine event kinds; a made-up kind is not copied.
+# ---- Allow-list context: a private value next to each field does not appear ----------------
+# Run state and engine error codes: a stop event and an error event carry private reasons.
+jq -cn --arg r "$(basename "$run")" '{ts: "2026-01-01T00:00:00Z", run: $r, kind: "session-dead", reason: "zederrreason /Users/x"}' >> "$run/ledger.jsonl"
+jq -cn --arg r "$(basename "$run")" '{ts: "2026-01-01T00:00:00Z", run: $r, kind: "stop", reason: "zedstopreason", by: "zedstopper"}' >> "$run/ledger.jsonl"
+# A made-up event kind is not copied.
 jq -cn --arg r "$(basename "$run")" '{ts: "2026-01-01T00:00:00Z", run: $r, kind: "zedclient-billing-export-failed"}' >> "$run/ledger.jsonl"
 rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d1.txt") || rc=$?
-assert_eq "D43 round 1: a preview over an unknown ledger kind exits 0" "0" "$rc"
+assert_eq "D43 allow-list: a preview over private ledger values exits 0" "0" "$rc"
+assert_contains "D43 allow-list run state: a stop is reported as stopped" "$out" "- Last run: stopped,"
+assert_contains "D43 allow-list error codes: the error kind is counted" "$out" "session-dead x1"
+for m in zedstopreason zedstopper zederrreason zedclient; do
+  case $out in
+    *"$m"*) bad "D43 allow-list: the ledger value [$m] is not copied" "it was" ;;
+    *) ok "D43 allow-list: the ledger value [$m] is not copied" ;;
+  esac
+done
+rm -rf "$(draft_of "$out")"
+# Runtime version: only a version-shaped word of the runtime's output is kept.
+rc=0; out=$(cd "$proj" && HO_FAKE_CLAUDE_VERSION="0.0.0 /Users/zedverpath (zedvername)" "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_contains "D43 allow-list runtime version: the version word is kept" "$out" "- Runtime: claude-code 0.0.0"
 case $out in
-  *zedclient*) bad "D43 round 1: an event kind outside the engine's fixed list is not copied" "it was" ;;
-  *) ok "D43 round 1: an event kind outside the engine's fixed list is not copied" ;;
+  *zedver*) bad "D43 allow-list runtime version: other words of the runtime output are not copied" "they were" ;;
+  *) ok "D43 allow-list runtime version: other words of the runtime output are not copied" ;;
 esac
 rm -rf "$(draft_of "$out")"
+# OS name: each uname word must have its shape, or it shows as unknown.
+mkdir -p "$base/fakeuname"
+cat > "$base/fakeuname/uname" <<'EOF'
+#!/usr/bin/env bash
+case ${1:-} in -s) echo "Darwin zedosname" ;; -r) echo "25.5.0/zedrelname" ;; -m) echo "arm64" ;; *) echo "Darwin zedhost" ;; esac
+EOF
+chmod +x "$base/fakeuname/uname"
+rc=0; out=$(cd "$proj" && PATH="$base/fakeuname:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "D43 allow-list OS: a preview with odd uname words exits 0" "0" "$rc"
+assert_contains "D43 allow-list OS: a word with the wrong shape shows as unknown" "$out" "- Operating system: unknown unknown arm64"
+case $out in
+  *zedosname*|*zedrelname*|*zedhost*) bad "D43 allow-list OS: other uname words are not copied" "they were" ;;
+  *) ok "D43 allow-list OS: other uname words are not copied" ;;
+esac
+rm -rf "$(draft_of "$out")"
+# Plugin version: a manifest version with the wrong shape shows as unknown.
+cp -R "$HO_PLUGIN_ROOT" "$base/pcopy"
+jq '.version = "1.0.0 zedvermark"' "$HO_PLUGIN_ROOT/.claude-plugin/plugin.json" > "$base/pcopy/.claude-plugin/plugin.json"
+rc=0; out=$(cd "$proj" && "$base/pcopy/bin/harness" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "D43 allow-list plugin version: a preview with an odd version exits 0" "0" "$rc"
+assert_contains "D43 allow-list plugin version: it shows as unknown" "$out" "- Plugin version: unknown"
+case $out in
+  *zedvermark*) bad "D43 allow-list plugin version: the odd version is not copied" "it was" ;;
+  *) ok "D43 allow-list plugin version: the odd version is not copied" ;;
+esac
+rm -rf "$(draft_of "$out")" "$base/pcopy"
+# Runtime label: only a runtime the plugin ships is named; a user profile's own name is not.
+mkdir -p "$base/user/runtimes"
+cp "$HO_PLUGIN_ROOT/runtimes/codex.json" "$base/user/runtimes/zedprivate-rt.json"
+cp "$proj/.harness/config.json" "$base/config.keep2"
+printf '%s\n' '{"schemaVersion":2,"runtime":{"main":"zedprivate-rt"}}' > "$proj/.harness/config.json"
+rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "D43 allow-list runtime label: a user runtime gives a preview (exit 0)" "0" "$rc"
+assert_contains "D43 allow-list runtime label: a user runtime shows as unknown" "$out" "- Runtime: unknown"
+case $out in
+  *zedprivate*) bad "D43 allow-list runtime label: the user runtime name is not copied" "it was" ;;
+  *) ok "D43 allow-list runtime label: the user runtime name is not copied" ;;
+esac
+rm -rf "$(draft_of "$out")" "$base/user/runtimes/zedprivate-rt.json"
+cp "$base/config.keep2" "$proj/.harness/config.json"
 
 # ---- Broken state still gives a report ----------------------------------------------------
 cp "$proj/.harness/config.json" "$base/config.keep"

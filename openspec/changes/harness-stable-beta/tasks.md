@@ -103,7 +103,7 @@ Order follows design.md, Decisions, Rebuild. Each ticket cites the requirement I
 ## 17. Run lifecycle and recovery
 
 - [ ] 17.1 Soft and hard stops, and the STOP file
-- [ ] 17.2 Test force-send of a queued stop message from a script before relying on `hard:message` (D37-LIFECYCLE-4): tmux proven (issue #62); two iTerm2 trials before release
+- [ ] 17.2 Test force-send of a queued stop message from a script before relying on `hard:message` (D37-LIFECYCLE-4): tmux proven (issue #62); two iTerm2 trials before release (may be moot: iTerm2 gets no typed delivery, D37-SESSIONS-6)
 - [ ] 17.3 Standby, end of run, automatic recovery after sleep or a crash
 - [ ] 17.4 Outage monitor and dead-orchestrator restart in the watch script
 - [ ] 17.5 Typed text: the byte limit, longer text through a file, the check after a launch line, and the conditions for the typed fallback (H-137, H-099; D42f, D42g; issue #64)

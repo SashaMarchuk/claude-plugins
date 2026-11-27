@@ -128,6 +128,10 @@ Source: interview 2026-11-24 R10.2, R10.4, R4.3
 - **WHEN** a person runs the terminal form of the unblock command
 - **THEN** the harness checks the write access of the account signed in to the tracker, and the ticket stays blocked when that account cannot be read or has no confirmed write access
 
+#### Scenario: Unblock inside a harness session (design.md D37-COMMENTS-4)
+- **WHEN** the terminal form of the unblock command runs inside a harness session
+- **THEN** the harness refuses it, and the ticket stays blocked, because only a person may unblock a ticket
+
 ### Requirement: H-032 Questions to a human go to the ticket as numbered items, and the session closes
 When a worker needs a human, or a ticket lacks detail, the harness SHALL ask in the configured tracker's comments (GitHub by default): numbered questions in one new comment, with the ticket marked as waiting for an answer. The worker's session SHALL then close while other tickets continue. Human-need pre-check: agent decision, design.md S8-11. The orchestrator decides how work resumes (R11.4, H-092).
 

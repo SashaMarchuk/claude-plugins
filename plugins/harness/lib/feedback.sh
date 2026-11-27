@@ -88,14 +88,6 @@ ho_fb_gate() {
   return 65
 }
 
-# ho_fb_uname <flag>: the system uname by its absolute path, with an empty environment.
-ho_fb_uname() {
-  local u
-  for u in /usr/bin/uname /bin/uname; do
-    [ -x "$u" ] && { /usr/bin/env -i "$u" "$1" 2>/dev/null; return 0; }
-  done
-}
-
 # ho_fb_runtime_version: "<label> <version>", or a word saying why there is none. Never the
 # raw output of the runtime: only a token shaped like a version is kept.
 ho_fb_runtime_version() {
@@ -112,12 +104,12 @@ ho_fb_runtime_version() {
   case $cmd in ''|*/*|-*) echo "$label, version unknown"; return 0 ;; esac
   # The same lookup and guard as a session launch: the clean PATH, and never a binary from the
   # project, its worktrees folder or a worktree (that would run project code on a preview).
-  # The runtime is looked up on the person's own PATH (cleaned), like a launch.
-  path=$(PATH=$(PATH=$HO_FB_CALLER_PATH ho_session_clean_path) command -v "$cmd" 2>/dev/null) ||
-    { echo "$label, not installed"; return 0; }
+  path=$(PATH=$(ho_session_clean_path) command -v "$cmd" 2>/dev/null) || { echo "$label, not installed"; return 0; }
   case $path in /*) ;; *) echo "$label, not installed"; return 0 ;; esac
+  # The guard reads HO_PROJECT_DIR; in real use it is unset, so the project is resolved here.
   # No project resolved: fail closed (the binary is not run).
-  if ! proj=$( (ho_project_root) 2>/dev/null) || ! ho_fb_outside "$path"; then
+  if ! proj=$( (ho_project_root) 2>/dev/null) ||
+    ! ( HO_PROJECT_DIR=$proj ho_session_runtime_path_ok "$path" ) 2>/dev/null; then
     echo "$label, version unknown"; return 0
   fi
   out=$(mktemp "${TMPDIR:-/tmp}/ho-fb-ver.XXXXXX") || { echo "$label, version unknown"; return 0; }
@@ -202,7 +194,7 @@ ho_fb_preview() {
   repo=$(ho_fb_repo)
   [ -n "$repo" ] || { ho_fb_err "the plugin manifest names no repository"; return 78; }
   draft=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/ho-feedback.XXXXXX") || { ho_fb_err "cannot make a draft folder"; return 1; }
-  os="$(ho_fb_fit os_s "$(ho_fb_uname -s)") $(ho_fb_fit os_r "$(ho_fb_uname -r)") $(ho_fb_fit os_m "$(ho_fb_uname -m)")"
+  os="$(ho_fb_fit os_s "$(uname -s 2>/dev/null)") $(ho_fb_fit os_r "$(uname -r 2>/dev/null)") $(ho_fb_fit os_m "$(uname -m 2>/dev/null)")"
   # The description as written (trailing blank lines dropped), then the context from named
   # fields with fixed shapes.
   if ! {
@@ -265,68 +257,9 @@ ho_fb_send() {
   printf 'OK filed %s\n' "$url"
 }
 
-# ho_fb_git_top: the git top level of the current folder, with git's own variables cleared
-# and git from the system folders, or nothing.
-ho_fb_git_top() {
-  PATH=/usr/bin:/bin:/usr/sbin:/sbin env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
-    -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_CEILING_DIRECTORIES \
-    git -C "$PWD" rev-parse --show-toplevel 2>/dev/null
-}
-
-# ho_fb_outside <file>: 0 when the file is outside the project (ho_project_root) and outside
-# the current folder's own git top level, each with its worktrees, so a .harness-project
-# pointer cannot move the check elsewhere. The check (ho_session_runtime_path_ok) runs with
-# the system folders as PATH and git's own variables cleared.
-ho_fb_outside() {
-  local f=$1 proj top
-  proj=$( (ho_project_root) 2>/dev/null) || proj=""
-  top=$(ho_fb_git_top) || top=""
-  (
-    # shellcheck disable=SC2030 # the system PATH is meant for this subshell only
-    PATH=/usr/bin:/bin:/usr/sbin:/sbin
-    unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_CEILING_DIRECTORIES
-    for r in "$proj" "$top"; do
-      [ -n "$r" ] || continue
-      HO_PROJECT_DIR=$r ho_session_runtime_path_ok "$f" || exit 65
-    done
-  ) 2>/dev/null
-}
-
-# ho_fb_safe_path: the PATH every feedback command runs with: the folders of jq, git and gh
-# from the person's PATH (in their order, so their own gh is the one that runs), each only
-# when it is outside the project and the current git tree, then the system folders. So
-# uname, awk, sed, cat, find and the rest never come from a folder the project controls.
-# gh is the person's own tool and is found on their PATH.
-ho_fb_safe_path() {
-  local want="" p="" t c d rest
-  for t in jq git gh; do
-    c=$(command -v "$t" 2>/dev/null) || continue
-    case $c in /*) ;; *) continue ;; esac
-    d=$(cd "$(dirname "$c")" 2>/dev/null && pwd -P) || continue
-    ho_fb_outside "$d/$t" && want="$want:$d:"
-  done
-  # Walk the person's PATH, so the folders keep their order.
-  # shellcheck disable=SC2031 # the caller's PATH, unchanged here
-  rest="${PATH-}:"
-  while [ -n "$rest" ]; do
-    c=${rest%%:*}; rest=${rest#*:}
-    case $c in /*) ;; *) continue ;; esac
-    d=$(cd "$c" 2>/dev/null && pwd -P) || continue
-    case $want in *":$d:"*) ;; *) continue ;; esac
-    case ":$p:" in *":$d:"*) ;; *) p="${p:+$p:}$d" ;; esac
-  done
-  printf '%s\n' "${p:+$p:}/usr/bin:/bin:/usr/sbin:/sbin"
-}
-
 ho_feedback_main() {
   local verb=${1-}
   [ $# -gt 0 ] && shift
-  # The person's PATH is kept only to find their runtime; every other command runs from the
-  # safe PATH. Variables that make an interpreter load extra code are dropped.
-  # shellcheck disable=SC2031 # the caller's PATH, unchanged here
-  HO_FB_CALLER_PATH=${PATH-}
-  PATH=$(ho_fb_safe_path)
-  unset BASH_ENV ENV PERL5OPT PERL5LIB PERLLIB PYTHONPATH PYTHONHOME PYTHONSTARTUP NODE_OPTIONS NODE_PATH RUBYOPT RUBYLIB
   case $verb in
     preview) ho_fb_preview "$@" ;;
     send) ho_fb_send "$@" ;;

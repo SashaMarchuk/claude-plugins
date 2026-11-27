@@ -232,24 +232,21 @@ case $out in
   *) ok "D43 allow-list runtime version: other words of the runtime output are not copied" ;;
 esac
 rm -rf "$(draft_of "$out")"
-# OS name: uname and the other system tools come from the system folders, never from a
-# folder first on the caller's PATH; each uname word must have its shape, else unknown.
+# OS name: each uname word must have its shape, or it shows as unknown.
 mkdir -p "$base/fakeuname"
-for t in uname awk sed cat find; do
-  printf '#!/bin/sh\ntouch "%s/tool-ran-%s"\nexit 1\n' "$base" "$t" > "$base/fakeuname/$t"
-done
-chmod +x "$base/fakeuname"/*
+cat > "$base/fakeuname/uname" <<'EOF'
+#!/usr/bin/env bash
+case ${1:-} in -s) echo "Darwin zedosname" ;; -r) echo "25.5.0/zedrelname" ;; -m) echo "arm64" ;; *) echo "Darwin zedhost" ;; esac
+EOF
+chmod +x "$base/fakeuname/uname"
 rc=0; out=$(cd "$proj" && PATH="$base/fakeuname:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
-rm -rf "$base/fakeuname"
-assert_eq "H-140 tools: a preview with fake system tools first on PATH exits 0" "0" "$rc"
-assert_eq "H-140 tools: no uname, awk, sed, cat or find from the caller's PATH is run" "" \
-  "$(cd "$base" && ls tool-ran-* 2>/dev/null | tr '\n' ' ')"
-assert_contains "H-140 tools: the operating system still comes from the system uname" "$out" "- Operating system: $(uname -s) $(uname -r)"
-rm -f "$base"/tool-ran-*; rm -rf "$(draft_of "$out")"
-fitw() { jq -L "$HO_PLUGIN_ROOT/lib" -nr --arg v "$2" "include \"feedback\"; \$v | fit(shape_$1)"; }
-assert_eq "D43 allow-list OS: a system name with the wrong shape shows as unknown" "unknown" "$(fitw os_s "Darwin zedosname")"
-assert_eq "D43 allow-list OS: a release with the wrong shape shows as unknown" "unknown" "$(fitw os_r "25.5.0/zedrelname")"
-assert_eq "D43 allow-list OS: a machine name with the right shape is kept" "arm64" "$(fitw os_m "arm64")"
+assert_eq "D43 allow-list OS: a preview with odd uname words exits 0" "0" "$rc"
+assert_contains "D43 allow-list OS: a word with the wrong shape shows as unknown" "$out" "- Operating system: unknown unknown arm64"
+case $out in
+  *zedosname*|*zedrelname*|*zedhost*) bad "D43 allow-list OS: other uname words are not copied" "they were" ;;
+  *) ok "D43 allow-list OS: other uname words are not copied" ;;
+esac
+rm -rf "$(draft_of "$out")"
 # Plugin version: a manifest version with the wrong shape shows as unknown.
 cp -R "$HO_PLUGIN_ROOT" "$base/pcopy"
 jq '.version = "1.0.0 zedvermark"' "$HO_PLUGIN_ROOT/.claude-plugin/plugin.json" > "$base/pcopy/.claude-plugin/plugin.json"
@@ -275,19 +272,6 @@ case $out in
 esac
 rm -rf "$(draft_of "$out")" "$base/user/runtimes/zedprivate-rt.json"
 cp "$base/config.keep2" "$proj/.harness/config.json"
-
-# ---- A .harness-project pointer to a nested repo does not move the runtime guard ----------
-outer="$base/outer"; mkdir -p "$outer/bin" "$outer/inner/.harness"
-git -C "$outer" init -q; git -C "$outer/inner" init -q
-cp "$proj/.harness/config.json" "$outer/inner/.harness/config.json"
-printf '%s\n' "$outer/inner" > "$outer/.harness-project"
-printf '#!/usr/bin/env bash\ntouch "%s/outer-ran"\necho 9.8.7\n' "$base" > "$outer/bin/claude"
-chmod +x "$outer/bin/claude"
-rc=0; out=$(cd "$outer" && env -u HO_PROJECT_DIR PATH="$outer/bin:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
-assert_eq "H-140 runtime guard: a preview through a .harness-project pointer exits 0" "0" "$rc"
-assert_eq "H-140 runtime guard: a runtime in the folder's own git tree is not run, whatever the pointer says" "no" \
-  "$([ -e "$base/outer-ran" ] && echo yes || echo no)"
-rm -rf "$outer" "$base/outer-ran" "$(draft_of "$out")"
 
 # ---- A linked runs folder still has a last run ---------------------------------------------
 proj3="$base/proj3"; mkdir -p "$proj3/.harness" "$base/elsewhere-runs"

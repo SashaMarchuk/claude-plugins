@@ -35,23 +35,26 @@ def s_root($roots):
     (.; gsub(($r | esc) + "(?=/|$|[\\s\"'`<>()\\[\\]{},;|]|[.:!?]+(?:\\s|$))"; "plugin-root"));
 
 # ---- path: the start of an absolute, ~, ../, $HOME, drive, UNC or file: path ---------------
-# A "/" after a letter, digit, "_", "." or "-" is relative and stays (plugins/harness/x,
-# macOS/Linux, 3/1/0). A slash command (/harness:run) and a single lower-case word (/tmp)
-# stay. Web links without user info, and /dev/null, stdin, stdout and stderr, are masked first.
-def link_re: "(?i)(?<![A-Za-z0-9+.-])(?!file:)[a-z][a-z0-9+.-]*://[^\\s\"'`<>/@]+(?:[/?#][^\\s\"'`<>]*)?";
+# A "/" after a letter, digit, "_", ".", "-", "+", "*" or a closing bracket is relative and
+# stays (plugins/harness/x, macOS/Linux, 3/1/0); after anything else it starts a path. A slash
+# command (/harness:run) and a single lower-case word (/tmp) stay. Web links (http, https)
+# without user info, and /dev/null, stdin, stdout and stderr, are masked first.
+def link_re: "(?i)(?<![A-Za-z0-9+.-])https?://[^\\s\"'`<>/@]+(?:[/?#][^\\s\"'`<>]*)?";
 def dev_re: "(?<![A-Za-z0-9_.-])/dev/(?:null|stdin|stdout|stderr)(?=[.,;:!?)\\]>\"'`]*(?:\\s|$))";
-def before: "(?:^|[\\s\"'`(<\\[{=:,;>|@]|(?:^|\\s)-[A-Za-z])";
+def relative: "[\\p{L}\\p{N}_.+*)\\]}-]";
 def slash_cmd: "/[a-z][a-z0-9_-]*(?::[a-z0-9_-]+)*(?=[.,;:!?)\\]>\"'`]*(?:\\s|$))";
 def path_list: [
-  before + "(?!" + slash_cmd + ")/+[^\\s/\"'`<>()\\[\\]{},;|]",
-  "(?:^|[\\s\"'`(<\\[{=:,;>|@])~[A-Za-z0-9._-]*/",
+  "(?<!" + relative + ")(?!" + slash_cmd + ")/+[^\\s/\"'`<>)\\]}]",
+  "(?:^|\\s)-[A-Za-z]/[^\\s/]",
+  "(?<![\\p{L}\\p{N}_.-])~[A-Za-z0-9._-]*/",
   "(?<![A-Za-z0-9_.-])\\.\\./",
   "\\$\\{?HOME(?![A-Za-z0-9_])",
   "(?<![A-Za-z0-9])[A-Za-z]:[\\\\/]",
   "(?<![A-Za-z0-9])\\\\\\\\[A-Za-z0-9]",
   "(?i)(?<![A-Za-z0-9])file:/"
 ];
-def path_hit: gsub(link_re; " L ") | gsub(dev_re; " D ") as $l | any(path_list[]; . as $re | $l | test($re));
+def masked: gsub(link_re; " L ");
+def path_hit: masked | gsub(dev_re; " D ") as $l | any(path_list[]; . as $re | $l | test($re));
 
 # ---- secret: a known token prefix, link credentials, a secret key with a value, a long key ---
 def token_list: [
@@ -68,23 +71,24 @@ def token_list: [
   "(?:^|\\s)(?:-u|--user)(?:\\s+|=)[^\\s:]+:\\S"
 ];
 # A key names a secret when, in lower case, it ends with one of the words below, or its last
-# "_", "-" or "." part is pass, pwd or pw after another part (DB_PASS), or it ends with
+# "_", "-" or "." part is pwd or pw, or pass after another part (DB_PASS), or it ends with
 # <api|access|private|secret|signing|encryption|master|client> key. So max_tokens, token_count,
 # PASS, bypass and passed are not secret keys.
 def secret_key:
   ascii_downcase as $k | ($k | [splits("[_.-]+")] | map(select(length > 0))) as $p
   | ($k | test("(?:password|passwd|passphrase|secret|token|apikey|credentials?|authorization|cookie|privatekey|accesskey|secretkey)$"))
-    or (($p | length) > 1 and ($p[-1] | IN("pass", "pwd", "pw")))
+    or ($p[-1] | IN("pwd", "pw")) or (($p | length) > 1 and $p[-1] == "pass")
     or (($p | length) > 1 and $p[-1] == "key"
         and ($p[-2] | IN("api", "access", "private", "secret", "signing", "encryption", "master", "client")));
 def key_re: "(?<![A-Za-z0-9_.-])(?<k>[A-Za-z][A-Za-z0-9_.-]*)[\"']?[ \\t]*[:=][ \\t]*\\S";
 def flag_re: "(?:^|[\\s\"'])--(?<k>[A-Za-z][A-Za-z0-9_-]*)(?:=|[ \\t]+)[^\\s-]";
 # A long key-like string: 24 or more letters and digits with both, or 40 or more of
-# [A-Za-z0-9+/=_-] with upper case, lower case and a digit (base64 with "/"). Hyphens break
-# the first kind, so UUIDs, run IDs and branch names stay; short hashes are under 24.
+# [A-Za-z0-9+/=_-] with upper case, lower case and a digit outside web links (base64 with
+# "/"). Hyphens break the first kind, so UUIDs, run IDs and branch names stay; short hashes
+# are under 24.
 def long_hit:
   any(match("[A-Za-z0-9]{24,}"; "g").string; test("[0-9]") and test("[A-Za-z]"))
-  or any(match("[A-Za-z0-9+/=_-]{40,}"; "g").string; test("[0-9]") and test("[a-z]") and test("[A-Z]"));
+  or any(masked | match("[A-Za-z0-9+/=_-]{40,}"; "g").string; test("[0-9]") and test("[a-z]") and test("[A-Z]"));
 def secret_hit:
   . as $l
   | any(token_list[]; . as $re | $l | test($re))

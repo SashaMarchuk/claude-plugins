@@ -248,6 +248,14 @@ zedrootup|rule $HO_PLUGIN_ROOT/../../zedrootup/x
 zedcurluser|rule curl -u zedcurluser:pw https://example.com
 zedsession|rule Cookie: session=zedsession
 zedlowertok|rule $v_lower
+zedcurly|rule “/srv/x/Zed Corp/zedcurly.md”
+zedvenv|rule #!/srv/x/zedvenv/bin/python
+zedamp|rule cd x&&/srv/x/zedamp
+zedsmb|rule smb://nas/Zed Corp/zedsmb.md
+zedvscode|rule vscode://file/srv/x/zedvscode
+zeddrive2|rule C://Users/x/zeddrive2
+zedpwd|rule Pwd=zedpwd
+zedprojspec|G1 $proj/docs/Zedclient (draft)/zedprojspec.md
 EOF
 shapes=$(cat "$base/shapes.txt")
 printf '%s\n' "$shapes" | cut -d'|' -f2- > "$base/d3.txt"
@@ -291,6 +299,7 @@ Ratio 1/2/3
 at lib/run.sh:120 in ho_run_open
 run 20261126-163833-abc123 on branch harness/feedback-3 at commit b28c2b3
 see https://github.com/acme/tools/issues/12345
+see https://github.com/ZedOwner42/claude-plugins/issues/92
 id 123e4567-e89b-12d3-a456-426614174000
 read/write and/or a/b I/O
 passed=true passes: 3 bypass: no
@@ -305,6 +314,14 @@ while IFS= read -r line; do
   if printf '%s\n' "$shown" | grep -qxF -- "$line"; then ok "H-140 realistic report: [${line:0:48}] stays as written"
   else bad "H-140 realistic report: [${line:0:48}] stays as written" "changed"; fi
 done < "$base/d4.txt"
+rm -rf "$(draft_of "$out")"
+
+# ---- The title cut forms no shape of its own ---------------------------------------------
+printf 'The status verb is slow when it runs on a box: harness status >/dev/null took 9 s\n' > "$base/d6.txt"
+rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d6.txt") || rc=$?
+assert_eq "H-140 title: a first line cut inside /dev/null still gives a preview (exit 0)" "0" "$rc"
+assert_contains "H-140 title: the cut title falls back to the plain title" "$out" "Title: Harness feedback: problem report"
+assert_contains "H-140 title: the full line stays in the body" "$out" "harness status >/dev/null took 9 s"
 rm -rf "$(draft_of "$out")"
 
 # ---- No false refusal: the plugin's own files as descriptions give a preview ---------------

@@ -217,6 +217,9 @@ ho_fb_preview() {
     ho_fb_err "cannot build the draft"; rm -rf "$draft"; return 1
   fi
   first=$(awk 'NF && !/^<line removed: [a-z]+>$/ { gsub(/[\t\r]/, " "); sub(/^ +/, ""); print substr($0, 1, 70); exit }' "$draft/desc.txt")
+  # The cut may itself form a shape (">/dev/null" cut to ">/dev/nu"): such a title is not used.
+  first=$(printf '%s\n' "$first" | ho_fb_clean '[]' "$accts") || first=""
+  case $first in "<line removed: "*) first="" ;; esac
   title="Harness feedback: ${first:-problem report}"
   printf '%s\n' "$title" > "$draft/title.txt"
   printf '%s\n' "$repo" > "$draft/repo.txt"

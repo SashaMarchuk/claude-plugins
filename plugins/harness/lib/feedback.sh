@@ -162,8 +162,9 @@ ho_fb_summary() {
   # The facts are printed only when the whole ledger read worked, so a failed read gives one
   # clear line and never a half summary next to it.
   if facts=$(
-    # shellcheck disable=SC2034 # read by ho_ledger_events
-    HO_RUN_DIR=$run
+    # The engine's own run open (read-only) sets HO_RUN_DIR and HO_RUN_DIR_PHYS, so a STOP
+    # file beside a linked runs folder's physical place is seen too.
+    ho_run_open "$run" >/dev/null 2>&1 || exit 1
     # The stop state as ho_stopped reads it (a STOP file first, then the last stop or resume,
     # unknown after an unreadable line), but only looked at: nothing is recorded.
     file=false

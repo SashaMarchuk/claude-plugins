@@ -334,20 +334,29 @@ EOF_REPOS
 }
 
 # ho_in_close_asked: close every session that asked a question and is not closed yet (H-032).
+# A close that fails is tried again at every tick, but reported once per question: one
+# "close-failed <session>" line and one owner-action line, until a newer question resets it.
 ho_in_close_asked() {
-  local s st
+  local s kind st
   # Only a session whose newest question has no later question-closed line: a session relaunched
   # under the same name after the answer (D14) is not closed again.
-  ho_ledger_events | jq -rn 'reduce (inputs | select(.kind == "question" or .kind == "question-closed")
+  ho_ledger_events | jq -rn 'reduce (inputs | select(.kind == "question" or .kind == "question-closed"
+        or .kind == "question-close-failed")
       | select((.session | type) == "string")) as $e ({}; .[$e.session] = $e.kind)
-    | to_entries[] | select(.value == "question") | .key' |
-    while IFS= read -r s; do
+    | to_entries[] | select(.value != "question-closed") | "\(.key) \(.value)"' |
+    while read -r s kind; do
       ho_session_name_ok "$s" 2>/dev/null || continue
       [ -f "$HO_RUN_DIR/sessions/$s.json" ] || continue
       st=$(jq -r '.status // ""' "$HO_RUN_DIR/sessions/$s.json" 2>/dev/null) || continue
       if [ "$st" = closed ] || ho_session_close "$s" >/dev/null 2>&1; then
         ho_ledger_append question-closed session "$s"
         echo "closed $s"
+      elif [ "$kind" = question ]; then
+        ho_ledger_append question-close-failed session "$s"
+        ho_ledger_append owner-action title "session $s asked a question and could not be closed" \
+          why "the intake tick closes a session that asked a question (H-032); this close failed and is tried again at every tick" \
+          command "harness session $HO_RUN_DIR close $s" verify "the session record of $s reads closed"
+        echo "close-failed $s"
       fi
     done
 }
@@ -420,7 +429,7 @@ usage: harness intake <run-dir> <verb>
   tick [--max N]      one poll when it is due: close sessions that asked a question, then take
                       ready tickets up to the free worker slots (and N). Prints one line each:
                       start|blocked|needs-review|unblocked|kept-blocked|kept-in-progress|
-                      kept-done|error <id>, closed <session>,
+                      kept-done|error <id>, closed|close-failed <session>,
                       not-due <seconds>, tracker-error, stopped
   poll [--max N]      tick until the run is stopped
 USAGE

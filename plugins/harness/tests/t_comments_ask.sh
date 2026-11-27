@@ -55,3 +55,18 @@ printf '\n\n' > "$base/empty.md"
 assert_exit "H-032 a question file with no question is refused" 64 "$h" tickets ask "$t3" "$base/empty.md"
 assert_eq "H-032 the refused ask posts nothing" "0" "$(jq '.comments | length' "$HO_FAKE_GH_DIR/issues/$t3.json")"
 assert_eq "H-032 the refused ask keeps the state" '["harness:in-progress"]' "$(labels "$t3")"
+
+# H-032 a session that asked a question and cannot be closed is reported once: one result line
+# and one owner-action ledger line. Later ticks keep trying the close without a new report.
+jq -cn --arg r "$(basename "$run")" '{run: $r, status: "running", session_id: "not-a-uuid"}' > "$run/sessions/w9.json"
+jq -cn --arg r "$(basename "$run")" '{ts: "2026-01-01T00:00:00Z", run: $r, kind: "question", session: "w9", ticket: "1"}' >> "$run/ledger.jsonl"
+out=$(tick 2>/dev/null)
+assert_contains "H-032 a session that cannot be closed is reported" "$out" "close-failed w9"
+assert_eq "H-032 the failed close gets one owner-action line" "1" "$(jq -c 'select(.kind == "owner-action")' "$run/ledger.jsonl" | grep -c 'w9' || true)"
+out=$(tick 2>/dev/null)
+assert_eq "H-032 the next tick does not report the failed close again" "" "$(printf '%s' "$out" | grep 'w9' || true)"
+assert_eq "H-032 still one owner-action line after the next tick" "1" "$(jq -c 'select(.kind == "owner-action")' "$run/ledger.jsonl" | grep -c 'w9' || true)"
+# Once the close works, the session is closed and recorded as such.
+jq '.status = "closed"' "$run/sessions/w9.json" > "$base/w9.json" && mv "$base/w9.json" "$run/sessions/w9.json"
+out=$(tick 2>/dev/null)
+assert_contains "H-032 a later close that works is recorded" "$out" "closed w9"

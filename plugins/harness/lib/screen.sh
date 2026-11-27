@@ -312,7 +312,10 @@ ho_screen_selftest() {
 # at the right end of its input box's top rule: at least three rule characters, one space, the
 # name, one space, then rule characters only. For exactly that line, print the plain rule of
 # the same width (the name and its two spaces become rule characters) and return 0; return 1
-# for any other line. The name comes from the session's record, so typed text cannot fake it.
+# for any other line. The name comes from the session's record, so another session's name
+# never opens a box. The own name is on the screen and can be typed; that is safe because a
+# typed copy inside the box is box text (a draft), and a printed fake box above the real one
+# gives a second input line (a draft); delivery types nothing in either case.
 ho_screen_named_rule() {
   local l=$1 c=$2 nm=$3 head rest mid tail fill i
   [ -n "$c" ] && [ -n "$nm" ] || return 1

@@ -84,6 +84,28 @@ ho_deliver_outside_project() {
   ho_session_runtime_path_ok "$1/ho-probe" 2>/dev/null
 }
 
+# ho_deliver_not_above_project <folder>: 0 when the folder holds neither the project, its
+# worktrees folder nor a worktree. A transcript folder above the project would let a glob or a
+# cached path reach a transcript planted inside it (PR #118 validator, minors 1 and 2).
+# Folders are compared by identity (-ef), walking up from each project folder.
+ho_deliver_not_above_project() {
+  local d roots r a
+  d=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  roots=$(ho_session_project_roots 2>/dev/null) || return 1
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    a=$r
+    while :; do
+      [ ! "$a" -ef "$d" ] || return 1
+      [ "$a" != / ] || break
+      a=$(dirname "$a")
+    done
+  done <<EOF_ROOTS
+$roots
+EOF_ROOTS
+  return 0
+}
+
 # ho_deliver_exec_path <program>: the PATH for a program that delivery runs (the version check
 # and the message command): the fixed system folders and the program's own folder, never a
 # folder of the project or a worktree, and never the caller's PATH. So a "#!/usr/bin/env bash"
@@ -152,7 +174,7 @@ ho_deliver_profile() {
 # made it: an absolute path with no line break, and a folder. The file found must be a regular,
 # readable file inside it. The path is kept in the record once found.
 ho_deliver_transcript() {
-  local rec=$1 profile=$2 sid cached glob root f
+  local rec=$1 profile=$2 sid cached glob root f fdir
   root=$(jq -r '.transcript_root // ""' "$rec")
   case $root in /*) ;; *) return 1 ;; esac
   case $root in *"
@@ -161,6 +183,7 @@ ho_deliver_transcript() {
   # A folder of the project or a worktree is never a transcript folder: a record there could
   # be planted (validator, PR #95).
   ho_deliver_outside_project "$root" || return 1
+  ho_deliver_not_above_project "$root" || return 1
   sid=$(jq -r '.session_id // ""' "$rec")
   ho_session_uuid_ok "$sid" 2>/dev/null || return 1
   # The cached path is resolved first (".." segments and links of its folders), then it counts
@@ -182,13 +205,15 @@ ho_deliver_transcript() {
     base=$(cd "$root/$pre" 2>/dev/null && pwd -P) || return 1
     [ "$base" = "$want" ] || return 1
     ho_deliver_outside_project "$base" || return 1
+    ho_deliver_not_above_project "$base" || return 1
     rest=${glob#"$pre"/}
   fi
   cached=$(jq -r '.transcript // ""' "$rec")
   case $cached in
     /*)
       cdir=$(cd "$(dirname "$cached")" 2>/dev/null && pwd -P) || cdir=""
-      [ -n "$cdir" ] && cached="$cdir/$(basename "$cached")" || cached=""
+      # The cached file's own folder is never inside the project or a worktree.
+      [ -n "$cdir" ] && ho_deliver_outside_project "$cdir" && cached="$cdir/$(basename "$cached")" || cached=""
       ;;
     *) cached="" ;;
   esac
@@ -208,6 +233,9 @@ ho_deliver_transcript() {
     # No folder below the base may be a link: a linked folder could lead to a planted
     # transcript (PR #95 review). The base itself was checked above.
     ho_deliver_no_link_below "$base" "$f" || continue
+    # Nor is the found file's own folder inside the project or a worktree.
+    fdir=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P) || continue
+    ho_deliver_outside_project "$fdir" || continue
     ho_session_set "$rec" '.transcript = $t' --arg t "$f" >/dev/null 2>&1 || true
     printf '%s\n' "$f"
     return 0

@@ -153,31 +153,184 @@ ho_ledger_events() {
   jq -cR 'select(length > 0) | (fromjson? | select(type == "object")) // {"kind":"unreadable"}' "$f"
 }
 
-# Newest stop or resume event: "stop", "resume" or "" (none).
-ho_last_stop_event() {
-  ho_ledger_events | jq -r 'select(.kind == "stop" or .kind == "resume") | .kind' | tail -n 1
+# Soft stops (H-086, design D25, D25a, D25b). A stop line carries its variant (`type`), the
+# tickets it lets finish (`tickets`: "all" or a space list, soft:ticket only) and a stop id. The
+# newest stop since the last resume is the one in force. While the STOP file exists the run is at
+# least as strict as soft:step: a looser stop in force (soft:ticket) or none at all makes the next
+# check record one soft:step line from the file.
+#   soft:step    the current step finishes; no new step and no new ticket (the default)
+#   soft:task    the same for the engine; its stop text asks the session to stop after its
+#                current task inside the step
+#   soft:ticket  a ticket that began before the stop may begin its next steps and merge; the
+#                other tickets get soft:step; no new ticket begins
+HO_STOP_TYPES="soft:step soft:task soft:ticket"
+
+# ho_stop_info: one jq pass over the whole ledger, so no early-closing reader can hide a bad line.
+# Prints <state>|<type>|<tickets>|<stop id>|<tickets begun before the stop> (| never collapses
+# empty fields, as a tab would).
+# state: none, stop or unknown (an unreadable line after the last stop or resume).
+ho_stop_info() {
+  ho_ledger_events | jq -rn 'reduce inputs as $e ({state: "none", type: "", scope: "", id: "", begun: [], seen: []};
+      if $e.kind == "unreadable" then .state = "unknown"
+      elif $e.kind == "stop" then
+        (if .state == "stop" then . else .begun = .seen end)
+        | .state = "stop" | .type = ($e.type // "soft:step") | .scope = ($e.tickets // "all") | .id = ($e.stop_id // "")
+      elif $e.kind == "resume" then .state = "none" | .type = "" | .scope = "" | .id = "" | .begun = []
+      elif $e.kind == "step-begin" or ($e.kind == "session-launch" and ($e.ticket // "") != "") then .seen += [($e.ticket // "" | tostring)]
+      else . end)
+    | [.state, .type, .scope, .id, (.begun | unique | join(" "))] | map(gsub("[|\\n]"; " ")) | join("|")'
+}
+
+# ho_stop_read: set HO_STOP_STATE, HO_STOP_TYPE, HO_STOP_TICKETS, HO_STOP_ID and HO_STOP_BEGUN.
+ho_stop_read() {
+  local info
+  info=$(ho_stop_info) || info=unknown
+  IFS='|' read -r HO_STOP_STATE HO_STOP_TYPE HO_STOP_TICKETS HO_STOP_ID HO_STOP_BEGUN <<EOF_STOP
+$info
+EOF_STOP
+  case ${HO_STOP_STATE-} in none | stop) ;; *) HO_STOP_STATE=unknown ;; esac
 }
 
 # ho_stopped: 0 stopped, 1 not stopped, 2 unknown. An unreadable ledger line makes the state
 # unknown (never "not stopped") until a later stop or resume line makes it known again.
 ho_stopped() {
-  local state
+  ho_stop_read
   if [ -e "$(ho_stop_file)" ]; then
-    [ "$(ho_last_stop_event)" = stop ] || ho_ledger_append stop source file type soft:step reason "STOP file"
+    # D25b: the file applies soft:step. It is recorded when no stop is in force, when the state
+    # is unknown, or when the stop in force is looser; a stricter stop (soft:task) stays.
+    if [ "$HO_STOP_STATE" != stop ] || [ "$HO_STOP_TYPE" = soft:ticket ]; then
+      ho_ledger_append stop source file type soft:step tickets all stop_id "$(ho_stop_id_new)" reason "STOP file"
+    fi
     return 0
   fi
-  # One jq pass reads the whole ledger, so no early-closing reader can hide a bad line.
-  state=$(ho_ledger_events | jq -rn 'reduce inputs as $e ("none";
-      if $e.kind == "unreadable" then "unknown"
-      elif $e.kind == "stop" then "stop"
-      elif $e.kind == "resume" then "none"
-      else . end)') || state=unknown
-  case $state in
+  case $HO_STOP_STATE in
     stop) return 0 ;;
     none) return 1 ;;
   esac
   printf 'harness: run ledger %s/ledger.jsonl has an unreadable line after the last stop or resume; stop state unknown. Record a stop or resume to continue.\n' "$HO_RUN_DIR" >&2
   return 2
+}
+
+ho_stop_id_new() { printf 'stop-%s\n' "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"; }
+
+# ho_stop_gate [ticket]: may new work of this ticket start? 0 yes (no stop, or a soft:ticket stop
+# that covers a ticket begun before it), 75 no, 2 the stop state is unknown. Work that names no
+# ticket counts as new work.
+ho_stop_gate() {
+  local t=${1-} st=0
+  ho_stopped || st=$?
+  case $st in 1) return 0 ;; 2) return 2 ;; esac
+  ho_stop_read
+  [ "$HO_STOP_TYPE" = soft:ticket ] && [ -n "$t" ] || return 75
+  case " $HO_STOP_TICKETS " in *" all "* | *" $t "*) ;; *) return 75 ;; esac
+  case " $HO_STOP_BEGUN " in *" $t "*) return 0 ;; esac
+  return 75
+}
+
+# ho_stop_gate_soft: may a session that already runs keep finishing its work (a heavy or stage
+# slot)? 0 with no stop or a soft stop, 75 otherwise, 2 unknown (D25a).
+ho_stop_gate_soft() {
+  local st=0
+  ho_stopped || st=$?
+  case $st in 1) return 0 ;; 2) return 2 ;; esac
+  ho_stop_read
+  case " $HO_STOP_TYPES " in *" $HO_STOP_TYPE "*) return 0 ;; esac
+  return 75
+}
+
+# ho_stop_ticket_arg <value>: a ticket id read in base 10 (at most 9 digits), or exit 64.
+ho_stop_ticket_arg() {
+  case ${1-} in '' | *[!0-9]*) printf 'harness: a ticket id must be a number, not %s\n' "${1-}" >&2; return 64 ;; esac
+  [ "${#1}" -le 9 ] || { printf 'harness: a ticket id has at most 9 digits: %s\n' "$1" >&2; return 64; }
+  printf '%s\n' "$((10#$1))"
+}
+
+# The standard stop text of each variant. It names no step of any flow (D2): step names come
+# from the flow.
+ho_stop_text() {
+  case $1 in
+    soft:step) echo "Soft stop: finish the step you are on now, write its result, then end your turn. Start no new step and no new ticket." ;;
+    soft:task) echo "Soft stop: finish the task you are working on now inside your current step, commit it, write your step result with what is done and what is left, then end your turn. Start no new task, step or ticket." ;;
+    soft:ticket) echo "Soft stop: finish the ticket you are working on through its remaining steps. No new ticket starts." ;;
+  esac
+}
+
+# state <run> stop [--type T] [--ticket ID]... [reason...]: record a soft stop. The stop text is
+# printed for the caller to deliver (session deliver --id <stop id>); this verb sends nothing.
+ho_state_stop() {
+  local type=soft:step tickets="" t id scope reason
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --type) [ $# -ge 2 ] || { ho_state_usage; return 64; }; type=$2; shift 2 ;;
+      --ticket)
+        [ $# -ge 2 ] || { ho_state_usage; return 64; }
+        t=$(ho_stop_ticket_arg "$2") || return 64
+        tickets="$tickets $t"
+        shift 2
+        ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  case $type in
+    soft:step | soft:task | soft:ticket) ;;
+    hard:*) printf 'harness: %s is a hard stop; hard stops are not part of this engine yet\n' "$type" >&2; return 64 ;;
+    *) printf 'harness: unknown stop type %s (one of: %s)\n' "$type" "$HO_STOP_TYPES" >&2; return 64 ;;
+  esac
+  [ -z "$tickets" ] || [ "$type" = soft:ticket ] || { echo "harness: --ticket goes only with --type soft:ticket" >&2; return 64; }
+  scope=all
+  [ -z "$tickets" ] || scope=$(printf '%s\n' $tickets | sort -n -u | tr '\n' ' ' | sed 's/ $//')
+  reason=${*:-stop requested}
+  id=$(ho_stop_id_new)
+  ho_ledger_append stop source verb type "$type" tickets "$scope" stop_id "$id" reason "$reason"
+  printf 'stop %s %s tickets %s\n' "$id" "$type" "$scope"
+  if [ "$type" = soft:ticket ] && [ "$scope" != all ]; then
+    printf 'text (tickets %s): %s\n' "$scope" "$(ho_stop_text soft:ticket)"
+    printf 'text (other tickets): %s\n' "$(ho_stop_text soft:step)"
+  else
+    printf 'text: %s\n' "$(ho_stop_text "$type")"
+  fi
+  printf 'note: the stop text is not delivered by this verb; send it to each session the stop covers with "session deliver <name> --id %s".\n' "$id"
+}
+
+# state <run> stop-state: the stop in force as one JSON line; exit as "stopped".
+ho_state_stop_state() {
+  local rc=0
+  ho_stopped 2>/dev/null || rc=$?
+  ho_stop_read
+  [ "$rc" -ne 2 ] || HO_STOP_STATE=unknown
+  jq -cn --arg state "$HO_STOP_STATE" --arg type "$HO_STOP_TYPE" --arg tickets "$HO_STOP_TICKETS" --arg id "$HO_STOP_ID" \
+    '{state: $state, type: $type, tickets: $tickets, stop_id: $id}'
+  return "$rc"
+}
+
+# state <run> begin --ticket T --step S: the step gate (D25a). The caller asks before it starts a
+# step of a ticket; 0 and one step-begin line, or 75 when a stop lets nothing new start (also
+# when the stop state is unknown). The step id is data from the flow. A ticket also counts as
+# begun when a session of it launched (session launch --ticket) before the stop.
+ho_state_begin() {
+  local t="" s="" rc=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --ticket | --step)
+        [ $# -ge 2 ] || { ho_state_usage; return 64; }
+        if [ "$1" = --ticket ]; then t=$(ho_stop_ticket_arg "$2") || return 64; else s=$2; fi
+        shift 2
+        ;;
+      *) printf 'harness: unknown begin argument %s\n' "$1" >&2; return 64 ;;
+    esac
+  done
+  [ -n "$t" ] && [ -n "$s" ] || { ho_state_usage; return 64; }
+  printf '%s' "$s" | grep -Eqx '[a-z0-9][a-z0-9-]{0,39}' || { printf 'harness: a step id uses a-z 0-9 - (at most 40), not %s\n' "$s" >&2; return 64; }
+  ho_stop_gate "$t" || rc=$?
+  case $rc in
+    0)
+      ho_ledger_append step-begin ticket "$t" step "$s"
+      printf 'OK ticket %s step %s may begin\n' "$t" "$s"
+      ;;
+    2) printf 'harness: the stop state is unknown; ticket %s step %s does not begin\n' "$t" "$s" >&2; return 75 ;;
+    *) printf 'harness: the run is stopped (%s); ticket %s step %s does not begin\n' "${HO_STOP_TYPE:-stop}" "$t" "$s" >&2; return 75 ;;
+  esac
 }
 
 ho_marker_name_ok() {
@@ -259,6 +412,39 @@ ho_limits_stamp() {
     '{schemaVersion: 2, workers: $w, heavy: $h, stages: ({browser: 1} + $s)}' | ho_atomic_write "$dir/limits.json"
 }
 
+# Lifecycle settings (H-079, S8-20a, OPEN-9): read once at run start into <run>/lifecycle.json;
+# lib/lifecycle.sh acts on them.
+# ho_life_stamp <run-dir> <standby flag: on, off or empty>: write lifecycle.json once.
+ho_life_stamp() {
+  local dir=$1 flag=$2 standby source onb
+  standby=$(ho_cfg '.run.standby' 'false') || return 78
+  source=config
+  [ "$(ho_cfg '.run.standby' '__unset__')" != __unset__ ] || source=default
+  case $standby in
+    true | false) ;;
+    *) printf 'harness: config run.standby=%s: it must be true or false\n' "$standby" >&2; return 78 ;;
+  esac
+  case $flag in
+    on) standby=true; source=flag ;;
+    off) standby=false; source=flag ;;
+  esac
+  onb=$(ho_cfg '.run.on_only_human_blocked' 'wait') || return 78
+  case $onb in
+    wait | end) ;;
+    *) printf 'harness: config run.on_only_human_blocked=%s: it must be wait or end\n' "$onb" >&2; return 78 ;;
+  esac
+  jq -n --argjson s "$standby" --arg src "$source" --arg onb "$onb" \
+    '{schemaVersion: 2, standby: $s, standby_source: $src, on_only_human_blocked: $onb}' | ho_atomic_write "$dir/lifecycle.json"
+}
+
+# ho_life_standby_arg <value>: check a --standby value.
+ho_life_standby_arg() {
+  case ${1-} in
+    on | off) ;;
+    *) printf 'harness: --standby must be on or off, not %s\n' "${1-}" >&2; return 64 ;;
+  esac
+}
+
 # ho_workers_arg <value>: check a --workers value.
 ho_workers_arg() {
   case ${1-} in
@@ -266,12 +452,14 @@ ho_workers_arg() {
   esac
 }
 
-# ho_run_new [--workers N]: the worker cap given at launch beats the config (H-104).
+# ho_run_new [--workers N] [--standby on|off]: the worker cap given at launch beats the config
+# (H-104); so does the standby flag (OPEN-9).
 ho_run_new() {
-  local proj runs id dir tries=0 workers=""
+  local proj runs id dir tries=0 workers="" standby=""
   while [ $# -gt 0 ]; do
     case $1 in
       --workers) [ $# -ge 2 ] || { echo "harness: --workers needs a number" >&2; exit 64; }; workers=$2; shift 2 ;;
+      --standby) [ $# -ge 2 ] || { echo "harness: --standby needs on or off" >&2; exit 64; }; ho_life_standby_arg "$2" || exit 64; standby=$2; shift 2 ;;
       *) printf 'harness: unknown run new argument %s\n' "$1" >&2; exit 64 ;;
     esac
   done
@@ -295,12 +483,16 @@ ho_run_new() {
   mkdir "$dir/markers"
   # Limits are fixed for the run before the stamp is written: a run never starts without them.
   ho_limits_stamp "$dir" "$workers" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
+  # Standby and on_only_human_blocked (H-079, S8-20a, OPEN-9) are fixed for the run as well.
+  ho_life_stamp "$dir" "$standby" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
   jq -n --argjson schema "$HO_RUN_SCHEMA" --arg engine "$HO_ENGINE" --arg id "$id" --arg ts "$(ho_now)" \
     '{schemaVersion: $schema, engine: $engine, runId: $id, created: $ts}' | ho_atomic_write "$dir/run.json" || exit 1
   HO_RUN_DIR=$dir
   HO_RUN_DIR_PHYS=""
   HO_RUN_ID=$id
   ho_ledger_append run-start
+  ho_ledger_append run-settings standby "$(jq -r .standby "$dir/lifecycle.json")" \
+    standby_source "$(jq -r .standby_source "$dir/lifecycle.json")" on_only_human_blocked "$(jq -r .on_only_human_blocked "$dir/lifecycle.json")"
   printf '%s\n' "$dir"
 }
 
@@ -311,7 +503,11 @@ usage: harness state <run-dir> <verb> [args]
   marker set|check|clear <name>           markers carry the run ID
   decision <title> <reason>               append a decision to the run ledger
   owner-action <title> <why> <command> <verify>
-  stop [reason]                           record a default soft stop
+  stop [--type soft:step|soft:task|soft:ticket] [--ticket ID]... [reason]
+                                          record a soft stop (default soft:step); prints its
+                                          stop id and text, which it does not deliver
+  stop-state                              the stop in force, one JSON line
+  begin --ticket T --step S               the step gate: 0 may begin, 75 a stop refuses it
   resume                                  record a resume (refused while the STOP file exists)
   stopped                                 exit 0 stopped, 1 not stopped, 2 unknown
 USAGE
@@ -334,7 +530,9 @@ ho_state_main() {
       [ $# -eq 4 ] || { ho_state_usage; exit 64; }
       ho_ledger_append owner-action title "$1" why "$2" command "$3" verify "$4"
       ;;
-    stop) ho_ledger_append stop source verb type soft:step reason "${*:-stop requested}" ;;
+    stop) ho_state_stop "$@" || exit $? ;;
+    stop-state) ho_state_stop_state || exit $? ;;
+    begin) ho_state_begin "$@" || exit $? ;;
     resume)
       if [ -e "$(ho_stop_file)" ]; then
         printf 'harness: %s exists; remove it before resuming\n' "$(ho_stop_file)" >&2

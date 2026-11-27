@@ -44,6 +44,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/screen.sh"
 # shellcheck source=../lib/intake.sh
 . "$HO_ROOT/lib/intake.sh"
+# shellcheck source=../lib/lifecycle.sh
+. "$HO_ROOT/lib/lifecycle.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -55,7 +57,7 @@ verbs:
   selftest   check that no 0.6.0 variable or script can leak into this engine
   tickets    the ticket queue (run "harness tickets help")
   config     config get <jq-path> [default] | config get --int <jq-path> <default> | config check
-  run        run new [--workers N]: create a stamped run in this project
+  run        run new [--workers N] [--standby on|off]: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
   session    session <run-dir> launch|close|list|status|read|deliver|proof: sessions, their liveness and instructions
   slot       slot <run-dir> acquire|release|list|limits|heavy-ops|heavy-add: engine-enforced limits
@@ -63,6 +65,7 @@ verbs:
   flow       flows: list | check | steps | plan | preflight <flow> | copy <flow> <new> | render <flow> <role> ...
   screen     screen text: classify a capture, watch a session, pre-trust a folder, wait
   intake     intake <run-dir> interval|tick|poll: take labelled tickets, check access and readiness
+  lifecycle  lifecycle <run-dir> check|done <name>: end of run, standby, closing finished sessions
 USAGE
 }
 
@@ -83,6 +86,7 @@ case $verb in
   loop)     ho_loop_main "$@" ;;
   screen)   ho_screen_main "$@" ;;
   intake)   ho_intake_main "$@" ;;
+  lifecycle) ho_life_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

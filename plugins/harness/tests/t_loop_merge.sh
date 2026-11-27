@@ -493,3 +493,27 @@ assert_eq "H-046 confirmation: the commit made by the hook is kept" "made by a h
 assert_eq "H-046 confirmation: no merge-confirmed line for that lane" "" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "y1") | .lane' "$run/ledger.jsonl")"
 git -C "$proj" config --unset core.hooksPath
 git -C "$int" reset -q --hard "$cur"
+
+# ---- H-086, D25a: soft stops and the merge ------------------------------------------------
+# soft:step and soft:task refuse the merge; soft:ticket merges the lane of a ticket that began
+# before the stop, and only that lane.
+lane st1 st1.txt "from st1"; verdict st1 passed
+"$h" loop "$run" ready st1 --worktree "$PWD/w-st1" --ticket 7 >/dev/null
+lane st2 st2.txt "from st2"; verdict st2 passed
+"$h" loop "$run" ready st2 --worktree "$PWD/w-st2" --ticket 8 >/dev/null
+lane st3 st3.txt "from st3"; verdict st3 passed
+assert_eq "H-086: ready records the lane's ticket" "7" "$(jq -r .ticket "$run/lanes/st1.json")"
+"$h" state "$run" begin --ticket 7 --step s1 >/dev/null
+"$h" state "$run" begin --ticket 8 --step s1 >/dev/null
+"$h" state "$run" stop --type soft:task >/dev/null
+assert_eq "H-086: soft:task refuses the merge of a started ticket (75)" 75 "$(merge_rc st1)"
+"$h" state "$run" stop --type soft:ticket --ticket 7 >/dev/null
+assert_eq "D25a: a per-ticket soft:ticket stop refuses the lane of another ticket (75)" 75 "$(merge_rc st2)"
+assert_eq "D25a: a soft:ticket stop refuses a lane that names no ticket (75)" 75 "$(merge_rc st3)"
+before=$(tip)
+assert_eq "H-086: soft:ticket merges the lane of the covered ticket, so it runs to its end" 0 "$(merge_rc st1)"
+assert_eq "H-086: that merge is confirmed by git" "$(lsha st1)" "$(git -C "$proj" rev-parse "$(tip)^2")"
+assert_eq "H-086: the merge started from the earlier tip" "$before" "$(git -C "$proj" rev-parse "$(tip)^1")"
+"$h" state "$run" stop >/dev/null
+assert_eq "H-086: the default soft:step refuses every merge (75)" 75 "$(merge_rc st2)"
+"$h" state "$run" resume >/dev/null

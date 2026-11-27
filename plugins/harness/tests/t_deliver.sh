@@ -350,7 +350,10 @@ screen v9 busy
 mkdir -p "$base/evil"
 printf '#!/bin/sh\n: > "%s/evil-ran"\necho 9.9.9\n' "$base" > "$base/evil/claude"
 chmod 700 "$base/evil/claude"
+# A positive force-send passes through the queue and the screen gate: a longer wait, as below.
+set_wait 10
 out=$(PATH="$base/evil:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver v9 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
+set_wait 2
 assert_eq "Codex P2: a claude found first on PATH after launch is never run" "no" "$([ -e "$base/evil-ran" ] && echo yes || echo no)"
 assert_eq "Codex P2: the force-send still works with the launch-checked runtime" "0" "$rc"
 

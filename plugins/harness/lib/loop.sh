@@ -88,10 +88,16 @@ ho_loop_integration() {
 
 # ---- ready <lane> --worktree W: the finalize commit is the only completion signal -----------
 ho_loop_ready() {
-  local lane=${1-} wt="" branch sha subj rc=0
+  local lane=${1-} wt="" branch sha subj rc=0 ticket=""
   shift || true
-  [ "${1-}" = --worktree ] && [ -n "${2-}" ] || { ho_loop_usage; return 64; }
-  wt=$2
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --worktree) [ -n "${2-}" ] || { ho_loop_usage; return 64; }; wt=$2; shift 2 ;;
+      --ticket) [ $# -ge 2 ] || { ho_loop_usage; return 64; }; ticket=$(ho_stop_ticket_arg "$2") || return 64; shift 2 ;;
+      *) ho_loop_usage; return 64 ;;
+    esac
+  done
+  [ -n "$wt" ] || { ho_loop_usage; return 64; }
   ho_loop_lane_ok "$lane" || return 65
   [ -f "$HO_RUN_DIR/integration.json" ] || { ho_loop_err "run $HO_RUN_ID has no integration branch yet"; return 65; }
   branch=$(git -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null) || { ho_loop_err "lane $lane: $wt is not on a branch"; return 65; }
@@ -105,8 +111,9 @@ ho_loop_ready() {
   esac
   wt=$(cd -P "$wt" && pwd -P)
   mkdir -p "$HO_RUN_DIR/lanes"
-  jq -n --arg lane "$lane" --arg worktree "$wt" --arg branch "$branch" --arg sha "$sha" --arg ws "${HO_SESSION_ID-}" \
-    '{lane: $lane, worktree: $worktree, branch: $branch, sha: $sha, worker_session: (if $ws == "" then null else $ws end)}' \
+  jq -n --arg lane "$lane" --arg worktree "$wt" --arg branch "$branch" --arg sha "$sha" --arg ws "${HO_SESSION_ID-}" --arg t "$ticket" \
+    '{lane: $lane, worktree: $worktree, branch: $branch, sha: $sha, worker_session: (if $ws == "" then null else $ws end),
+      ticket: (if $t == "" then null else $t end)}' \
     | ho_atomic_write "$HO_RUN_DIR/lanes/$lane.json" || return 1
   ho_ledger_append lane-ready lane "$lane" sha "$sha"
   printf '%s\n' "$HO_RUN_DIR/verdicts/$lane/$sha.json"
@@ -300,8 +307,10 @@ ho_loop_undo() {
 ho_loop_merge_locked() {
   local lane=$1 ij="$HO_RUN_DIR/integration.json" lj="$HO_RUN_DIR/lanes/$1.json"
   local iwt branch old lwt lbranch lsha worker why vsnap gate mc stopped=0 rc=0 new gw log grc=0 gpid
-  ho_stopped || stopped=$?
-  [ "$stopped" -eq 1 ] || { ho_loop_err "the run is stopped (or its stop state is unknown); no merge"; return 75; }
+  # A stop refuses the merge, except for the lane of a ticket that a soft:ticket stop lets run to
+  # its end (H-086, D25a); a lane with no ticket counts as new work.
+  ho_stop_gate "$(jq -r '.ticket // ""' "$lj" 2>/dev/null || true)" || stopped=$?
+  [ "$stopped" -eq 0 ] || { ho_loop_err "the run is stopped (or its stop state is unknown); no merge"; return 75; }
   [ "$ho_loop_sig" -eq 0 ] || { ho_loop_err "the merge was stopped by a signal before it started"; return 75; }
   [ -f "$ij" ] || { ho_loop_err "run $HO_RUN_ID has no integration branch"; return 65; }
   [ -f "$lj" ] || ho_loop_refuse 65 "$lane" "lane is not ready (no finalize commit recorded)" || return
@@ -519,8 +528,9 @@ ho_loop_usage() {
   cat >&2 <<'USAGE'
 usage: harness loop <run-dir> <verb> [args]
   integration --repo R --base B --worktree W   create the run's local integration branch
-  ready <lane> --worktree W                    the lane's tip must be a finalize(<lane>): commit
-                                               on a clean tree; prints the verdict record path
+  ready <lane> --worktree W [--ticket ID]      the lane's tip must be a finalize(<lane>): commit
+                                               on a clean tree; prints the verdict record path;
+                                               the ticket lets a soft:ticket stop merge the lane
   verdict <lane> --sha S                       from inside the validator's session: record its
                                                verdict for commit S (text on stdin)
   merge <lane>                                 merge only on a "passed" verdict of the validator,

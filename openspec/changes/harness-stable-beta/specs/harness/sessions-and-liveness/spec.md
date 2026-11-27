@@ -406,9 +406,13 @@ Source: owner message 2026-11-25 (iTerm2 incident); D42d
 ### Requirement: H-136 A session starts with a clean environment
 The harness SHALL start every session with an environment built from a short allow-list plus the variables the harness sets on purpose. Nothing else SHALL pass from the launching process. The same SHALL hold for a terminal app that the harness starts. The harness SHALL check this after launch and SHALL abort a launch that fails. See design.md D42e.
 
-Decided: design.md D37-SESSIONS-7 (folder trust before a launch)
+Decided: design.md D37-SESSIONS-7, D61
 
 Source: owner message 2026-11-25 (iTerm2 incident); D42e
+
+#### Scenario: The runtime binary comes from the repository (design.md D61)
+- **WHEN** the person's PATH and shell variables are their own, but the runtime binary on that PATH resolves inside the project or one of its worktrees
+- **THEN** the harness uses the person's environment as given, refuses the launch and names the path of the runtime binary
 
 #### Scenario: The person has trusted the project folder (design.md D37-SESSIONS-7)
 - **WHEN** a session is launched in a worktree of the project, and the person has already trusted the project folder in the runtime

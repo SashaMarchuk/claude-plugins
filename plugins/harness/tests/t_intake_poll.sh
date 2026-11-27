@@ -100,3 +100,23 @@ rc=0; "$h" state "$run2" begin --ticket "$te" --step plan >/dev/null 2>&1 || rc=
 assert_eq "H-086 D25a a ticket picked up before a soft:ticket stop may begin its first step" "0" "$rc"
 rc=0; "$h" state "$run2" begin --ticket 999 --step plan >/dev/null 2>&1 || rc=$?
 assert_eq "H-086 D25a a ticket not picked up before the soft:ticket stop does not begin (75)" "75" "$rc"
+
+# H-005 local tickets: with HO_TICKETS_DIR unset, intake reads the ticket folder of the run's own
+# project, never the folder of the place it is called from.
+(
+  export HO_TICKETS_SOURCE=local
+  unset HO_TICKETS_REPO HO_TICKETS_DIR
+  other="$base/other"
+  mkdir -p "$other/.harness"
+  printf '{"schemaVersion": 2}\n' > "$other/.harness/config.json"
+  la=$(cd "$proj" && ticket "Local in the run's project" ready)
+  lb=$(cd "$other" && ticket "Local in another project" ready)
+  run3=$(cd "$proj" && "$h" run new)
+  out=$(cd "$other" && "$h" intake "$run3" tick)
+  assert_contains "H-005 intake takes the ready ticket of the run's own project" "$out" "start $la"
+  sb=$(sed -n '/^$/q; s/^status: //p' "$(find "$other/.harness/tickets" -name "$lb-*.md")")
+  assert_eq "H-005 intake leaves a ticket of another project untouched" "ready" "$sb"
+  sa=$(sed -n '/^$/q; s/^status: //p' "$(find "$proj/.harness/tickets" -name "$la-*.md")")
+  assert_eq "H-005 the run's own ticket is the one claimed" "in-progress" "$sa"
+)
+

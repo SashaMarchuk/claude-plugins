@@ -26,7 +26,7 @@ Settings: `HO_TICKETS_SOURCE` (`local` or `github`), `HO_TICKETS_REPO`, `HO_TICK
 
 ## Intake
 
-`bin/harness intake <run-dir> tick|poll|interval` takes labelled tickets into work. A script polls, not a model (D4).
+`bin/harness intake <run-dir> tick|poll|interval` takes labelled tickets into work. A script polls, not a model (D4). With local tickets and `HO_TICKETS_DIR` unset, it reads `<run's project>/.harness/tickets`, wherever it is called from.
 
 - **Trigger.** Only the ready label puts a ticket into work (H-002). The trigger author is the actor of the newest `labeled` event for that label.
 - **Order at pickup (D2).** First the write-access check: `write`, `maintain` or `admin` passes; triage, read, an unknown person or a failed query counts as read-only, and the ticket moves to `needs-review` with one status comment (H-008, H-009, H-011). A configured target repository (`tickets.target_repos`) that the ticket text (title or body) names needs the same access (D37-INTAKE-9). If the text cannot be read, the ticket is not claimed: one `error <id>` line and a `pickup-error` ledger line report it, and it stays ready for the next poll. A bot is judged by its own access, with no allow-list, until OPEN-INTAKE-1 is answered. Then the claim and its comment. Then the readiness check.

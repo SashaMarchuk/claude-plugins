@@ -175,7 +175,20 @@ rc=0; out=$(cd "$proj" && PATH="$proj/bin:$PATH" "$h" feedback preview "$base/d1
 assert_eq "H-140 runtime guard: a preview with a project claude first on PATH exits 0" "0" "$rc"
 assert_eq "H-140 runtime guard: the project's own claude is not run" "no" "$([ -e "$base/ran" ] && echo yes || echo no)"
 assert_contains "H-140 runtime guard: its version shows as unknown" "$out" "- Runtime: claude-code, version unknown"
+rm -f "$base/ran"; rm -rf "$(draft_of "$out")"
+# In real use HO_PROJECT_DIR is unset: the project comes from the current folder.
+rc=0; out=$(cd "$proj" && env -u HO_PROJECT_DIR PATH="$proj/bin:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
+assert_eq "H-140 runtime guard: with HO_PROJECT_DIR unset the preview exits 0" "0" "$rc"
+assert_eq "H-140 runtime guard: with HO_PROJECT_DIR unset the project's own claude is not run" "no" "$([ -e "$base/ran" ] && echo yes || echo no)"
 rm -rf "$proj/bin" "$base/ran" "$(draft_of "$out")"
+mkdir -p "$proj/sub"
+for where in "$proj" "$proj/sub"; do
+  rc=0; out=$(cd "$where" && env -u HO_PROJECT_DIR "$h" feedback preview "$base/d1.txt") || rc=$?
+  assert_eq "H-140 runtime: with HO_PROJECT_DIR unset, from [${where#"$base"/}], the preview exits 0" "0" "$rc"
+  assert_contains "H-140 runtime: with HO_PROJECT_DIR unset, from [${where#"$base"/}], the real version is shown" "$out" "- Runtime: claude-code 0.0.0"
+  rm -rf "$(draft_of "$out")"
+done
+rmdir "$proj/sub"
 
 # ---- Allow-list context: a private value next to each field does not appear ----------------
 # Run state and engine error codes: a stop event and an error event carry private reasons.

@@ -184,17 +184,38 @@ ho_in_review() {
 
 # ho_in_pickup <id>: print one result line. Returns 0 only when the ticket starts. A tracker
 # step that fails is never silent: it prints "error <id>" and adds a pickup-error ledger line.
+# A step that fails after the claim moves the ticket to blocked, so no ticket stays in progress
+# without a worker; a writer's ready label unblocks it (H-031). The move changes the label only,
+# because the comment may be what failed; a status comment is tried after it. When the move
+# fails too, one owner-action line says what a person does.
 ho_in_pickup() {
-  local rc=0
-  HO_IN_STEP=access
+  local rc=0 left=""
+  HO_IN_STEP=access HO_IN_CLAIMED=0
   ho_in_pickup_steps "$1" || rc=$?
   case $rc in
     0) return 0 ;;
     1) return 1 ;;
   esac
-  ho_ledger_append pickup-error ticket "$1" step "${HO_IN_STEP:-unknown}"
+  if [ "$HO_IN_CLAIMED" = 1 ]; then
+    if ho_in_set_state "$1" blocked; then
+      left=blocked
+      printf 'Reason: a tracker step failed after the claim (%s).\nNext: A person with write access checks the ticket and sets the ready label to take it again.\n' "${HO_IN_STEP:-unknown}" |
+        ho_tk_post "$1" orchestrator status "pickup failed, blocked" - from in-progress to blocked >/dev/null 2>&1 || true
+    else
+      left=in-progress
+      ho_ledger_append owner-action title "ticket $1 is in progress with no worker" \
+        why "a tracker step failed after the claim (${HO_IN_STEP:-unknown}), and the move to blocked failed too" \
+        command "harness tickets block $1 <why-file>, or set its blocked label by hand" verify "the ticket carries only the blocked label"
+    fi
+    ho_ledger_append pickup-error ticket "$1" step "${HO_IN_STEP:-unknown}" state "$left"
+  else
+    ho_ledger_append pickup-error ticket "$1" step "${HO_IN_STEP:-unknown}"
+  fi
   echo "error $1"
   return 1
+}
+ho_in_set_state() { # <id> <state>: on either backend
+  if ho_tk_gh; then ho_tk_gh_set_state "$1" "$2"; else ho_tk_locked ho_tk_l_set_state_locked "$1" "$2"; fi
 }
 
 # ho_in_pickup_steps <id>: returns 0 start, 1 handled (not started), 2 a step failed.
@@ -284,7 +305,7 @@ EOF_REPOS
   else
     ho_tk_locked ho_tk_l_set_state_locked "$id" in-progress ready || return 2
   fi
-  HO_IN_STEP=pickup-comment
+  HO_IN_CLAIMED=1 HO_IN_STEP=pickup-comment
   printf 'The harness took this ticket and checks its readiness now.\n' |
     ho_tk_post "$id" orchestrator pickup "picked up" - from ready to in-progress || return 2
   ho_ledger_append pickup ticket "$id" by "$login"

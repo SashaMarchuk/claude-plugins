@@ -206,3 +206,29 @@ A test exports one report.")
 label alice "$t13" ready
 out=$(HO_FAKE_GH_FAIL_API=repos/fake/api/ tick)
 assert_contains "D37-INTAKE-9 a target repository named only in the title is checked" "$out" "needs-review $t13"
+
+# D2 H-030: a tracker step that fails after the claim leaves no in-progress ticket without a
+# worker. The ticket moves to blocked (one state label), the error is reported once, and a
+# writer's ready label later unblocks and takes it.
+assert_eq "D2 the ticket whose pickup comment failed is moved to blocked" '["harness:blocked"]' "$(labels "$t11")"
+assert_contains "D2 the ledger records where the failed ticket was left" "$(jq -c --arg t "$t11" 'select(.kind == "pickup-error" and .ticket == $t)' "$run/ledger.jsonl")" '"state":"blocked"'
+out=$(tick)
+assert_eq "D2 the next tick reports the failed ticket no more" "" "$(printf '%s' "$out" | grep -w "$t11" || true)"
+label alice "$t11" ready
+out=$(tick)
+assert_contains "D2 a writer's ready label takes the failed ticket again" "$out" "start $t11"
+# When the move to blocked fails too, one owner-action line tells a person what to do.
+cat > "$base/gh-shim2" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" issue comment "*) echo "simulated outage" >&2; exit 1 ;;
+  *" issue edit "*harness:blocked*) echo "simulated outage" >&2; exit 1 ;;
+esac
+exec "$HO_TESTS_DIR/fake-bin/gh" "\$@"
+SHIM
+mkdir -p "$base/gh-shim2.d" && mv "$base/gh-shim2" "$base/gh-shim2.d/gh" && chmod +x "$base/gh-shim2.d/gh"
+t14=$(ticket "Comment and block fail")
+label alice "$t14" ready
+out=$(PATH="$base/gh-shim2.d:$PATH" tick 2>/dev/null || true)
+assert_contains "D2 a failed pickup and a failed move to blocked still print one error line" "$out" "error $t14"
+assert_contains "D2 a ticket left in progress gets one owner-action line" "$(jq -c 'select(.kind == "owner-action")' "$run/ledger.jsonl")" "ticket $t14"

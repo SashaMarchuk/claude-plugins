@@ -20,6 +20,13 @@
 set -euo pipefail
 if [ "${1:-}" = "--version" ]; then
   # HO_FAKE_CLAUDE_VERSION_SLEEP=<s>: answer --version only after that many seconds.
+  # HO_FAKE_CLAUDE_VERSION_LATE=<file>: a helper in the same process group writes the file 15 s
+  # after the start if this process still runs then. A stop of the group before that kills the
+  # helper too, so the file shows that the check outlived 15 s.
+  if [ -n "${HO_FAKE_CLAUDE_VERSION_LATE:-}" ]; then
+    me=$$
+    ( sleep 15; ! kill -0 "$me" 2>/dev/null || : > "$HO_FAKE_CLAUDE_VERSION_LATE" ) > /dev/null 2>&1 < /dev/null &
+  fi
   [ -z "${HO_FAKE_CLAUDE_VERSION_SLEEP:-}" ] || sleep "$HO_FAKE_CLAUDE_VERSION_SLEEP"
   echo "${HO_FAKE_CLAUDE_VERSION:-0.0.0} (fake claude)"
   exit 0

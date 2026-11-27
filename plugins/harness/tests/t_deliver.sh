@@ -235,8 +235,9 @@ assert_exit "S8-24: an instruction id used before in the run is refused" 65 "$h"
 
 # ---- D37-LIFECYCLE-4: the send-now chord comes from runtime data -------------------------
 # A generous wait for a delivery that must succeed: these pass through the queue, which takes a
-# few more steps, and the wait ends as soon as the proof shows (issue #109).
-set_wait 30
+# few more steps, and the wait ends as soon as the proof shows, so a long cap costs nothing when
+# it passes (issue #109; 30 s still failed at a load of about 57).
+set_wait 120
 start f1
 screen f1 busy
 : > "$(fbusy f1)"
@@ -265,7 +266,7 @@ screen f3 busy
 out=$(HO_FAKE_CLAUDE_VERSION=2.1.200 deliver f3 --force-send --text "stop now and park" 2>&1) && rc=0 || rc=$?
 assert_eq "D37-LIFECYCLE-4: below the data's lowest version no chord is sent; the message stays queued" "1 " "$rc $(calls | grep "byte $(rec f3 .handle) " || true)"
 assert_contains "D37-LIFECYCLE-4: the skipped chord is in the ledger" "$(ledger)" 'below 2.1.275'
-set_wait 30
+set_wait 120
 start f4
 screen f4 idle-empty
 out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 deliver f4 --force-send --text "stop now and park" 2>&1) && rc=0 || rc=$?
@@ -394,7 +395,7 @@ chmod 700 "$base/evil/claude"
 # A positive force-send passes through the queue: a longer wait, as for the other force-sends.
 # With 2 s the wait could end before the fake took the queued line (a timing flake, PR #105);
 # with 10 s it still failed under heavy load. The wait ends as soon as the proof shows.
-set_wait 30
+set_wait 120
 out=$(PATH="$base/evil:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver v9 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 set_wait 2
 assert_eq "Codex P2: a claude found first on PATH after launch is never run" "no" "$([ -e "$base/evil-ran" ] && echo yes || echo no)"
@@ -464,7 +465,7 @@ screen z3 busy
 : > "$(fbusy z3)"
 # A positive force-send passes through the queue and the screen gate: a generous wait, which
 # ends as soon as the proof shows (issue #109).
-set_wait 30
+set_wait 120
 out=$(HO_FAKE_MSG_MODE=queue-fail HO_FAKE_CLAUDE_VERSION=2.1.332 deliver z3 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 set_wait 2
 assert_eq "N3, D37-LIFECYCLE-4: a queued stop from a failed command still gets the chord once" "0x18 0x13" \
@@ -488,6 +489,29 @@ tp=$(cat "$base/extra.pids.term" 2>/dev/null || true)
 assert_eq "N4: the command that ignored SIGTERM is gone" "no" "$([ -n "$tp" ] && alive "$tp" && echo yes || echo no)"
 assert_eq "N4: a stopped command is not followed by typing (0 bytes)" "0" "$(inbytes z4)"
 assert_eq "minor 2 (round 4): no raw job notice such as Terminated or Killed reaches the output" "" "$(printf '%s\n' "$out" | grep -E 'Terminated|Killed' || true)"
+# ---- N4: the limit is delivery.message_timeout_seconds, shown from both sides with no clock --
+# The same command needs about 3 s. Under a 20 s limit it finishes and delivers; under a 1 s
+# limit it is stopped. A fixed limit of any size fails one of the two.
+set_grace 1
+set_timeout 20
+start z4a
+screen z4a idle-empty
+out=$(HO_FAKE_MSG_MODE=slow-ok deliver z4a --text "run tests" 2>&1) && rc=0 || rc=$?
+ida=$(printf '%s' "$out" | sed -n 's/.*id=\(ho-[0-9a-f]*\).*/\1/p' | head -n 1)
+assert_eq "N4: a 3 s message command under a 20 s message_timeout_seconds is not stopped and delivers (exit 0)" "0 " \
+  "$rc $(ledger | grep -F "${ida:-no-id}" | grep 'timed out' || true)"
+set_timeout 1
+start z4b
+screen z4b idle-empty
+rm -f "$base/extra.pids.slow"
+out=$(HO_FAKE_MSG_MODE=slow-ok deliver z4b --text "run tests" 2>&1) && rc=0 || rc=$?
+idb=$(printf '%s' "$out" | sed -n 's/.*id=\(ho-[0-9a-f]*\).*/\1/p' | head -n 1)
+sp=$(cat "$base/extra.pids.slow" 2>/dev/null || true)
+[ -z "$sp" ] || echo "$sp" >> "$base/extra.pids"
+assert_contains "N4: the same command under a 1 s message_timeout_seconds is timed out and stopped" "$(ledger | grep -F "${idb:-no-id}" || true)" "timed out and stopped"
+assert_eq "N4: the command stopped at the 1 s limit is gone and wrote no user turn" "no 0" \
+  "$([ -n "$sp" ] && alive "$sp" && echo yes || echo no) $(grep -c -F "${idb:-no-id}: " "$(trof z4b)" || true)"
+set_timeout 2
 set_runtime claude-code
 # ---- minors 1 and 2: the whole-word check ----------------------------------------------------
 start z5
@@ -544,7 +568,7 @@ screen r1 busy
 : > "$(fbusy r1)"
 # A positive force-send passes through the queue and the screen gate: a generous wait, which
 # ends as soon as the proof shows (issue #109).
-set_wait 30
+set_wait 120
 out=$(PATH="$proj/bin:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver r1 --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 set_wait 2
 assert_eq "Codex P2: a bash or env planted in a project folder first on PATH never runs the version check" "" "$(planted '--version')"
@@ -739,7 +763,7 @@ screen c7-awk busy
 : > "$(fbusy c7-awk)"
 # A positive force-send passes through the queue and the screen gate: a generous wait, which
 # ends as soon as the proof shows (issue #109).
-set_wait 30
+set_wait 120
 out=$(PATH="$proj/bin:$PATH" HO_FAKE_CLAUDE_VERSION=2.1.332 deliver c7-awk --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 set_wait 2
 assert_eq "Codex P2: an awk planted first on PATH never reads the runtime's version" "" "$(grep -e 'print \$1' -e '2.1.275' "$base/planted-awk.log" 2>/dev/null || true)"
@@ -866,13 +890,14 @@ start d9-ver
 screen d9-ver busy
 : > "$(fbusy d9-ver)"
 set_wait 10
-t0=$(date +%s)
-out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 HO_FAKE_CLAUDE_VERSION_SLEEP=300 deliver d9-ver --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
-el=$(( $(date +%s) - t0 ))
+# The check hangs 300 s and has a 5 s limit. The fake's helper marks a check that still runs
+# 15 s after its own start (the helper dies with the stopped group), so no mark proves the limit
+# is well under 15 s, at any load; a 20 s limit leaves the mark. The unknown version in the
+# ledger (below) proves the stop.
+rm -f "$base/ver-late"
+out=$(HO_FAKE_CLAUDE_VERSION=2.1.332 HO_FAKE_CLAUDE_VERSION_SLEEP=300 HO_FAKE_CLAUDE_VERSION_LATE="$base/ver-late" deliver d9-ver --force-send --text "stop now" 2>&1) && rc=0 || rc=$?
 set_wait 2
-# The version check would hang 300 s. The proof that it was stopped is the unknown version in
-# the ledger (below); the bound only rules out a wait for the whole hang, with room for any load.
-assert_eq "Codex P2: a version check that hangs is stopped; deliver returns long before the hang ends (at most 120 s of 300 s)" "yes" "$([ "$el" -le 120 ] && echo yes || echo "no (${el}s)")"
+assert_eq "Codex P2: a version check that hangs is stopped at its 5 s limit, before it has run 15 s" "no" "$([ -e "$base/ver-late" ] && echo yes || echo no)"
 assert_eq "Codex P2: with the version unknown no chord is sent" "" "$(calls | grep "byte $(rec d9-ver .handle) " || true)"
 assert_contains "Codex P2: the skipped chord names the unknown version" "$(ledger | grep -F deliver-force-send | tail -n 1)" "unknown"
 

@@ -135,15 +135,31 @@ tr_step() {
     [ $((tr_tick % 3)) -ne 0 ] || tr_add --arg t "still working, step $tr_tick" '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: $t}]} }'
   fi
 }
+# The hold loop acts only when something it reads changed: the input file's text, or whether
+# <h>.busy exists (its removal releases the queue). With HO_FAKE_CLAUDE_NOISE=1 every tick acts.
+# HO_FAKE_CLAUDE_STEP_LOG=<file>: log "tick" for each pass and "step" for each tr_step (tests).
 case ${HO_FAKE_CLAUDE_HOLD:-} in
   exit | ignore)
     in="${HO_FAKE_TERM_DIR:-$HOME/fake-term}/$(printf '%s' "${HO_FAKE_TERM_HANDLE:-none}" | tr -c 'A-Za-z0-9-' '_').in"
-    end=$(( $(date +%s) + ${HO_FAKE_CLAUDE_HOLD_MAX:-20} ))
-    while [ "$(date +%s)" -lt "$end" ]; do
-      [ -z "$tr_file" ] || [ ! -f "$in" ] || tr_step "$in"
-      if [ "$HO_FAKE_CLAUDE_HOLD" = exit ] && [ -f "$in" ] && exit_line "$in"; then
-        [ -z "${HO_FAKE_CLAUDE_ON_EXIT:-}" ] || sh -c "$HO_FAKE_CLAUDE_ON_EXIT"
-        exit 0
+    end=$((SECONDS + ${HO_FAKE_CLAUDE_HOLD_MAX:-20}))
+    seen="" cur="" busy_was="" busy_now=""
+    first=1
+    while [ "$SECONDS" -lt "$end" ]; do
+      [ -z "${HO_FAKE_CLAUDE_STEP_LOG:-}" ] || echo tick >> "$HO_FAKE_CLAUDE_STEP_LOG"
+      cur="" busy_now=0
+      # read -d '' keeps trailing newlines, so a line and the same line with its Enter differ.
+      if [ -f "$in" ]; then IFS= read -r -d '' cur < "$in" || true; cur="x$cur"; fi
+      [ ! -e "${in%.in}.busy" ] || busy_now=1
+      if [ "$first" = 1 ] || [ "$cur" != "$seen" ] || [ "$busy_now" != "$busy_was" ] || [ "${HO_FAKE_CLAUDE_NOISE:-}" = 1 ]; then
+        first=0 seen=$cur busy_was=$busy_now
+        if [ -n "$tr_file" ] && [ -f "$in" ]; then
+          [ -z "${HO_FAKE_CLAUDE_STEP_LOG:-}" ] || echo step >> "$HO_FAKE_CLAUDE_STEP_LOG"
+          tr_step "$in"
+        fi
+        if [ "$HO_FAKE_CLAUDE_HOLD" = exit ] && [ -f "$in" ] && exit_line "$in"; then
+          [ -z "${HO_FAKE_CLAUDE_ON_EXIT:-}" ] || sh -c "$HO_FAKE_CLAUDE_ON_EXIT"
+          exit 0
+        fi
       fi
       sleep 0.1
     done

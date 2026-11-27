@@ -320,3 +320,26 @@ for round in 1 2 3 4 5 6 7 8 9 10; do
 done
 assert_eq "H-079: with a stale lock, eight checks at once write one run-end line (10 rounds)" 0 "$twice"
 assert_eq "H-079: the lock is freed once the run end is written" no "$([ -e "$rl/lifecycle.lock" ] && echo yes || echo no)"
+
+# ---- D2, H-079: a ticket in no known state is seen however many open issues the repository has ---
+# 200 open issues with no harness label come before one harness ticket with no state label. A
+# listing cut at a limit would miss that ticket and end the run; the full listing gives unknown.
+export HO_FAKE_GH_DIR="$base/gh-many"
+mkdir -p "$HO_FAKE_GH_DIR/issues"
+i=1
+while [ "$i" -le 200 ]; do
+  printf '{"number":%s,"title":"other %s","body":"","state":"OPEN","updatedAt":"2026-01-01T00:00:00Z","labels":["bug"],"assignees":[],"comments":[]}\n' "$i" "$i" > "$HO_FAKE_GH_DIR/issues/$i.json"
+  i=$((i + 1))
+done
+printf '{"number":201,"title":"urgent, no state","body":"","state":"OPEN","updatedAt":"2026-01-01T00:00:00Z","labels":["harness:urgent"],"assignees":[],"comments":[]}\n' > "$HO_FAKE_GH_DIR/issues/201.json"
+r19=$("$h" run new --workers 5)
+rc=0; gh_check "$r19" >/dev/null || rc=$?
+assert_eq "D2: a ticket in no known state behind 200 other open issues gives unknown (exit 2)" 2 "$rc"
+ends=$(jq -r 'select(.kind == "run-end") | .kind' "$r19/ledger.jsonl")
+assert_eq "D2: that unknown ends nothing" "none" "${ends:-none}"
+# A listing that fails is never "no ticket in an unknown state".
+jq '.labels = ["harness:done"]' "$HO_FAKE_GH_DIR/issues/201.json" > "$base/i201.json" && cat "$base/i201.json" > "$HO_FAKE_GH_DIR/issues/201.json"
+rc=0; HO_FAKE_GH_FAIL_API="repos/fake/repo/issues" gh_check "$r19" >/dev/null || rc=$?
+assert_eq "D2: a failed listing of the open issues gives unknown (exit 2), never an end" 2 "$rc"
+o=$(gh_check "$r19" || true)
+assert_eq "H-079: once that ticket carries a state label the full listing ends the run" "end" "$(printf '%s\n' "$o" | head -n 1)"

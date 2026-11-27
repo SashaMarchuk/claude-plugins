@@ -56,10 +56,14 @@ ho_life_unstated() {
     ho_tk_settings || exit $?
     if ho_tk_gh; then
       local json
-      json=$(gh issue list --repo "$HO_TK_REPO" --state open --limit 200 --json number,labels) || exit 1
+      # Every open issue, page by page, with no cap: a listing cut at a limit could hide a ticket
+      # in no known state. Pull requests come in the same list and are left out. A failed or
+      # unreadable listing fails the call, so the decision is unknown.
+      json=$(gh api --paginate "repos/$HO_TK_REPO/issues?state=open&per_page=100") || exit 1
       printf '%s' "$json" |
-        jq -r --arg p "$HO_TK_PREFIX:" --arg s "$HO_STATES" '($s | split(" ") | map($p + .)) as $known
-          | .[] | [.labels[].name] as $l
+        jq -s -r --arg p "$HO_TK_PREFIX:" --arg s "$HO_STATES" '($s | split(" ") | map($p + .)) as $known
+          | if all(.[]; type == "array") then add // [] else error("not a list of issues") end
+          | .[] | select(has("pull_request") | not) | [.labels[].name] as $l
           | select(any($l[]; startswith($p)) and all($l[]; . as $x | $known | index($x) | not)) | .number'
     else
       local n f

@@ -3,7 +3,8 @@
 # State: one JSON file per issue in $HO_FAKE_GH_DIR/issues/ (default $HOME/fake-gh).
 # Every call is logged as one tab-separated line to $HO_FAKE_GH_DIR/calls.log.
 # The signed-in account is $HO_FAKE_GH_USER (default harness-bot).
-# Supported: label create; issue create|view|list|edit|comment|close; api user,
+# Supported: label create; issue create|view|list (at most --limit, default 30, as gh does)|
+# edit|comment|close; api user, api repos/<r>/issues (open issues, per_page, --paginate),
 # api repos/<r>/collaborators/<login>/permission, api repos/<r>/issues/<n>/events.
 # Label events: every label that issue create or issue edit adds or removes is recorded in
 # $HO_FAKE_GH_DIR/events/<n>.json as a "labeled" or "unlabeled" event whose actor is the
@@ -65,14 +66,15 @@ pick() { # pick <comma-separated fields>
 
 if [ "${1:-}" = api ]; then
   shift
-  path=""
+  path="" paginate=0
   while [ $# -gt 0 ]; do
     case $1 in
-      --paginate) shift ;;
+      --paginate) paginate=1; shift ;;
       -*) fail "api: unsupported flag $1" ;;
       *) [ -z "$path" ] || fail "api: one path only"; path=$1; shift ;;
     esac
   done
+  query=""; case $path in *\?*) query=${path#*\?} ;; esac
   path=${path%%\?*}
   if [ -n "${HO_FAKE_GH_FAIL_API:-}" ]; then
     case $path in *"$HO_FAKE_GH_FAIL_API"*)
@@ -91,6 +93,17 @@ if [ "${1:-}" = api ]; then
       n=${path#repos/*/*/issues/}; n=${n%/events}
       issue_file "$n" >/dev/null
       if [ -f "$dir/events/$n.json" ]; then cat "$dir/events/$n.json"; else echo '[]'; fi ;;
+    repos/*/*/issues)
+      # Open issues in the REST shape, per_page (default 30) at a time, oldest first. Without
+      # --paginate only the first page is printed; with it every page, one array per page, as
+      # gh prints them.
+      per=30
+      case "&$query&" in *"&per_page="*) per=${query#*per_page=}; per=${per%%&*} ;; esac
+      case "&$query&" in *"&state=open&"* | *"&state=all&"*) ;; *"&state="*) fail "issues: only state=open is faked" ;; esac
+      find "$dir/issues" -name '*.json' -exec cat {} + | jq -s -c --argjson per "$per" --argjson all "$paginate" '
+        [.[] | select((.state | ascii_downcase) == "open")] | sort_by(.number)
+        | map({number, title, state: (.state | ascii_downcase), labels: [.labels[] | {name: .}]})
+        | [range(0; ([length, 1] | max); $per) as $i | .[$i:($i + $per)]] | if $all == 1 then .[] else .[0] end' ;;
     *) fail "unsupported api path: $path" ;;
   esac
   exit 0
@@ -136,10 +149,11 @@ case "$group $cmd" in
     pick "$fields" < "$f"
     ;;
   "issue list")
-    label="" state=open fields=""
+    label="" state=open fields="" limit=30
     while [ $# -gt 0 ]; do
       case $1 in
-        --repo|--limit) shift 2 ;;
+        --repo) shift 2 ;;
+        --limit) limit=$2; shift 2 ;;
         --label) label=$2; shift 2 ;;
         --state) state=$2; shift 2 ;;
         --json) fields=$2; shift 2 ;;
@@ -149,7 +163,7 @@ case "$group $cmd" in
     [ -n "$fields" ] || fail "issue list: only --json output is faked"
     find "$dir/issues" -name '*.json' -exec cat {} + | jq -s -c --arg l "$label" --arg s "$state" \
       '[.[] | select(($l == "") or (.labels | index($l))) | select(($s == "all") or (.state | ascii_downcase) == $s)]
-       | sort_by(.number)' |
+       | sort_by(.number) | .[0:'"$limit"']' |
       jq -c '.[]' | while IFS= read -r one; do printf '%s\n' "$one" | pick "$fields"; done | jq -s -c '.'
     ;;
   "issue edit")

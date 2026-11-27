@@ -48,6 +48,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/intake.sh"
 # shellcheck source=../lib/lifecycle.sh
 . "$HO_ROOT/lib/lifecycle.sh"
+# shellcheck source=../lib/feedback.sh
+. "$HO_ROOT/lib/feedback.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -69,6 +71,7 @@ verbs:
   screen     screen text: classify a capture, watch a session, pre-trust a folder, wait
   intake     intake <run-dir> interval|tick|poll: take labelled tickets, check access and readiness
   lifecycle  lifecycle <run-dir> check|done <name>: end of run, standby, closing finished sessions
+  feedback   feedback preview <file> | send --draft <dir> --code <code> --yes: report a harness problem
 USAGE
 }
 
@@ -91,6 +94,7 @@ case $verb in
   screen)   ho_screen_main "$@" ;;
   intake)   ho_intake_main "$@" ;;
   lifecycle) ho_life_main "$@" ;;
+  feedback) ho_feedback_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

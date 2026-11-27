@@ -159,9 +159,9 @@ assert_contains "H-140 / D43: a path inside the plugin is written relative to th
 assert_contains "H-140: slash commands and a web link in the description reach the issue" "$stored" \
   "/harness:run hangs after /harness:status; see https://github.com/acme/tools/issues/12345/comments-and-a-long-tail."
 assert_contains "H-140 / D43 line rule: a line with a path is replaced whole by a placeholder" "$stored" \
-  "$(printf '<line removed: path>\n<line removed: path>\nThe plugin script')"
+  "$(printf '[line removed: path]\n[line removed: path]\nThe plugin script')"
 assert_contains "H-140 / D43 line rule: a line with a secret value is replaced whole" "$stored" \
-  "$(printf '<line removed: account>\n<line removed: secret>\n<line removed: account>\n<line removed: secret>')"
+  "$(printf '[line removed: account]\n[line removed: secret]\n[line removed: account]\n[line removed: secret]')"
 # Any "/x/y" left after web links and plugin-root paths are taken out is a path that leaked,
 # wherever it starts (after a letter, ":" or "/" too).
 no_abs_paths() {
@@ -274,7 +274,7 @@ while IFS='|' read -r m line; do
 done <<< "$shapes"
 assert_eq "H-140 / D43 rule: no absolute path of two parts reaches the shown text" "0" "$(no_abs_paths "$shown")"
 assert_eq "H-140 / D43 rule: every shape line became one placeholder line" "$(printf '%s\n' "$shapes" | wc -l | tr -d ' ')" \
-  "$(printf '%s\n' "$shown" | grep -cE '^<line removed: (path|secret|account)>$' || true)"
+  "$(printf '%s\n' "$shown" | grep -cE '^\[line removed: (path|secret|account)\]$' || true)"
 assert_contains "H-140 rule: a word pair with one slash stays" "$shown" "keep read/write and and/or"
 assert_contains "H-140 / D43 rule: a plugin file stays relative to the plugin root" "$shown" "the plugin file plugin-root/lib/feedback.sh and plugin-root"
 # Cleaning is a fixed point: the shown description, sent in again, comes out the same.
@@ -339,7 +339,7 @@ assert_contains "H-140 account rule: with the account tim the steps line stays" 
 rm -rf "$(draft_of "$out")"
 printf 'Timing is off for timothy.\n' > "$base/d5.txt"
 out=$(cd "$proj" && USER=tim LOGNAME=tim "$h" feedback preview "$base/d5.txt")
-assert_contains "H-140 account rule: the account name glued to other letters removes the line" "$(shown_body "$out")" "<line removed: account>"
+assert_contains "H-140 account rule: the account name glued to other letters removes the line" "$(shown_body "$out")" "[line removed: account]"
 rm -rf "$(draft_of "$out")"
 
 # The send gate on its own: a draft edited after the preview, with a fresh code, is refused.

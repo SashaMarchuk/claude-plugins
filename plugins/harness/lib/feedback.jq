@@ -3,15 +3,15 @@
 #
 # The person's description is judged line by line, by where a private shape STARTS; no rule
 # guesses where a path or a value ends. A line that holds one is replaced whole by
-# "<line removed: path>", "<line removed: secret>" or "<line removed: account>"; a line is never
+# "[line removed: path]", "[line removed: secret]" or "[line removed: account]"; a line is never
 # cut. A path inside the plugin is first written as "plugin-root/...".
 #
 # The added context is never cleaned: lib/feedback.sh builds it from named fields only, and
 # the gate checks each of its lines against the fixed field grammar (ctx_line).
 
 def HEADER: "Technical context (added by the harness feedback command):";
-def place($k): "<line removed: \($k)>";
-def is_place: test("^<line removed: (?:path|secret|account)>$");
+def place($k): "[line removed: \($k)]";
+def is_place: test("^\\[line removed: (?:path|secret|account)\\]$");
 def esc: gsub("(?<c>[.^$*+?()\\[\\]{}|\\\\/-])"; "\\\(.c)");
 
 # ---- fixed fields -------------------------------------------------------------------------

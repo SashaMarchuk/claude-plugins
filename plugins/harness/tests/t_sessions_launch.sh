@@ -67,6 +67,41 @@ assert_eq "Rebuild launcher: a resume launch records the given session ID" "$rid
 assert_contains "Rebuild launcher: a resume launch starts the runtime's resume form" "$(grep -F "$rid" "$HO_FAKE_CLAUDE_LOG" | head -n 1)" "--resume	$rid"
 assert_exit "Rebuild launcher: a resume ID that is not a UUID is refused" 65 "$h" session "$run" launch --role worker --name w5 --cwd "$proj/src" --resume 'x;y'
 
+# ---- the session's account folder is the caller's, never the terminal's (issue #119) --------
+# An iTerm2 tab starts a fresh login shell, and a tmux server keeps the environment of its
+# first start. So the launcher sets the runtime's account variables (account_env in the
+# runtime data) to the caller's values, or removes them when the caller has none.
+ax="$base/acct-x"
+mkdir -p "$ax"
+jq -n --arg p "$proj" '.projects[$p].hasTrustDialogAccepted = true' > "$ax/.claude.json"
+# envlog <name>: what the session process saw (the fake claude logs it right after its argv).
+envlog() { grep -A1 -F -- "--session-id	$(rec "$1" .session_id)" "$HO_FAKE_CLAUDE_LOG" | grep -m1 '^env CLAUDE_CONFIG_DIR=' || true; }
+CLAUDE_CONFIG_DIR=$ax HO_FAKE_TERM_ENV="CLAUDE_CONFIG_DIR=$base/acct-term" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR launch e1 >/dev/null
+assert_eq "#119: the session gets the caller's account folder, not the terminal's other one" "env CLAUDE_CONFIG_DIR=$ax" "$(envlog e1)"
+assert_eq "#119: transcript_root is the caller's account folder" "$ax" "$(rec e1 .transcript_root)"
+assert_contains "#119: the launcher sets the account folder itself" "$(cat "$(rec e1 .launcher)")" "export CLAUDE_CONFIG_DIR='$ax'"
+CLAUDE_CONFIG_DIR=$ax HO_FAKE_TERM_ENV="-CLAUDE_CONFIG_DIR" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR launch e2 >/dev/null
+assert_eq "#119: the session gets the caller's account folder when the terminal has none" "env CLAUDE_CONFIG_DIR=$ax" "$(envlog e2)"
+assert_eq "#119: transcript_root follows it" "$ax" "$(rec e2 .transcript_root)"
+HO_FAKE_TERM_ENV="CLAUDE_CONFIG_DIR=$base/acct-stale" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR launch e3 >/dev/null
+assert_eq "#119: a caller with no account folder: the terminal's stale one is removed" "env CLAUDE_CONFIG_DIR=" "$(envlog e3)"
+assert_eq "#119: transcript_root is then the runtime's default folder" "$HOME/.claude" "$(rec e3 .transcript_root)"
+assert_contains "#119: the launcher removes the variable" "$(cat "$(rec e3 .launcher)")" "unset CLAUDE_CONFIG_DIR"
+cp "$user/config.json" "$base/user.keep.json"
+jq --arg c "echo CLAUDE_CONFIG_DIR=$base/acct-a" '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: $c}}}' "$base/user.keep.json" > "$user/config.json"
+CLAUDE_CONFIG_DIR=$ax HO_FAKE_TERM_ENV="CLAUDE_CONFIG_DIR=$base/acct-term" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR launch e4 >/dev/null
+assert_eq "#119: the role's account command still wins over the caller's folder" "env CLAUDE_CONFIG_DIR=$base/acct-a" "$(envlog e4)"
+assert_eq "#119: transcript_root is the account command's folder" "$base/acct-a" "$(rec e4 .transcript_root)"
+jq --arg c "echo HOME=$base/acct-home" '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: $c}}}' "$base/user.keep.json" > "$user/config.json"
+CLAUDE_CONFIG_DIR=$ax HO_FAKE_TERM_ENV="CLAUDE_CONFIG_DIR=$base/acct-term" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR launch e5 >/dev/null
+assert_eq "#119: an account that sets only HOME gets no folder from the caller or the terminal" "env CLAUDE_CONFIG_DIR=" "$(envlog e5)"
+assert_eq "#119: transcript_root is then the default folder under the account's HOME" "$base/acct-home/.claude" "$(rec e5 .transcript_root)"
+cp "$base/user.keep.json" "$user/config.json"
+bad_dir="$base/a
+b"
+assert_exit "#119: an account folder with a line break is refused" 65 env CLAUDE_CONFIG_DIR="$bad_dir" "$h" session "$run" launch --role worker --name e6 --cwd "$proj/src" --prompt "$base/prompt.md"
+assert_exit "#119: a relative account folder is refused" 65 env CLAUDE_CONFIG_DIR=rel/dir "$h" session "$run" launch --role worker --name e7 --cwd "$proj/src" --prompt "$base/prompt.md"
+
 # ---- model chain a|b: a start failure falls through, the PID is the one that runs ------
 jq '.models.worker = "m-bad | m-good"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 HO_FAKE_CLAUDE_FAIL_MODEL=m-bad launch w6 >/dev/null

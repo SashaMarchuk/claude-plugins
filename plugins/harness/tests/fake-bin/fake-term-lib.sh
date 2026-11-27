@@ -20,11 +20,20 @@ ft_next() {
 }
 ft_known() { [ -f "$(ft_file "$1").pid" ] && [ ! -f "$(ft_file "$1").closed" ]; }
 # ft_start <handle> <shell command>: run the command in the background, like a new tab.
+# HO_FAKE_TERM_ENV: the terminal's own environment, one entry per line: NAME=VALUE sets a
+# variable for the started command, -NAME removes it. It stands for a tmux server that kept
+# the environment of its first start, or an iTerm2 tab that starts a fresh login shell.
 ft_start() {
-  local h=$1 f
+  local h=$1 f line
+  local -a envargs=()
   f=$(ft_file "$h")
   : > "$f.in"
-  HO_FAKE_TERM_HANDLE=$h HO_FAKE_TERM_DIR=$ft_dir nohup sh -c "$2" > "$f.out" 2>&1 < /dev/null &
+  while IFS= read -r line; do
+    case $line in '') ;; -*) envargs+=(-u "${line#-}") ;; *) envargs+=("$line") ;; esac
+  done <<EOF_FT_ENV
+${HO_FAKE_TERM_ENV:-}
+EOF_FT_ENV
+  HO_FAKE_TERM_HANDLE=$h HO_FAKE_TERM_DIR=$ft_dir nohup env ${envargs[@]+"${envargs[@]}"} sh -c "$2" > "$f.out" 2>&1 < /dev/null &
   printf '%s\n' "$!" > "$f.pid"
 }
 # ft_screen <handle>: the session's screen. Text typed after the last Enter shows on the input

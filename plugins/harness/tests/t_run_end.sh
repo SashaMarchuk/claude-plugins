@@ -271,3 +271,17 @@ for i in 1 2 3 4 5 6 7 8; do HO_TICKETS_DIR="$base/tk-f" "$h" lifecycle "$r14" c
 wait
 assert_eq "H-079: eight checks at the same time write exactly one run-end line" 1 \
   "$(jq -r 'select(.kind == "run-end") | .kind' "$r14/ledger.jsonl" | wc -l | tr -d ' ')"
+
+# ---- H-079: a launch that waits for a worker slot and gets it after the run end starts nothing ---
+r15=$("$h" run new --workers 1)
+sess "$r15" worker e1
+(c=0; "$h" session "$r15" launch --role worker --name e2 --cwd "$proj/src" --prompt "$base/prompt.md" --slot-wait 30 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-e2") &
+waiter=$!
+sleep 2
+assert_eq "test setup: the second launch waits for the slot" "" "$(cat "$base/rc-e2" 2>/dev/null || true)"
+# The run end closes e1, which frees the slot the waiting launch gets.
+HO_TICKETS_DIR="$base/tk-f" "$h" lifecycle "$r15" check >/dev/null 2>&1 || true
+wait "$waiter"
+assert_eq "H-079: the launch that got its slot after the run end is refused (75)" 75 "$(cat "$base/rc-e2")"
+assert_eq "H-079: it leaves no record, no launcher and no slot" "no no no" \
+  "$([ -e "$r15/sessions/e2.json" ] && echo yes || echo no) $([ -e "$r15/launchers/e2.sh" ] && echo yes || echo no) $([ -e "$r15/slots/worker/e2.json" ] && echo yes || echo no)"

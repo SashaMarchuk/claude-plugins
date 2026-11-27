@@ -13,16 +13,20 @@
 # The technical context is fixed (D43): plugin version, runtime version, operating system and
 # a state summary of the last run. The summary is built from allow-listed facts only: the
 # run's stop state, counts, the fixed role names of launched sessions, ticket counts per state
-# and engine event kinds that report a failure. No ledger value (reason, name, path, account,
-# title, session ID) is ever copied. The person's own words are cleaned too: a path inside the
-# plugin is made relative to the plugin root, any other path, token, e-mail address and the
-# local account name are replaced, and the send checks the whole text once more.
+# and the engine's own failure event kinds from a fixed list. No ledger value (reason, name,
+# path, account, title, session ID) is ever copied. The person's own words are cleaned too, by
+# the steps in lib/feedback.jq: a path inside the plugin is made relative to the plugin root;
+# any other path, token, secret value, e-mail address and the local account name are removed.
+# The send refuses a draft that any of those steps would still change.
 #
 # Exit codes: 64 usage, 65 refused (no yes, wrong code, private data found), 66 no draft,
-# 1 the tracker call failed. Requires lib/common.sh, lib/config.sh, lib/run.sh,
+# 1 the tracker call failed. Requires lib/feedback.jq, lib/common.sh, lib/config.sh, lib/run.sh,
 # lib/runtime.sh and lib/tickets.sh.
 
 HO_FB_ROLES="orchestrator worker validator"
+# The engine's own event kinds that report a failure or an owner step. Only these are copied.
+HO_FB_ERROR_KINDS="deliver-failed marker-foreign owner-action pretrust-refused session-boot-failed
+session-close-failed session-close-refused session-close-timeout session-dead session-launch-failed unreadable"
 
 ho_fb_usage() {
   cat <<'USAGE'
@@ -50,67 +54,29 @@ ho_fb_sha() {
   printf '%s\n' "${s:0:16}"
 }
 
-# The patterns the cleaner and the gate share. One jq definition, so they cannot drift.
-#   tokens      known token families, plus any run of 40 or more token characters
-#   secret_kv   a key that names a secret (DB_PASSWORD, client_secret, GITHUB_TOKEN, ...) and its value
-#   path_re     an absolute path of two or more parts, or a ~ path (a slash command such as
-#               /harness:run has one part and stays)
-#   root_re     a path under a usual system root, wherever it starts (-I/home/x, file:///Users/x);
-#               a part may hold spaces when another "/" follows
-#   rel_re      a relative ../ or ./ path;  win_re  a drive path
-# shellcheck disable=SC2016 # jq text, not shell
-HO_FB_JQ_DEFS='
-def seg: "[^\\s\"'"'"'`<>()\\[\\]{},;/]";
-def word_seg: "[^\\s\"'"'"'`<>()\\[\\]{},;/:]";
-def body: "(?:/" + seg + "+(?:(?: " + word_seg + "+)+(?=/))?)+/?";
-def tokens: [
-  "gh[pousr]_[A-Za-z0-9]{20,}", "github_pat_[A-Za-z0-9_]{20,}", "sk-[A-Za-z0-9_-]{16,}",
-  "xox[abposr]-[A-Za-z0-9-]{10,}", "AKIA[0-9A-Z]{16}", "AIza[0-9A-Za-z_-]{30,}",
-  "eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]+",
-  "-----BEGIN [A-Z ]*PRIVATE KEY-----",
-  "(?i)(?<![A-Za-z0-9])bearer\\s+[A-Za-z0-9._~+/=-]{8,}",
-  "(?<![A-Za-z0-9_+/=.-])[A-Za-z0-9_+/=-]{40,}"
-];
-def secret_key: "(?<![A-Za-z0-9])[A-Za-z0-9_-]*(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key|credential)[A-Za-z0-9_-]*[\"'"'"']?\\s*[:=]\\s*[\"'"'"']?";
-def secret_kv: "(?i)(?<k>" + secret_key + ")(?!\\[token removed\\])[^\\s\"'"'"']+";
-def email: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}";
-def path_re: "(?<![A-Za-z0-9_:/])(?:(?:~|\\$HOME)/" + seg + "+|/" + seg + "+/" + seg + "+)(?:/" + seg + "+)*/?";
-def root_re: "/(?i:Users|home|private|tmp|var|opt|etc|root|mnt|Volumes|srv|Library|nix|workspaces?|data|media|run|usr|snap|cygdrive)(?=/)" + body;
-def rel_re: "(?<![A-Za-z0-9_])(?:\\.\\.?/)+" + seg + "+(?:/" + seg + "+)*";
-def win_re: "(?<![A-Za-z0-9])[A-Za-z]:\\\\[^\\s]+";
-def esc: gsub("(?<c>[.^$*+?()\\[\\]{}|\\\\/-])"; "\\\(.c)");
-def word($a): "(?i)(?<![A-Za-z0-9_.-])" + ($a | esc) + "(?![A-Za-z0-9_-])";
-'
+# ho_fb_jq <jq-expr> [jq-options...]: run jq over stdin with the shared privacy steps of
+# lib/feedback.jq loaded (one definition for the cleaner and the gate, so they cannot drift).
+ho_fb_jq() {
+  local expr=$1
+  shift
+  jq -L "$HO_ROOT/lib" "$@" "include \"feedback\"; $expr"
+}
 
 # ho_fb_clean <roots-json> <accounts-json> <private-paths-json>: stdin text -> cleaned text.
 # The plugin root becomes "plugin-root" first, so a plugin path stays readable and relative.
 ho_fb_clean() {
-  jq -Rrs --argjson roots "$1" --argjson accts "$2" --argjson priv "$3" "$HO_FB_JQ_DEFS"'
-    gsub(email; "[e-mail removed]")
-    | reduce ($roots | sort_by(-length))[] as $r (.; gsub($r | esc; "plugin-root"))
-    | reduce ($priv | map(select(length >= 4)) | sort_by(-length))[] as $q (.; gsub("(?i)" + ($q | esc); "[path removed]"))
-    | gsub(root_re; "[path removed]") | gsub(path_re; "[path removed]")
-    | gsub(rel_re; "[path removed]") | gsub(win_re; "[path removed]")
-    | reduce tokens[] as $t (.; gsub($t; "[token removed]"))
-    | gsub(secret_kv; "\(.k)[token removed]")
-    | reduce ($accts[] | select(length >= 3)) as $a (.; gsub(word($a); "[account removed]"))'
+  # shellcheck disable=SC2016 # jq text, not shell
+  ho_fb_jq 'clean($roots; $accts; $priv)' -Rrs --argjson roots "$1" --argjson accts "$2" --argjson priv "$3"
 }
 
-# ho_fb_gate <file> <accounts-json> <private-paths-json>: exit 0 when the text holds no token,
-# no path outside the plugin and no account name; else print the kinds found (never the text)
-# and exit 65.
+# ho_fb_gate <file> <accounts-json> <private-paths-json>: exit 0 when no cleaning step would
+# change the text (no token, secret value, e-mail address, path outside the plugin or account
+# name); else print the kinds found (never the text) and exit 65.
 ho_fb_gate() {
   local found
-  found=$(jq -Rrs --argjson accts "$2" --argjson priv "$3" "$HO_FB_JQ_DEFS"'
-    . as $s
-    | [ (if any(tokens[]; . as $t | $s | test($t)) then "a token" else empty end),
-        (if $s | test(secret_kv) then "a secret value" else empty end),
-        (if $s | test(email) then "an e-mail address" else empty end),
-        (if any(root_re, path_re, rel_re, win_re; . as $re | $s | test($re))
-            or any($priv[] | select(length >= 4); . as $q | $s | test("(?i)" + ($q | esc)))
-          then "a path outside the plugin" else empty end),
-        (if any($accts[] | select(length >= 3); . as $a | $s | test(word($a))) then "an account name" else empty end)
-      ] | join(", ")' "$1") || { echo "the privacy check could not run"; return 65; }
+  # shellcheck disable=SC2016 # jq text, not shell
+  found=$(ho_fb_jq 'kinds($accts; $priv)' -Rrs --argjson accts "$2" --argjson priv "$3" < "$1") ||
+    { echo "the privacy check could not run"; return 65; }
   [ -z "$found" ] && return 0
   printf '%s\n' "$found"
   return 65
@@ -151,7 +117,8 @@ ho_fb_runtime_version() {
     '') echo "not set (config runtime.main is empty)"; return 0 ;;
     *[!a-z0-9-]*) echo "unknown (runtime.main is not a runtime name)"; return 0 ;;
   esac
-  prof=$( (ho_rt_file "$label") 2>/dev/null) || { echo "$label, version unknown (no profile)"; return 0; }
+  # A label with no shipped or user profile may be a private name: it is not copied.
+  prof=$( (ho_rt_file "$label") 2>/dev/null) || { echo "unknown (no runtime profile has that name)"; return 0; }
   cmd=$(jq -r '.command // ""' "$prof" 2>/dev/null) || cmd=""
   case $cmd in ''|*/*|-*) echo "$label, version unknown"; return 0 ;; esac
   path=$(command -v "$cmd" 2>/dev/null) || { echo "$label, not installed"; return 0; }
@@ -200,15 +167,13 @@ ho_fb_summary() {
   (
     # shellcheck disable=SC2034 # read by ho_ledger_events
     HO_RUN_DIR=$run
-    ho_ledger_events 2>/dev/null | jq -rs --arg roles "$HO_FB_ROLES" '
-      def kindok: type == "string" and test("^[a-z][a-z0-9-]{0,39}$");
-      ([.[] | select(.kind == "stop" or .kind == "resume") | .kind] | last) as $stop
+    ho_ledger_events 2>/dev/null | jq -rs --arg roles "$HO_FB_ROLES" --arg errs "$HO_FB_ERROR_KINDS" '
+      ($errs | split("\\s+"; null) | map(select(length > 0))) as $errkinds
+      | ([.[] | select(.kind == "stop" or .kind == "resume") | .kind] | last) as $stop
       | ($roles | split(" ")) as $known
       | [.[] | select(.kind == "session-launch") | .role
           | if (type == "string") and IN($known[]) then . else "other" end] as $r
-      | [.[] | .kind | select(kindok)
-          | select(test("-(failed|refused|timeout|foreign|dead)$") or . == "owner-action" or . == "unreadable")]
-        as $err
+      | [.[] | .kind | select(type == "string" and IN($errkinds[]))] as $err
       | "- Last run: \(if $stop == "stop" then "stopped" else "not stopped" end), \(length) ledger events",
         "- Steps (session roles launched): \(if ($r | length) == 0 then "none"
             else ($r | group_by(.) | map("\(.[0]) \(length)") | join(", ")) end)",

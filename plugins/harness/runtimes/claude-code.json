@@ -60,8 +60,19 @@
       "dontAsk"
     ]
   },
+  "_comment_sandbox": "read-only: a review step without a terminal. no-tools: the readiness judge, which reads untrusted ticket text and so gets nothing to act with: no built-in tool (--tools with an empty list), no MCP server (--strict-mcp-config with no --mcp-config), no skill or command, no user or project settings and no CLAUDE.md (--setting-sources with an empty list), and plan mode on top. Checked against claude --help 2.1.332.",
   "sandbox": {
     "read-only": [
+      "--permission-mode",
+      "plan"
+    ],
+    "no-tools": [
+      "--tools",
+      "",
+      "--strict-mcp-config",
+      "--disable-slash-commands",
+      "--setting-sources",
+      "",
       "--permission-mode",
       "plan"
     ]
@@ -158,5 +169,11 @@
       "hasTrustDialogAccepted": true,
       "hasCompletedProjectOnboarding": true
     }
-  }
+  },
+  "_comment_hooks_settings": "The settings files a session loads, read (never written) by the start check of D42l to name hooks with no time limit. {config_dir} as in config_dir; {project} is the project folder.",
+  "hooks_settings": [
+    "{config_dir}/settings.json",
+    "{project}/.claude/settings.json",
+    "{project}/.claude/settings.local.json"
+  ]
 }

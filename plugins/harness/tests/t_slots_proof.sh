@@ -267,9 +267,11 @@ assert_eq "H-090: a long command line is read whole, so a live worker reads work
   "$(PATH="$base/cutps:$PATH" "$h" session "$r" status c1 | jq -r .liveness)"
 assert_exit "H-105: and its slot is kept" 73 env PATH="$base/cutps:$PATH" "$h" session "$r" launch --role worker --name c2 --cwd "$proj/src" --prompt "$base/prompt.md"
 
-# ---- review round 3 (PR #99) ----
+# ---- review round 3 (PR #99), narrowed by H-086 and D25a ----
 # A stop gates every slot kind, on a no-wait acquire and during a wait. The test holds the slot
 # lock while it records the stop and frees the slot, so the waiter's next try sees both at once.
+# A soft stop lets a session that already runs finish its step, so its heavy and stage waits get
+# the slot; an unknown stop state refuses every kind.
 r=$("$h" run new --workers 3)
 wl "$r" s1 >/dev/null
 wl "$r" s2 >/dev/null
@@ -285,13 +287,17 @@ i=0; until mkdir "$r/slots/.lock" 2>/dev/null; do sleep 0.05; i=$((i + 1)); [ $i
 rm -rf "$r/slots/.lock"
 wait_file "$base/rc-sh" 250 || bad "test setup: the heavy wait did not return" ""
 wait_file "$base/rc-ss" 250 || bad "test setup: the stage wait did not return" ""
-assert_eq "H-107: a stop during a heavy wait gives 75 and no slot, even when the slot frees at once" "75 none" \
+assert_eq "D25a: a soft stop during a heavy wait of a running session gives it the slot" "0 held" \
   "$(cat "$base/rc-sh") $([ -f "$r/slots/heavy/s2.json" ] && echo held || echo none)"
-assert_eq "H-107: a stop during a stage wait gives 75 and no slot, even when the slot frees at once" "75 none" \
+assert_eq "D25a: a soft stop during a stage wait of a running session gives it the slot" "0 held" \
   "$(cat "$base/rc-ss") $([ -f "$r/slots/stage-browser/s2.json" ] && echo held || echo none)"
-assert_exit "H-107: a heavy acquire with no wait in a stopped run gives 75" 75 "$h" slot "$r" acquire heavy --holder s2 --op app-build
-assert_exit "H-107: a stage acquire with no wait in a stopped run gives 75" 75 "$h" slot "$r" acquire stage:lint --holder s2
-assert_eq "H-107: a stopped run records no heavy or stage slot" 0 "$(ls "$r/slots/heavy" "$r/slots/stage-browser" "$r/slots/stage-lint" 2>/dev/null | grep -c json || true)"
+assert_exit "H-105: a soft stop still launches no new worker (75)" 75 wl "$r" s3
+"$h" slot "$r" release heavy --holder s2 >/dev/null
+"$h" slot "$r" release stage:browser --holder s2 >/dev/null
+printf 'torn{\n' >> "$r/ledger.jsonl"
+assert_exit "H-107: a heavy acquire with an unknown stop state gives 75" 75 "$h" slot "$r" acquire heavy --holder s2 --op app-build
+assert_exit "H-107: a stage acquire with an unknown stop state gives 75" 75 "$h" slot "$r" acquire stage:lint --holder s2
+assert_eq "H-107: an unknown stop state records no heavy or stage slot" 0 "$(ls "$r/slots/heavy" "$r/slots/stage-lint" 2>/dev/null | grep -c json || true)"
 
 # The transcript folder is the one the session itself uses: an account command that builds it
 # from $PWD runs in the session's folder, and only once for the launch command's own check.

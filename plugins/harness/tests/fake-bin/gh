@@ -3,7 +3,16 @@
 # State: one JSON file per issue in $HO_FAKE_GH_DIR/issues/ (default $HOME/fake-gh).
 # Every call is logged as one tab-separated line to $HO_FAKE_GH_DIR/calls.log.
 # The signed-in account is $HO_FAKE_GH_USER (default harness-bot).
-# Supported: label create; issue create|view|list|edit|comment|close.
+# Supported: label create; issue create|view|list (at most --limit, default 30, as gh does)|
+# edit|comment|close; api user, api repos/<r>/issues (open issues, per_page, --paginate),
+# api repos/<r>/collaborators/<login>/permission, api repos/<r>/issues/<n>/events.
+# Label events: every label that issue create or issue edit adds or removes is recorded in
+# $HO_FAKE_GH_DIR/events/<n>.json as a "labeled" or "unlabeled" event whose actor is the
+# signed-in account, in the shape the real events endpoint returns (oldest first).
+# Permissions: $HO_FAKE_GH_DIR/perms.json maps a login to admin|maintain|write|triage|read;
+# the endpoint answers {permission, role_name} as GitHub does (maintain reads "write",
+# triage reads "read"). A login not in the map gets HTTP 404 and exit 1.
+# HO_FAKE_GH_FAIL_API=<text> makes every api call whose path holds <text> fail with exit 1.
 # "issue comment --edit-last" rewrites the account's last comment, as real gh does,
 # so a regression to it is visible in the stored comments. Any other call exits 2.
 # HO_FAKE_GH_FAIL="<group> <command>" (for example "issue comment") makes that one call
@@ -29,6 +38,16 @@ issue_file() {
   [ -f "$dir/issues/$1.json" ] || fail "no issue $1"
   printf '%s\n' "$dir/issues/$1.json"
 }
+label_event() { # label_event <issue number> <labeled|unlabeled> <label>
+  local ef="$dir/events/$1.json" tmp
+  mkdir -p "$dir/events"
+  [ -f "$ef" ] || echo '[]' > "$ef"
+  tmp=$(mktemp "$dir/.tmp.XXXXXX")
+  jq --arg e "$2" --arg l "$3" --arg u "$user" \
+    '. + [{id: (1000 + length), event: $e, actor: {login: $u, type: (if ($u | endswith("[bot]")) then "Bot" else "User" end)},
+           label: {name: $l}, created_at: "2026-01-01T00:00:00Z", performed_via_github_app: null}]' "$ef" > "$tmp"
+  mv "$tmp" "$ef"
+}
 save() { # save <file> <jq filter> [jq args...]; edits the issue JSON in place
   local f=$1 filter=$2 tmp
   shift 2
@@ -45,6 +64,50 @@ pick() { # pick <comma-separated fields>
   jq -c --arg f "$1" "$shape"' | with_entries(select(.key as $k | ($f | split(",") | index($k))))'
 }
 
+if [ "${1:-}" = api ]; then
+  shift
+  path="" paginate=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --paginate) paginate=1; shift ;;
+      -*) fail "api: unsupported flag $1" ;;
+      *) [ -z "$path" ] || fail "api: one path only"; path=$1; shift ;;
+    esac
+  done
+  query=""; case $path in *\?*) query=${path#*\?} ;; esac
+  path=${path%%\?*}
+  if [ -n "${HO_FAKE_GH_FAIL_API:-}" ]; then
+    case $path in *"$HO_FAKE_GH_FAIL_API"*)
+      printf 'fake gh: HTTP 502: bad gateway (simulated for api %s)\n' "$path" >&2; exit 1 ;;
+    esac
+  fi
+  case $path in
+    user) jq -n --arg u "$user" '{login: $u}' ;;
+    repos/*/*/collaborators/*/permission)
+      who=${path#repos/*/*/collaborators/}; who=${who%/permission}
+      perm=$(jq -r --arg w "$who" '.[$w] // empty' "$dir/perms.json" 2>/dev/null || true)
+      [ -n "$perm" ] || { printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1; }
+      case $perm in maintain) p=write ;; triage) p=read ;; *) p=$perm ;; esac
+      jq -n --arg p "$p" --arg r "$perm" --arg w "$who" '{permission: $p, role_name: $r, user: {login: $w}}' ;;
+    repos/*/*/issues/*/events)
+      n=${path#repos/*/*/issues/}; n=${n%/events}
+      issue_file "$n" >/dev/null
+      if [ -f "$dir/events/$n.json" ]; then cat "$dir/events/$n.json"; else echo '[]'; fi ;;
+    repos/*/*/issues)
+      # Open issues in the REST shape, per_page (default 30) at a time, oldest first. Without
+      # --paginate only the first page is printed; with it every page, one array per page, as
+      # gh prints them.
+      per=30
+      case "&$query&" in *"&per_page="*) per=${query#*per_page=}; per=${per%%&*} ;; esac
+      case "&$query&" in *"&state=open&"* | *"&state=all&"*) ;; *"&state="*) fail "issues: only state=open is faked" ;; esac
+      find "$dir/issues" -name '*.json' -exec cat {} + | jq -s -c --argjson per "$per" --argjson all "$paginate" '
+        [.[] | select((.state | ascii_downcase) == "open")] | sort_by(.number)
+        | map({number, title, state: (.state | ascii_downcase), labels: [.labels[] | {name: .}]})
+        | [range(0; ([length, 1] | max); $per) as $i | .[$i:($i + $per)]] | if $all == 1 then .[] else .[0] end' ;;
+    *) fail "unsupported api path: $path" ;;
+  esac
+  exit 0
+fi
 [ $# -ge 2 ] || fail "unsupported call: $line"
 group=$1 cmd=$2
 shift 2
@@ -69,6 +132,7 @@ case "$group $cmd" in
     jq -n --argjson n "$n" --arg t "$title" --rawfile b "$bodyf" --argjson l "$labels" \
       '{number: $n, title: $t, body: $b, state: "OPEN", updatedAt: "2026-01-01T00:00:00Z",
         labels: $l, assignees: [], comments: []}' > "$dir/issues/$n.json"
+    jq -r '.[]' <<<"$labels" | while IFS= read -r one; do label_event "$n" labeled "$one"; done
     printf 'https://github.com/fake/repo/issues/%s\n' "$n"
     ;;
   "issue view")
@@ -85,10 +149,11 @@ case "$group $cmd" in
     pick "$fields" < "$f"
     ;;
   "issue list")
-    label="" state=open fields=""
+    label="" state=open fields="" limit=30
     while [ $# -gt 0 ]; do
       case $1 in
-        --repo|--limit) shift 2 ;;
+        --repo) shift 2 ;;
+        --limit) limit=$2; shift 2 ;;
         --label) label=$2; shift 2 ;;
         --state) state=$2; shift 2 ;;
         --json) fields=$2; shift 2 ;;
@@ -98,7 +163,7 @@ case "$group $cmd" in
     [ -n "$fields" ] || fail "issue list: only --json output is faked"
     find "$dir/issues" -name '*.json' -exec cat {} + | jq -s -c --arg l "$label" --arg s "$state" \
       '[.[] | select(($l == "") or (.labels | index($l))) | select(($s == "all") or (.state | ascii_downcase) == $s)]
-       | sort_by(.number)' |
+       | sort_by(.number) | .[0:'"$limit"']' |
       jq -c '.[]' | while IFS= read -r one; do printf '%s\n' "$one" | pick "$fields"; done | jq -s -c '.'
     ;;
   "issue edit")
@@ -106,8 +171,18 @@ case "$group $cmd" in
     while [ $# -gt 0 ]; do
       case $1 in
         --repo) shift 2 ;;
-        --add-label) save "$f" '.labels = (.labels + ($l | split(",")) | unique)' --arg l "$2"; shift 2 ;;
-        --remove-label) save "$f" '.labels = (.labels - ($l | split(",")))' --arg l "$2"; shift 2 ;;
+        --add-label)
+          n=$(jq -r .number "$f")
+          printf '%s\n' "$2" | tr ',' '\n' | while IFS= read -r one; do
+            jq -e --arg l "$one" '.labels | index($l)' "$f" >/dev/null || label_event "$n" labeled "$one"
+          done
+          save "$f" '.labels = (.labels + ($l | split(",")) | unique)' --arg l "$2"; shift 2 ;;
+        --remove-label)
+          n=$(jq -r .number "$f")
+          printf '%s\n' "$2" | tr ',' '\n' | while IFS= read -r one; do
+            ! jq -e --arg l "$one" '.labels | index($l)' "$f" >/dev/null || label_event "$n" unlabeled "$one"
+          done
+          save "$f" '.labels = (.labels - ($l | split(",")))' --arg l "$2"; shift 2 ;;
         --add-assignee) save "$f" '.assignees = (.assignees + [$u] | unique)' --arg u "${2/#@me/$user}"; shift 2 ;;
         --remove-assignee) save "$f" '.assignees = (.assignees - [$u])' --arg u "${2/#@me/$user}"; shift 2 ;;
         *) fail "issue edit: unsupported flag $1" ;;

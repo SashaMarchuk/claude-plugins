@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "name": "safe",
+  "description": "The default. Plan, execution, review and verification run on this machine. Nothing leaves it: no push, no PR and no merge, not even a local integration merge. The ticket ends in needs-review on its local branch.",
+  "gates": {},
+  "push": false,
+  "pr": "none",
+  "pr_open": "none",
+  "merge": "never",
+  "post_merge": false,
+  "deploy_production": false,
+  "remarks": "human",
+  "allow_zero_tests": false
+}

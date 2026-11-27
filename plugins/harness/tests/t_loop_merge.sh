@@ -8,7 +8,8 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t
 proj="$PWD/proj"
 mkdir -p "$proj/.harness" "$PWD/user"
 git -C "$proj" init -q -b main
-printf '%s\n' '{"schemaVersion":2}' > "$proj/.harness/config.json"
+# D12: the run's autonomy profile must allow the local integration merge (safe, the default, does not).
+printf '%s\n' '{"schemaVersion":2,"autonomy":{"profile":"draft-pr"}}' > "$proj/.harness/config.json"
 printf '.harness/\n' >> "$proj/.git/info/exclude"
 printf 'base\n' > "$proj/shared.txt"
 git -C "$proj" add shared.txt && git -C "$proj" commit -qm base
@@ -123,7 +124,7 @@ printf '%s\n' '{"schemaVersion":2,"gate":{"list":{"t":{"command":"true"}}}}' > "
 user_gate
 assert_eq "D37-FLOW-8: a gate command in the project config refuses the merge" 65 "$(merge_rc a)"
 assert_contains "D37-FLOW-8: the message says to move the command to the user config" "$(cat "$PWD/err")" "user config"
-printf '%s\n' '{"schemaVersion":2}' > "$proj/.harness/config.json"
+printf '%s\n' '{"schemaVersion":2,"autonomy":{"profile":"draft-pr"}}' > "$proj/.harness/config.json"
 assert_eq "D37-FLOW-8: nothing was merged while the config was refused" "$base_tip" "$(tip)"
 
 # ---- STOP ---------------------------------------------------------------------------------
@@ -510,3 +511,42 @@ assert_eq "H-046 confirmation: the commit made by the hook is kept" "made by a h
 assert_eq "H-046 confirmation: no merge-confirmed line for that lane" "" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "y1") | .lane' "$run/ledger.jsonl")"
 git -C "$proj" config --unset core.hooksPath
 git -C "$int" reset -q --hard "$cur"
+
+# ---- H-086, D25a: soft stops and the merge ------------------------------------------------
+# soft:step and soft:task refuse the merge; soft:ticket merges the lane of a ticket that began
+# before the stop, and only that lane.
+lane st1 st1.txt "from st1"; verdict st1 passed
+"$h" loop "$run" ready st1 --worktree "$PWD/w-st1" --ticket 7 >/dev/null
+lane st2 st2.txt "from st2"; verdict st2 passed
+"$h" loop "$run" ready st2 --worktree "$PWD/w-st2" --ticket 8 >/dev/null
+lane st3 st3.txt "from st3"; verdict st3 passed
+assert_eq "H-086: ready records the lane's ticket" "7" "$(jq -r .ticket "$run/lanes/st1.json")"
+"$h" state "$run" begin --ticket 7 --step s1 >/dev/null
+"$h" state "$run" begin --ticket 8 --step s1 >/dev/null
+"$h" state "$run" stop --type soft:task >/dev/null
+assert_eq "H-086: soft:task refuses the merge of a started ticket (75)" 75 "$(merge_rc st1)"
+"$h" state "$run" stop --type soft:ticket --ticket 7 >/dev/null
+assert_eq "D25a: a per-ticket soft:ticket stop refuses the lane of another ticket (75)" 75 "$(merge_rc st2)"
+assert_eq "D25a: a soft:ticket stop refuses a lane that names no ticket (75)" 75 "$(merge_rc st3)"
+before=$(tip)
+assert_eq "H-086: soft:ticket merges the lane of the covered ticket, so it runs to its end" 0 "$(merge_rc st1)"
+assert_eq "H-086: that merge is confirmed by git" "$(lsha st1)" "$(git -C "$proj" rev-parse "$(tip)^2")"
+assert_eq "H-086: the merge started from the earlier tip" "$before" "$(git -C "$proj" rev-parse "$(tip)^1")"
+"$h" state "$run" stop >/dev/null
+assert_eq "H-086: the default soft:step refuses every merge (75)" 75 "$(merge_rc st2)"
+"$h" state "$run" resume >/dev/null
+
+# ---- H-079: an ended run merges nothing and begins no step, until a recorded resume ------------
+mkdir -p "$PWD/no-tickets"
+HO_TICKETS_DIR="$PWD/no-tickets" "$h" lifecycle "$run" check >/dev/null 2>&1 || true
+assert_eq "test setup: the run has ended" 1 "$(ledger_has run-end)"
+before=$(tip) confirmed_before=$(ledger_has merge-confirmed)
+assert_eq "H-079: an ended run refuses a merge (75)" 75 "$(merge_rc st2)"
+assert_eq "H-079: the refused merge leaves the integration branch and the ledger as they were" "$before $confirmed_before" \
+  "$(tip) $(ledger_has merge-confirmed)"
+assert_exit "H-079: an ended run refuses a new step (75)" 75 "$h" state "$run" begin --ticket 9 --step s1
+assert_eq "H-079: no step-begin is written after the run end" 0 \
+  "$(jq -r 'select(.kind == "run-end" or (.kind == "step-begin" and .ticket == "9")) | .kind' "$run/ledger.jsonl" | grep -c step-begin || true)"
+"$h" state "$run" resume >/dev/null
+assert_exit "H-079: after a recorded resume a step begins again" 0 "$h" state "$run" begin --ticket 9 --step s1
+assert_eq "H-079: after a recorded resume the merge goes through" 0 "$(merge_rc st2)"

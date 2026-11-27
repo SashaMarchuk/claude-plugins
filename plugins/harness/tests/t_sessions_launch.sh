@@ -136,6 +136,13 @@ assert_contains "Rebuild model chain: the launcher leaves a start-failed note th
 assert_exit "Rebuild model chain: an empty chain is refused" 65 launch w7 --model ' | '
 assert_exit "Rebuild model chain: a model name with shell characters is refused" 65 launch w8 --model 'a;b'
 
+# ---- the session record keeps the ticket the session works on (H-086, D25a) ---------------
+# A soft:ticket stop decides from the record's ticket whether this session's work may go on.
+launch wt --ticket 07 >/dev/null
+assert_eq "H-086: the running session's record keeps its ticket" "running 7" "$(rec wt '"\(.status) \(.ticket)"')"
+assert_eq "H-086: a session launched with no ticket records none" "null" "$(rec w1 .ticket)"
+"$h" session "$run" close wt >/dev/null 2>&1 || true
+
 # ---- a stopped run launches nothing -------------------------------------------------
 "$h" state "$run" stop "test" >/dev/null
 before=$(calls | wc -l)

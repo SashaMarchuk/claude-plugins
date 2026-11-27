@@ -39,6 +39,8 @@ usage: harness session <run-dir> <verb> [args]
   launch --role R --name N --cwd DIR (--prompt FILE | --resume SESSION-ID) [--account A] [--model "a|b"]
          [--slot-wait SECONDS]   a worker waits this long for a worker slot (default 0); exit 73
                                  when the worker cap stays reached
+         [--ticket ID]           the ticket the session works on; under a soft:ticket stop only
+                                 a session of a ticket begun before the stop starts
   close <name>        ask the session to exit, wait for its exact process to end; never forced
   list                one line per session: name role status pid session-id handle
   deliver <name> (--text T | --file F) [--id ID] [--force-send]
@@ -49,6 +51,8 @@ usage: harness session <run-dir> <verb> [args]
   read <name> transcript|screen [--lines N]
                       the tail of the session's transcript or screen, fenced as untrusted;
                       reads only, never types
+  hooks-check         the start check: name hooks in the settings sessions load that have no
+                      time limit or one above the maximum; never edits them (D42l)
 USAGE
 }
 
@@ -400,6 +404,11 @@ ho_session_launcher_text() {
   printf 'export PATH=%s\n' "$(ho_q "$path")"
   printf 'export HO_PROJECT_DIR=%s HO_RUN_DIR=%s HO_RUN_ID=%s\n' "$(ho_q "$HO_PROJECT_DIR")" "$(ho_q "$HO_RUN_DIR")" "$(ho_q "$HO_RUN_ID")"
   printf 'export HO_SESSION_NAME=%s HO_SESSION_ROLE=%s HO_SESSION_ID=%s\n' "$(ho_q "$name")" "$(ho_q "$role")" "$(ho_q "$sid")"
+  # H-089 (D37-SESSIONS-2): the mark the liveness hook needs; without it the hook does nothing.
+  # A config read that fails keeps every event on, never silently none.
+  local hook_events
+  hook_events=$(ho_live_hook_events) || hook_events=$HO_LIVE_HOOK_EVENTS_ALL
+  printf 'export HO_HOOK_LOG=%s HO_HOOK_EVENTS=%s\n' "$(ho_q "$(ho_live_hook_log)")" "$(ho_q "$hook_events")"
   # H-105: before anything slow, the launcher records itself (PID and start time), then reads
   # the close flag. A slot is freed only after its close flag is written and no process of the
   # session is found (lib/slots.sh), so a launcher either counts as alive or starts nothing.
@@ -511,14 +520,15 @@ ho_session_launch() {
 }
 
 ho_session_launch_one() {
-  local role="" name="" cwd="" prompt="" account="" chain="" resume="" slot_wait=0
+  local role="" name="" cwd="" prompt="" account="" chain="" resume="" slot_wait=0 ticket=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --role | --name | --cwd | --prompt | --account | --model | --resume | --slot-wait)
+      --role | --name | --cwd | --prompt | --account | --model | --resume | --slot-wait | --ticket)
         [ $# -ge 2 ] || { ho_session_usage; return 64; }
         case $1 in
           --role) role=$2 ;; --name) name=$2 ;; --cwd) cwd=$2 ;; --prompt) prompt=$2 ;;
           --account) account=$2 ;; --model) chain=$2 ;; --resume) resume=$2 ;; --slot-wait) slot_wait=$2 ;;
+          --ticket) ticket=$(ho_stop_ticket_arg "$2") || return 64 ;;
         esac
         shift 2
         ;;
@@ -532,9 +542,13 @@ ho_session_launch_one() {
   # ---- guards: nothing is written before all of them pass ----
   ho_session_role_ok "$role" || return 65
   ho_session_name_ok "$name" || return 65
+  # A stopped run launches nothing new (H-086, D25a). Only a soft:ticket stop lets a session of a
+  # ticket that began before the stop start, so that ticket can run to its end.
   local stopped=0
-  ho_stopped || stopped=$?
-  [ "$stopped" -eq 1 ] || { echo "harness: the run is stopped (or its stop state is unknown); no session is launched" >&2; return 75; }
+  ho_stop_gate "$ticket" || stopped=$?
+  [ "$stopped" -eq 0 ] || { echo "harness: the run is stopped (or its stop state is unknown); no session is launched" >&2; return 75; }
+  # An ended run launches nothing (H-079); a recorded resume ("state <run> resume") opens it again.
+  ! ho_run_ended || { echo "harness: the run has ended; no session is launched (record a resume to open it again)" >&2; return 75; }
   ho_assert_safe_cwd "$cwd" "$HO_PROJECT_DIR" || return 65
   cwd=$(cd "$cwd" && pwd -P) || return 65
   case $cwd in *$'\n'*) echo "harness: working folder name has a line break" >&2; return 65 ;; esac
@@ -600,9 +614,9 @@ ho_session_launch_one() {
   launch_start=$(ho_proc_start "$launch_pid")
   [ -n "$launch_start" ] || { rm -f "$rec"; echo "harness: cannot read the start time of the launch process; nothing was launched" >&2; return 1; }
   jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg role "$role" --arg ts "$(ho_now)" \
-    --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" \
+    --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg ticket "$ticket" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, session_id: null, pid: null, status: "launching", created: $ts,
-      launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
+      launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end)}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   # The worker cap: counted and taken under the slot lock, while the name is reserved.
   if [ "$role" = worker ]; then
@@ -616,10 +630,15 @@ ho_session_launch_one() {
     HO_SLOT_TAKEN=$name
     # A stop recorded while this launch waited ends it here: no worker starts in a stopped run.
     stopped=0
-    ho_stopped || stopped=$?
-    if [ "$stopped" -ne 1 ]; then
+    ho_stop_gate "$ticket" || stopped=$?
+    if [ "$stopped" -ne 0 ]; then
       rm -f "$rec"
       echo "harness: the run was stopped (or its stop state is unknown) while the launch waited; no session is launched" >&2
+      return 75
+    fi
+    if ho_run_ended; then
+      rm -f "$rec"
+      echo "harness: the run ended while the launch waited; no session is launched" >&2
       return 75
     fi
   fi
@@ -635,9 +654,9 @@ ho_session_launch_one() {
   # the other and stops.
   if [ -n "$resume" ]; then
     jq -n --arg run "$HO_RUN_ID" --arg name "$name" --arg sid "$sid" --arg pidfile "$sdir/$name.pid" --arg ts "$(ho_now)" \
-      --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" \
+      --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg ticket "$ticket" \
       '{schemaVersion: 2, run: $run, name: $name, session_id: $sid, pid: null, pid_file: $pidfile, status: "launching", created: $ts,
-        launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
+        launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end)}' \
       | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
     local f other=""
     for f in "$sdir"/*.json; do
@@ -714,13 +733,14 @@ ho_session_launch_one() {
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
     --arg rpath "$cmdpath" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg aenv "$aenv" \
+    --arg ticket "$ticket" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
       account_env: (if $account != "" then null else ($aenv | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) end),
       runtime: $runtime, runtime_path: $rpath, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
-      transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns}' \
+      transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end)}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
-  ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name"
+  ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name" ticket "$ticket"
 
   # A worker opens a terminal only while it holds its slot. Only a proven end frees a slot, and
   # this launch is alive, so this holds; the check keeps any later change from opening a worker
@@ -979,6 +999,7 @@ ho_session_main() {
     proof) ho_session_proof "$@" || rc=$? ;;
     status) ho_live_status "$@" || rc=$? ;;
     read) ho_live_read "$@" || rc=$? ;;
+    hooks-check) ho_live_hooks_check "$@" || rc=$? ;;
     *) ho_session_usage; rc=64 ;;
   esac
   exit "$rc"

@@ -5,7 +5,7 @@ The owner SHALL set the number of tickets that run in parallel: before a run sta
 Source: interview 2026-11-24 R21.1; owner decision 2026-11-26 (task 0.6)
 
 #### Scenario: No cap is configured
-- **WHEN** a run starts and neither the launch options nor the project configuration set a worker cap
+- **WHEN** a run starts and none of the launch options, the project configuration or the user configuration sets a worker cap
 - **THEN** the harness runs at most one ticket at a time
 
 #### Scenario: The owner sets the cap before launch

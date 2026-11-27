@@ -214,6 +214,20 @@ ho_in_pickup_steps() {
     state=ready login=local
   fi
 
+  # A ready label on a ticket that is already in progress or done is no new pickup (D2: one state
+  # label at a time). The ticket keeps its state, the stray ready label goes, and one ledger
+  # line records it; the next tick no longer sees the ticket. needs-review is not here: a
+  # writer's ready label on it is the approval (H-011).
+  local cur
+  for cur in in-progress done; do
+    case " $state " in *" $cur "*)
+      ho_tk_gh_set_state "$id" "$cur" || return 2
+      ho_ledger_append pickup-skipped ticket "$id" state "$cur" by "${login:-unknown}"
+      echo "kept-$cur $id"
+      return 1 ;;
+    esac
+  done
+
   # Unblock (H-031): the ready label on a blocked ticket.
   case " $state " in *" blocked "*)
     if [ -n "$login" ] && [ "$ridx" -gt "$bidx" ] && [ "$(ho_tk_access "$login")" = writer ]; then
@@ -376,7 +390,8 @@ usage: harness intake <run-dir> <verb>
                       before the next poll, after the back-off for tracker errors
   tick [--max N]      one poll when it is due: close sessions that asked a question, then take
                       ready tickets up to the free worker slots (and N). Prints one line each:
-                      start|blocked|needs-review|unblocked|kept-blocked <id>, closed <session>,
+                      start|blocked|needs-review|unblocked|kept-blocked|kept-in-progress|
+                      kept-done|error <id>, closed <session>,
                       not-due <seconds>, tracker-error, stopped
   poll [--max N]      tick until the run is stopped
 USAGE

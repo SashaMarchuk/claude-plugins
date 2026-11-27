@@ -153,3 +153,25 @@ label alice "$t11" ready
 out=$(HO_FAKE_GH_FAIL="issue comment" tick 2>/dev/null || true)
 assert_contains "D2 a failed pickup comment prints an error line for the ticket" "$out" "error $t11"
 assert_contains "D2 a failed pickup comment is recorded in the ledger" "$(jq -c --arg t "$t11" 'select(.kind == "pickup-error" and .ticket == $t)' "$run/ledger.jsonl")" '"step":"pickup-comment"'
+
+# D2 H-030: a ready label on a ticket that is already in progress or done is no new pickup. The
+# harness keeps the state it has, removes the stray ready label (one state label at a time) and
+# records it once; it claims nothing and runs no readiness check.
+for st in in-progress done; do
+  t=$(ticket "Stray ready on $st" "$st")
+  label alice "$t" ready
+  : > "$HO_FAKE_CLAUDE_LOG"
+  out=$(tick)
+  assert_contains "D2 a ready label on the $st ticket is not a pickup" "$out" "kept-$st $t"
+  assert_eq "D2 H-030 the $st ticket keeps only its own state label" "[\"harness:$st\"]" "$(labels "$t")"
+  assert_eq "D2 the $st ticket gets no picked-up comment" "" "$(comments "$t" | grep 'picked up' || true)"
+  assert_eq "D2 no readiness check runs for the $st ticket" "" "$(cat "$HO_FAKE_CLAUDE_LOG")"
+  assert_eq "D2 the stray ready label on the $st ticket is recorded once" "1" "$(jq -c --arg t "$t" 'select(.kind == "pickup-skipped" and .ticket == $t)' "$run/ledger.jsonl" | grep -c . || true)"
+  out=$(tick)
+  assert_eq "D2 the next tick says nothing more about the $st ticket" "" "$(printf '%s' "$out" | grep -w "$t" || true)"
+done
+# H-011 a writer's ready label on a needs-review ticket is the approval and stays a pickup.
+t=$(ticket "Approved after review" needs-review)
+label alice "$t" ready
+out=$(tick)
+assert_contains "H-011 a writer's ready label on a needs-review ticket is taken" "$out" "start $t"

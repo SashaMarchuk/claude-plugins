@@ -4,7 +4,8 @@
 #
 #   harness feedback preview <description-file>
 #       Build the issue from the person's words plus the fixed technical context. Print the
-#       full text, a draft folder and a confirm code. Makes no tracker call.
+#       full text, a draft folder and a confirm code. Sends nothing (with a GitHub ticket
+#       source it reads ticket counts only).
 #   harness feedback send --draft <dir> --code <code> --yes
 #       Send exactly the draft that was shown. Refused without --yes, with a wrong code, or
 #       when the draft holds a token or a path outside the plugin.
@@ -52,25 +53,28 @@ ho_fb_sha() {
 # The patterns the cleaner and the gate share. One jq definition, so they cannot drift.
 #   tokens      known token families, plus any run of 40 or more token characters
 #   secret_kv   a key that names a secret (DB_PASSWORD, client_secret, GITHUB_TOKEN, ...) and its value
-#   path_re     an absolute or ~ path; a path segment may hold spaces when another "/" follows
-#   root_re     a path under a usual system root, wherever it starts (-I/home/x, file:///Users/x)
+#   path_re     an absolute path of two or more parts, or a ~ path (a slash command such as
+#               /harness:run has one part and stays)
+#   root_re     a path under a usual system root, wherever it starts (-I/home/x, file:///Users/x);
+#               a part may hold spaces when another "/" follows
 #   rel_re      a relative ../ or ./ path;  win_re  a drive path
 # shellcheck disable=SC2016 # jq text, not shell
 HO_FB_JQ_DEFS='
 def seg: "[^\\s\"'"'"'`<>()\\[\\]{},;/]";
-def body: "(?:/" + seg + "+(?:(?: " + seg + "+)+(?=/))?)+/?";
+def word_seg: "[^\\s\"'"'"'`<>()\\[\\]{},;/:]";
+def body: "(?:/" + seg + "+(?:(?: " + word_seg + "+)+(?=/))?)+/?";
 def tokens: [
   "gh[pousr]_[A-Za-z0-9]{20,}", "github_pat_[A-Za-z0-9_]{20,}", "sk-[A-Za-z0-9_-]{16,}",
   "xox[abposr]-[A-Za-z0-9-]{10,}", "AKIA[0-9A-Z]{16}", "AIza[0-9A-Za-z_-]{30,}",
   "eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]+",
   "-----BEGIN [A-Z ]*PRIVATE KEY-----",
   "(?i)(?<![A-Za-z0-9])bearer\\s+[A-Za-z0-9._~+/=-]{8,}",
-  "(?<![A-Za-z0-9_+/=-])[A-Za-z0-9_+/=-]{40,}"
+  "(?<![A-Za-z0-9_+/=.-])[A-Za-z0-9_+/=-]{40,}"
 ];
 def secret_key: "(?<![A-Za-z0-9])[A-Za-z0-9_-]*(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key|credential)[A-Za-z0-9_-]*[\"'"'"']?\\s*[:=]\\s*[\"'"'"']?";
 def secret_kv: "(?i)(?<k>" + secret_key + ")(?!\\[token removed\\])[^\\s\"'"'"']+";
 def email: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}";
-def path_re: "(?<![A-Za-z0-9_:/])(?:~|\\$HOME)?" + body;
+def path_re: "(?<![A-Za-z0-9_:/])(?:(?:~|\\$HOME)/" + seg + "+|/" + seg + "+/" + seg + "+)(?:/" + seg + "+)*/?";
 def root_re: "/(?i:Users|home|private|tmp|var|opt|etc|root|mnt|Volumes|srv|Library|nix|workspaces?|data|media|run|usr|snap|cygdrive)(?=/)" + body;
 def rel_re: "(?<![A-Za-z0-9_])(?:\\.\\.?/)+" + seg + "+(?:/" + seg + "+)*";
 def win_re: "(?<![A-Za-z0-9])[A-Za-z]:\\\\[^\\s]+";

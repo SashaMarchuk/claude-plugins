@@ -123,6 +123,7 @@ cc -I/home/canary/include; see ../../canary/notes.txt; echo hi >/tmp/canary/out.
 open file:///Users/canary/x.html and /home/bob/My canary Acme/file.txt then words
 I am Canaryacct, also CANARYACCT.
 EOF
+printf '/harness:run hangs after /harness:status; see https://github.com/acme/tools/issues/12345/comments-and-a-long-tail.\n' >> "$base/d2.txt"
 rc=0; out=$(cd "$proj" && "$h" feedback preview "$base/d2.txt") || rc=$?
 assert_eq "H-140 private: preview exits 0" "0" "$rc"
 d=$(draft_of "$out")
@@ -141,8 +142,10 @@ for where in shown stored; do
   assert_eq "H-140 / D43 private: the $where text holds no ticket text, path outside the plugin, token or account name" "" "$leaks"
 done
 assert_contains "H-140 / D43: a path inside the plugin is written relative to the plugin root" "$stored" "plugin-root/lib/run.sh"
-assert_eq "H-140 / D43: no absolute path at all reaches the issue body" "0" \
-  "$(jq -r .body "$HO_FAKE_GH_DIR/issues/$n.json" | grep -cE '(^|[[:space:](])(/|~/)[A-Za-z]' || true)"
+assert_contains "H-140: slash commands in the description reach the issue" "$stored" "/harness:run hangs after /harness:status;"
+assert_contains "H-140: a web link in the description reaches the issue" "$stored" "https://github.com/acme/tools/issues/12345/comments-and-a-long-tail."
+assert_eq "H-140 / D43: no absolute path of two parts or ~ path reaches the issue body" "0" \
+  "$(jq -r .body "$HO_FAKE_GH_DIR/issues/$n.json" | grep -cE '(^|[[:space:](])(/[A-Za-z][^[:space:]/]*/|~/)[A-Za-z]' || true)"
 assert_contains "D43 summary: the run state is reported" "$stored" "- Last run: not stopped,"
 assert_contains "D43 summary: step names are the fixed role names, others counted as other" "$stored" \
   "- Steps (session roles launched): other 1, worker 1"

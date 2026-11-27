@@ -33,7 +33,8 @@
 # Settings: tickets.poll_seconds, tickets.required_content, tickets.target_repos,
 # tickets.readiness_timeout_seconds. No command is read from any config: the judge's command
 # line comes from the runtime profile, which a project cannot add (D37-FLOW-8).
-# Exit codes: 64 usage, 69 the tracker could not be read, 75 the run is stopped, 78 bad settings.
+# Exit codes: 64 usage, 69 the tracker could not be read, 75 the run is stopped or has ended,
+# 78 bad settings.
 # Requires lib/tickets.sh, lib/run.sh, lib/config.sh, lib/common.sh, lib/sessions.sh, lib/slots.sh.
 
 HO_IN_DEFAULT_POLL=60
@@ -386,6 +387,12 @@ ho_in_tick() {
   ho_tk_settings || return
   ho_stopped || rc=$?
   if [ "$rc" -ne 1 ]; then echo stopped; return "$HO_EXIT_STOPPED"; fi
+  # An ended run (its newest run-end line has no later resume, as lifecycle check reads it)
+  # claims nothing: a ticket taken now would have no run to work in (H-079).
+  if [ "$(ho_ledger_events | jq -r 'select(.kind == "run-end" or .kind == "resume") | .kind' | tail -n 1)" = run-end ]; then
+    echo ended
+    return "$HO_EXIT_STOPPED"
+  fi
   if [ -f "$(ho_in_state)" ]; then
     wait=$(ho_in_wait "$interval" "$(ho_in_errors)")
     mtime=$(ho_tk_lock_mtime "$(ho_in_state)")
@@ -430,8 +437,8 @@ usage: harness intake <run-dir> <verb>
                       ready tickets up to the free worker slots (and N). Prints one line each:
                       start|blocked|needs-review|unblocked|kept-blocked|kept-in-progress|
                       kept-done|error <id>, closed|close-failed <session>,
-                      not-due <seconds>, tracker-error, stopped
-  poll [--max N]      tick until the run is stopped
+                      not-due <seconds>, tracker-error, stopped, ended
+  poll [--max N]      tick until the run is stopped or has ended
 USAGE
 }
 

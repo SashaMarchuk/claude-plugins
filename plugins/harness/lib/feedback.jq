@@ -30,7 +30,7 @@ def ctx_line($fixed):
     or test("^- Runtime: (?:unknown \\((?:the config cannot be read|runtime\\.main is not a runtime name|not a runtime the plugin ships)\\)"
       + "|not set \\(config runtime\\.main is empty\\)|(?:" + $rt + ")(?:, version unknown|, not installed| version unknown| (?:" + shape_ver + ")))$")
     or test("^- Operating system: (?:unknown|" + shape_os_s + ") (?:unknown|" + shape_os_r + ") (?:unknown|" + shape_os_m + ")$")
-    or test("^- Last run: (?:there is no last run of this engine in this project|found, but its ledger could not be read|(?:not )?stopped, [0-9]+ ledger events)$")
+    or test("^- Last run: (?:there is no last run of this engine in this project|found, but its ledger could not be read|(?:stopped|not stopped|stop state unknown), [0-9]+ ledger events)$")
     or test("^- Steps \\(session roles launched\\): (?:none|(?:" + $r + ") [0-9]+(?:, (?:" + $r + ") [0-9]+)*)$")
     or test("^- Engine error codes: (?:none|(?:" + $e + ") x[0-9]+(?:, (?:" + $e + ") x[0-9]+)*)$")
     or test("^- Tickets per state: (?:unavailable|(?:" + $s + ") [0-9]+(?:, (?:" + $s + ") [0-9]+)*)$");

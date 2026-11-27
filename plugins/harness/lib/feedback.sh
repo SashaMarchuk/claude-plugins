@@ -113,7 +113,10 @@ ho_fb_runtime_version() {
     echo "$label, version unknown"; return 0
   fi
   out=$(mktemp "${TMPDIR:-/tmp}/ho-fb-ver.XXXXXX") || { echo "$label, version unknown"; return 0; }
-  ho_rt_probe 5 "$out" "$path" --version || rc=$?
+  # The probe gets the fixed system folders and the runtime's own folder only, never the
+  # caller's PATH, so a "#!/usr/bin/env node" line cannot pick a project interpreter (as
+  # delivery runs its version check, ho_deliver_exec_path).
+  ho_rt_probe 5 "$out" /usr/bin/env PATH="$(HO_PROJECT_DIR=$proj ho_deliver_exec_path "$path")" "$path" --version || rc=$?
   [ "$rc" -eq 0 ] && v=$(head -c 400 "$out" | tr ' \t\r' '\n\n\n' |
     grep -E '^v?[0-9]+(\.[0-9]+){1,3}([-+][0-9A-Za-z.]{1,20})?$' | head -n 1)
   rm -f "$out"
@@ -157,16 +160,18 @@ ho_fb_summary() {
   (
     # shellcheck disable=SC2034 # read by ho_ledger_events
     HO_RUN_DIR=$run
-    # A STOP file counts first, as in ho_stopped; it is only looked at, never recorded.
+    # The stop state as ho_stopped reads it (a STOP file first, then the last stop or resume,
+    # unknown after an unreadable line), but only looked at: nothing is recorded.
     file=false
     [ -e "$(ho_stop_file)" ] && file=true
     # shellcheck disable=SC2016 # jq text, not shell
     ho_ledger_events 2>/dev/null | ho_fb_jq '
-      (if $file then "stop" else [.[] | select(.kind == "stop" or .kind == "resume") | .kind] | last end) as $stop
+      (if $file then "stop" else reduce .[] as $e ("none"; if $e.kind == "unreadable" then "unknown"
+         elif $e.kind == "stop" then "stop" elif $e.kind == "resume" then "none" else . end) end) as $stop
       | [.[] | select(.kind == "session-launch") | .role
           | if (type == "string") and IN(fb_roles[]) then . else "other" end] as $r
       | [.[] | .kind | select(type == "string" and IN(fb_error_kinds[]))] as $err
-      | "- Last run: \(if $stop == "stop" then "stopped" else "not stopped" end), \(length) ledger events",
+      | "- Last run: \({stop: "stopped", unknown: "stop state unknown"}[$stop] // "not stopped"), \(length) ledger events",
         "- Steps (session roles launched): \(if ($r | length) == 0 then "none"
             else ($r | group_by(.) | map("\(.[0]) \(length)") | join(", ")) end)",
         "- Engine error codes: \(if ($err | length) == 0 then "none"

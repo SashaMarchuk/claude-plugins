@@ -113,7 +113,7 @@ mkdir -p "$proj/.harness/tickets"
 printf '## Goal\nCANARY-TICKET-BODY secret plan\n\n## Acceptance\n- [ ] it works\n' > "$base/tb.md"
 (cd "$proj" && HO_TICKETS_DIR="$proj/.harness/tickets" "$h" tickets add "CANARY-TICKET-TITLE private" "$base/tb.md" blocked >/dev/null 2>&1) || true
 before=$(tree_sum "$run")
-# D40: the description is sent as written; the person answers for what they paste. Private
+# Owner decision 2026-11-27 on #92: the description is sent as written; the person answers for what they paste. Private
 # values here are the person's own words and reach the issue unchanged.
 {
   printf 'It hangs. My notes are in %s/notes.md\n' "$proj"
@@ -127,9 +127,9 @@ rc=0; "$h" feedback send --draft "$d" --code "$(code_of "$out")" --yes >/dev/nul
 assert_eq "H-140 private: the draft is sent after a yes" "0" "$rc"
 n=$(creates)
 body=$(jq -r .body "$HO_FAKE_GH_DIR/issues/$n.json")
-assert_eq "D40: the description reaches the issue exactly as written" "$(cat "$base/d2.txt")" \
+assert_eq "H-140 owner decision 2026-11-27: the description reaches the issue exactly as written" "$(cat "$base/d2.txt")" \
   "$(printf '%s\n' "$body" | awk '/^---$/{exit} {print}' | sed '$d')"
-assert_contains "D40: the title is the first line of the description, as written" \
+assert_contains "H-140 owner decision 2026-11-27: the title is the first line of the description, as written" \
   "$(jq -r .title "$HO_FAKE_GH_DIR/issues/$n.json")" "Harness feedback: It hangs. My notes are in"
 # The title cut at 70 counts characters, so a multi-byte character is never split.
 zh=""; for i in $(seq 1 70); do zh="${zh}Ж"; done; zh70=$zh; zh="${zh}ЖЖЖЖЖЖЖЖЖЖ"

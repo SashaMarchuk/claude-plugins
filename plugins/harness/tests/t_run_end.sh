@@ -221,3 +221,36 @@ rm -f "$r10/sessions/x1.json"
 # ---- H-081: no check closed the session of the other run ---------------------------------------
 assert_eq "H-081: the session of another run is never closed" alive "$(up "$px")"
 assert_eq "H-081: its record is untouched" running "$(rec x1 .status "$other")"
+
+# ---- D2, H-079: a ticket in no known state is never "all done" ---------------------------------
+# The queue lists it, but not under one of the five states, so the run cannot tell whether it is
+# done: the decision is unknown (exit 2), as for a queue that cannot be read.
+r11=$("$h" run new --workers 5)
+sess "$r11" worker w1
+p11=$(pid "$r11" w1)
+tk "$base/tk-f" done
+tk "$base/tk-f" done
+f11=$(ls "$base/tk-f"/2-*.md)
+sed 's/^status: done$/status: paused/' "$f11" > "$base/t11.md" && cat "$base/t11.md" > "$f11"
+rc=0; HO_TICKETS_DIR="$base/tk-f" "$h" lifecycle "$r11" check >/dev/null 2>&1 || rc=$?
+assert_eq "D2: a local ticket whose state is none of the five gives unknown (exit 2)" 2 "$rc"
+ends=$(jq -r 'select(.kind == "run-end") | .kind' "$r11/ledger.jsonl")
+assert_eq "D2: that unknown closes nothing and ends nothing" "alive none" "$(up "$p11") ${ends:-none}"
+sed 's/^status: paused$/status: done/' "$f11" > "$base/t11.md" && cat "$base/t11.md" > "$f11"
+assert_eq "H-079: once that ticket reads done the same queue ends the run" "end" "$(HO_TICKETS_DIR="$base/tk-f" decision "$r11")"
+
+# GitHub: an open issue with a harness label but no state label is a ticket in no known state.
+# An issue with no harness label at all is not a harness ticket and does not hold the run.
+export HO_FAKE_GH_DIR="$base/gh"
+gh_check() { HO_TICKETS_SOURCE=github HO_TICKETS_REPO=fake/repo "$h" lifecycle "$1" check 2>"$base/check.err"; }
+r12=$("$h" run new --workers 5)
+HO_TICKETS_SOURCE=github HO_TICKETS_REPO=fake/repo "$h" tickets add "t-done" "$(body)" done >/dev/null
+gh issue create --repo fake/repo --title "not a harness ticket" --body-file "$(body)" >/dev/null
+gh issue create --repo fake/repo --title "urgent, no state" --body-file "$(body)" --label harness:urgent >/dev/null
+rc=0; gh_check "$r12" >/dev/null || rc=$?
+assert_eq "D2: an open issue with a harness label but no state label gives unknown (exit 2)" 2 "$rc"
+ends=$(jq -r 'select(.kind == "run-end") | .kind' "$r12/ledger.jsonl")
+assert_eq "D2: that unknown ends nothing" "none" "${ends:-none}"
+gh issue edit 3 --repo fake/repo --add-label harness:done >/dev/null
+o=$(gh_check "$r12" || true)
+assert_eq "H-079: once it carries a state label the run ends; an unlabelled issue does not hold it" "end" "$(printf '%s\n' "$o" | head -n 1)"

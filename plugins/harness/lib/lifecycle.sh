@@ -15,7 +15,7 @@
 #
 # The run keeps no list of its own tickets. Its tickets are the tickets of the queue it runs
 # (tickets ids <state>); a done ticket of an earlier run counts as done. A queue that cannot be
-# read is "unknown", never "all done".
+# read, or that lists a ticket in none of the five states (D2), is "unknown", never "all done".
 #
 # Requires lib/run.sh, lib/config.sh, lib/tickets.sh, lib/sessions.sh and lib/liveness.sh.
 
@@ -42,6 +42,30 @@ ho_life_ids() {
       exit 74
     fi
     ho_tickets ids "$1"
+  )
+}
+
+# ho_life_unstated: the queue's tickets that are in none of the five states (D2), read-only, from
+# one listing. Local: a ticket file whose status is not a known state (or cannot be read). GitHub:
+# an open issue with a harness label (<prefix>:...) but no state label; an issue with no harness
+# label is not a harness ticket. Such a ticket may or may not be done, so it is never "all done".
+ho_life_unstated() {
+  (
+    [ -n "${HO_TICKETS_DIR:-}" ] || export HO_TICKETS_DIR="$HO_PROJECT_DIR/.harness/tickets"
+    ho_tk_settings || exit $?
+    if ho_tk_gh; then
+      local json
+      json=$(gh issue list --repo "$HO_TK_REPO" --state open --limit 200 --json number,labels) || exit 1
+      printf '%s' "$json" |
+        jq -r --arg p "$HO_TK_PREFIX:" --arg s "$HO_STATES" '($s | split(" ") | map($p + .)) as $known
+          | .[] | [.labels[].name] as $l
+          | select(any($l[]; startswith($p)) and all($l[]; . as $x | $known | index($x) | not)) | .number'
+    else
+      local n f
+      ho_tk_l_each | while IFS=$'\t' read -r n f; do
+        [ "$(ho_tk_l_state "$f")" != unknown ] || printf '%s\n' "$n"
+      done
+    fi
   )
 }
 
@@ -120,7 +144,8 @@ ho_life_has() { printf '%s\n' $2 | grep -qx -- "$1"; }
 #   standby       all tickets done, standby on: finished terminals close (H-080)
 #   end           the run ends: every session of this run closes (H-079, D37-LIFECYCLE-3)
 #   ended         the run ended earlier; a session still open is closed again
-#   unknown       the stop state or the ticket queue cannot be read: nothing changes (exit 2)
+#   unknown       the stop state or the ticket queue cannot be read, or a ticket of the queue is
+#                 in none of the five states (D2): nothing changes (exit 2)
 ho_life_check() {
   local last st=0 s ids ready="" inprog="" blocked="" review="" decision reason="" t active="" live prev
   last=$(ho_ledger_events | jq -r 'select(.kind == "run-end" or .kind == "resume") | .kind' | tail -n 1)
@@ -141,6 +166,13 @@ ho_life_check() {
       ready) ready=$ids ;; in-progress) inprog=$ids ;; blocked) blocked=$ids ;; needs-review) review=$ids ;;
     esac
   done
+  # A ticket in none of the five states might still be open work: fail closed, as above.
+  ids=$(ho_life_unstated 2>/dev/null) || { ho_life_say unknown; echo "harness: the ticket states cannot be read; nothing changed" >&2; return 2; }
+  if [ -n "$ids" ]; then
+    ho_life_say unknown
+    printf 'harness: ticket(s) %s are in none of the states ready, in-progress, blocked, needs-review, done; nothing changed\n' "$(printf '%s ' $ids)" >&2
+    return 2
+  fi
   if [ "$st" -eq 0 ]; then
     # D25a: a soft stop lets running work finish. soft:ticket also lets each covered ticket
     # begun before the stop run on while it is ready or in progress.

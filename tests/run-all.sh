@@ -4,13 +4,69 @@
 #
 # Usage:  bash tests/run-all.sh
 #
-# Each per-plugin runner prints its own PASS/FAIL lines + summary; this script
-# captures the final summary line per plugin, sums totals, and emits an
-# aggregate summary at the end.
+# Each per-plugin runner runs once. Its output is shown as it comes and kept; this
+# script reads the PASS / FAIL counts from that run's last summary line, sums totals,
+# and emits an aggregate summary at the end.
+#
+# One full suite at a time on this machine: a lock folder (HO_RUN_ALL_LOCK, default
+# /tmp/claude-plugins-run-all-<uid>.lock) holds the PID and start time of the run that
+# owns it. A second run waits. A lock whose holder is gone is taken over in place, under
+# <lock>/takeover, and is never removed by a waiter, so a waiter never deletes a lock that
+# another waiter has just made.
 
 set -uo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+LOCK=${HO_RUN_ALL_LOCK:-/tmp/claude-plugins-run-all-$(id -u).lock}
+ME=$$
+# pstart <pid>: the process start time, so a reused PID is not taken for the holder.
+pstart() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+ME_START=$(pstart "$ME")
+# holder_alive <"pid start">: the recorded holder still runs (same PID, same start time).
+holder_alive() {
+  local pid=${1%% *} st=${1#* }
+  case $pid in '' | *[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ "$(pstart "$pid")" = "$st" ]
+}
+# lock_old <path>: last changed more than one minute ago.
+lock_old() { [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }
+write_owner() { printf '%s %s\n' "$ME" "$ME_START" > "$LOCK/owner.$ME" && mv -f "$LOCK/owner.$ME" "$LOCK/owner"; }
+TAKEOVER=0
+release_lock() {
+  [ "$TAKEOVER" = 1 ] && rmdir "$LOCK/takeover" 2>/dev/null
+  if [ "$(cat "$LOCK/owner" 2>/dev/null || true)" = "$ME $ME_START" ]; then rm -rf "$LOCK"; fi
+}
+trap release_lock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+take_lock() {
+  local said=0 owner
+  until mkdir "$LOCK" 2>/dev/null; do
+    owner=$(cat "$LOCK/owner" 2>/dev/null || true)
+    # A lock with no owner line (its maker died between mkdir and the write) is stale after a minute.
+    if { [ -n "$owner" ] && ! holder_alive "$owner"; } || { [ -z "$owner" ] && lock_old "$LOCK"; }; then
+      if mkdir "$LOCK/takeover" 2>/dev/null; then
+        TAKEOVER=1
+        # Under the takeover folder no other waiter changes the owner line: check it again, then write ours.
+        if [ "$(cat "$LOCK/owner" 2>/dev/null || true)" = "$owner" ] && ! holder_alive "$owner" && write_owner; then
+          rmdir "$LOCK/takeover" 2>/dev/null; TAKEOVER=0
+          echo "run-all: took over the lock of a run that is gone (${owner:-no owner})"
+          return 0
+        fi
+        rm -f "$LOCK/owner.$ME"; rmdir "$LOCK/takeover" 2>/dev/null; TAKEOVER=0
+        continue
+      fi
+      # A waiter that died while taking over leaves an empty takeover folder; after a minute it goes.
+      if lock_old "$LOCK/takeover"; then rmdir "$LOCK/takeover" 2>/dev/null; continue; fi
+    fi
+    if [ "$said" = 0 ]; then echo "run-all: another full run holds $LOCK (${owner:-starting}); waiting"; said=1; fi
+    sleep 1
+  done
+  write_owner
+}
+take_lock
 
 PLUGINS=(clickup g-event ultra ultra-analyzer claude-migrate find-call log-time harness ig-dm-export-analyzer interview-handoff)
 
@@ -35,21 +91,16 @@ for plugin in "${PLUGINS[@]}"; do
   echo "=================================================================="
   echo ">>> /$plugin"
   echo "=================================================================="
-  set +e
-  bash "$RUNNER"
-  rc=$?
-  set -e
-
-  # Re-extract PASS / FAIL counts from the runner's output by re-running it
-  # quietly. Each runner prints a final line of the form:
+  # One run: shown as it comes and kept. Each runner prints a final line of the form
   #   "<header>: PASS=<N>  FAIL=<M> ..."
-  # We capture last invocation's tallies to keep things simple — a second
-  # invocation is < 1s for all four plugins.
-  set +e
-  out=$(bash "$RUNNER" 2>&1)
-  set -e
-  pass_n=$(echo "$out" | grep -oE "PASS=[0-9]+" | tail -1 | cut -d= -f2)
-  fail_n=$(echo "$out" | grep -oE "FAIL=[0-9]+" | tail -1 | cut -d= -f2)
+  # and the counts are read from that run's output.
+  out_file=$(mktemp "${TMPDIR:-/tmp}/run-all-out.XXXXXX")
+  bash "$RUNNER" 2>&1 | tee "$out_file"
+  rc=${PIPESTATUS[0]}
+  summary=$(grep -E "PASS=[0-9]+.*FAIL=[0-9]+" "$out_file" | tail -1)
+  pass_n=$(printf '%s\n' "$summary" | grep -oE "PASS=[0-9]+" | head -1 | cut -d= -f2)
+  fail_n=$(printf '%s\n' "$summary" | grep -oE "FAIL=[0-9]+" | head -1 | cut -d= -f2)
+  rm -f "$out_file"
   pass_n=${pass_n:-0}
   fail_n=${fail_n:-0}
 

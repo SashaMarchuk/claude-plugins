@@ -8,6 +8,8 @@ Install: [docs/INSTALL.md](docs/INSTALL.md) (short guide, with a multi-worker re
 
 Flow systems tested with the harness so far: the shipped `basic` flow and the `gsd` flow (GSD), in the test suite with a fake runtime. Other flow systems may work, through an own flow (`bin/harness flow copy basic <new>`), but they are not tested. This list is updated from the evaluation results before the release.
 
+Supported jq: 1.7.1 (the macOS system jq, `/usr/bin/jq`) up to 1.8.x. The whole test suite passes on jq 1.7.1 and on jq 1.8.2. jq 1.6 and older are not supported: every verb but `help` refuses an older jq with one line that names the found version (exit 78).
+
 ## Joining a project that already uses the harness
 
 You found a `.harness/` folder in a project.
@@ -354,6 +356,13 @@ bash plugins/harness/tests/run.sh
 ```
 
 The last line is `harness tests: PASS=<n>  FAIL=<m>`. See `tests/README.md` for how the runner isolates each test.
+
+To test against one jq, name it with an absolute path. Before a release, run the suite once for each supported jq:
+
+```bash
+HO_TEST_JQ=/usr/bin/jq bash plugins/harness/tests/run.sh
+HO_TEST_JQ=/opt/homebrew/bin/jq bash plugins/harness/tests/run.sh
+```
 
 ## Field notes for contributors
 

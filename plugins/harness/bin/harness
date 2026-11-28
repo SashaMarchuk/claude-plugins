@@ -106,6 +106,8 @@ USAGE
 
 verb=${1:-}
 [ $# -gt 0 ] && shift
+# Every verb but help needs jq 1.7 or newer (issue #117).
+case $verb in help | -h | --help | '') ;; *) ho_jq_check ;; esac
 
 case $verb in
   version)  printf 'harness %s\n' "$(ho_version)" ;;

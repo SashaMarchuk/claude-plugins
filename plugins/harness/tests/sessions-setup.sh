@@ -40,10 +40,10 @@ launch() {
 rec() { jq -r "$2" "${3:-$run}/sessions/$1.json"; }
 alive() { ps -o pid= -p "$1" >/dev/null 2>&1; }
 calls() { cat "$HO_FAKE_TERM_DIR/calls.log" 2>/dev/null || true; }
-# wait_gone <pid>: up to 5 s.
+# wait_gone <pid>: until the process is gone, up to 30 s (a generous cap, issue #109).
 wait_gone() {
   local i=0
-  while alive "$1" && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  while alive "$1" && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
   ! alive "$1"
 }
 ho_test_cleanup() {

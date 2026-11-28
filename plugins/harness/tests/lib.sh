@@ -37,6 +37,29 @@ assert_exit() {
   if [ "$rc" -eq "$want" ]; then ok "$name"; else bad "$name" "expected exit $want, got $rc"; fi
 }
 
+# sleep_marks <dir>: make <dir>/sleep, a stand-in for sleep that appends its argument as one line
+# to the file named by T_SLEEP_MARK (when set), then sleeps. A command run with <dir> first on
+# PATH and T_SLEEP_MARK set leaves one line per sleep, so a test waits until a poll loop really
+# waits (its sleep after a failed try) instead of sleeping a fixed time (issue #109).
+sleep_marks() {
+  mkdir -p "$1"
+  printf '#!/bin/sh\n[ -z "${T_SLEEP_MARK:-}" ] || printf "%%s\\n" "$*" >> "$T_SLEEP_MARK"\nexec %s "$@"\n' "$(command -v sleep)" > "$1/sleep"
+  chmod +x "$1/sleep"
+}
+
+# wait_mark <file> <arg> [count] [tenths]: wait until the mark file holds at least <count>
+# (default 1) lines equal to <arg>; a generous cap (default 60 s), not a timing check.
+wait_mark() {
+  local i=0 n
+  while :; do
+    n=$(grep -cxF -- "$2" "$1" 2>/dev/null) || true
+    [ "${n:-0}" -lt "${3:-1}" ] || return 0
+    [ "$i" -lt "${4:-600}" ] || return 1
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
 # select_config <project-dir> [name]: the person's confirmation on this machine (H-072,
 # D37-FLOW-8 (b)): select a committed config (default .harness/config.json) and record its
 # approved profile, so a run may start there. Select again after a test raises a recorded field.

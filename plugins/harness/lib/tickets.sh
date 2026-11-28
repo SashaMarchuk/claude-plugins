@@ -53,7 +53,8 @@ verbs:
   block <id> <why-file>              -> blocked, with the reason as a new comment
   ask <id> <questions-file>          numbered questions in one comment, -> blocked (H-032);
                                      inside a session the next poll closes that session
-  answer <id> <author> <body-file>   record an answer that arrived elsewhere, with its author (H-034)
+  answer <id> <author> <body-file>   record an answer that arrived elsewhere, with its author (H-034);
+                                     author "-" plus a sender id: an unmapped sender (H-035)
   step <id> <step> <result>          record a finished step; result commit:<sha> or file:<path>
   resume <id> --repo <dir> <step>... print "next <step>" (first step without a real result) or "complete"
   unblock <id>                       blocked -> ready, only for an account with write access and
@@ -941,11 +942,20 @@ ho_tickets() {
       fi
       echo "OK asked $1 ($HO_TK_ASKED questions). The ticket waits for an answer: end this session now; the next poll closes it." ;;
     answer)
-      local who=${2:-} abody=${3:-}
-      ho_tk_login_ok "$who" || { ho_tk_err "answer author must be an account name: $who"; return 64; }
+      # An author that cannot be mapped to an account is "-", with the channel's sender id as a
+      # fourth argument: the answer is recorded with that sender and never applied (H-035).
+      local who=${2:-} abody=${3:-} sender=${4:-}
       ho_tk_need_file "$abody" || return
-      ho_tk_post "$1" harness answer "answer from $who" "$abody" author "$who" || return
-      echo "OK recorded the answer from $who on $1" ;;
+      if [ "$who" = - ]; then
+        printf '%s' "$sender" | LC_ALL=C grep -Eqx '[A-Za-z0-9][A-Za-z0-9@._:+-]{0,99}' ||
+          { ho_tk_err "an unmapped answer needs the sender id as the fourth argument (letters, digits, @ . _ : + -)"; return 64; }
+        ho_tk_post "$1" harness answer "answer from unmapped sender $sender" "$abody" sender "$sender" || return
+        echo "OK recorded the answer from unmapped sender $sender on $1"
+      else
+        ho_tk_login_ok "$who" || { ho_tk_err "answer author must be an account name, or - for an unmapped sender: $who"; return 64; }
+        ho_tk_post "$1" harness answer "answer from $who" "$abody" author "$who" || return
+        echo "OK recorded the answer from $who on $1"
+      fi ;;
     step)
       local srole
       ho_tk_step_ok "${2:-}" || { ho_tk_err "step name must use letters, digits, . _ -: ${2:-}"; return 64; }

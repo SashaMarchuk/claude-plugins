@@ -641,6 +641,82 @@ ho_in_watch_all() {
   done
 }
 
+# ---- answers to the harness's questions (H-033 to H-035, D14, D37-COMMENTS-1 to 3) -----------
+# On GitHub, the tick reads the replies after the newest numbered-question comment of every
+# blocked or needs-review ticket. Cursor: <run>/intake/answers/<id>.json {seen: n}.
+# The author of a reply: the platform login; on the harness's own recorded answer (H-034) its
+# author field, or no one when it records an unmapped sender. A harness report (own account,
+# machine line, any other event) is no answer.
+#   - a writer: the ticket returns to work: in-progress, one status comment, "resume <id>"; the
+#     orchestrator resumes the session by ID once or starts a new one (D14), and "tickets resume"
+#     checks each step's real result before moving on (D2).
+#   - anyone else (no write access, unmapped, or access that cannot be read): the answer is not
+#     applied; a blocked ticket moves to needs-review with one status comment ("needs-review
+#     <id>"), and a writer's later reply revalidates and resumes it (D37-COMMENTS-3).
+ho_in_answers() {
+  local id=$1 state=$2 af json own q seen total k login who
+  af="$HO_RUN_DIR/intake/answers/$id.json"
+  json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json comments 2>/dev/null) || return 1
+  own=$(ho_tk_own_login)
+  [ -n "$own" ] || return 0
+  # The newest own question or status comment decides: a question is open; a status comment is
+  # open only when it records a refused answer (cause answer-refused), so an old answer never
+  # resumes a ticket that reached needs-review another way. q is its 0-based index.
+  q=$(printf '%s' "$json" | jq -r --arg own "$own" --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE"'
+    [.comments | to_entries[] | select(.value.author.login == $own)
+      | {k: .key, m: ((.value.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "" | mline($re))}
+      | select(.m != null and (.m.event == "question" or .m.event == "status"))] | last
+    | select(. != null and (.m.event == "question" or .m.cause == "answer-refused")) | .k')
+  [ -n "$q" ] || return 0
+  seen=$(jq -r '.seen // 0' "$af" 2>/dev/null) || seen=0
+  case $seen in '' | *[!0-9]*) seen=0 ;; esac
+  [ "$seen" -gt "$q" ] || seen=$((q + 1))
+  total=$(printf '%s' "$json" | jq '.comments | length')
+  k=$seen
+  while [ "$k" -lt "$total" ]; do
+    who=$(printf '%s' "$json" | jq -r --argjson k "$k" --arg own "$own" --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE"'
+      .comments[$k] | (.author.login // "") as $l
+      | ((.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "" | mline($re)) as $m
+      | if $l == $own and $m != null then
+          (if $m.event != "answer" then "-skip" elif ($m.author | type) == "string" then $m.author else "-unmapped" end)
+        else $l end')
+    k=$((k + 1))
+    [ "$who" = -skip ] && continue
+    login=$who
+    [ "$login" = -unmapped ] || ho_tk_login_ok "$login" || login=-unmapped
+    if [ "$login" != -unmapped ] && [ "$(ho_tk_access "$login")" = writer ]; then
+      ho_tk_set_state "$id" in-progress || return 1
+      ho_tk_status_comment "$id" orchestrator "$state" in-progress "a person with write access ($login) answered the questions" \
+        "The work resumes from the first step whose result does not exist yet." || return 1
+      ho_ledger_append answer ticket "$id" comment "$k" by "$login" verdict resumed
+      mkdir -p "$HO_RUN_DIR/intake/answers" && jq -cn --argjson n "$((total + 1))" '{seen: $n}' | ho_atomic_write "$af" || return 1
+      # The answers and the status comment are no ticket change (H-019): the watch starts anew.
+      ho_in_watch_init "$id" || return 1
+      echo "resume $id"
+      return 0
+    fi
+    ho_ledger_append answer ticket "$id" comment "$k" by "${login#-}" verdict not-applied
+    if [ "$state" = blocked ]; then
+      ho_tk_set_state "$id" needs-review || return 1
+      printf 'Reason: %s\nNext: %s\n' \
+        "the answer in comment $k comes from a person without confirmed write access (or who cannot be matched to an account), so it is not applied" \
+        "A person with write access revalidates it with their own reply on this ticket; that reply resumes the work." |
+        ho_tk_post "$id" orchestrator status "blocked -> needs-review" - from blocked to needs-review cause answer-refused || return 1
+      state=needs-review total=$((total + 1))
+      echo "needs-review $id"
+    fi
+  done
+  mkdir -p "$HO_RUN_DIR/intake/answers" && jq -cn --argjson n "$total" '{seen: $n}' | ho_atomic_write "$af"
+}
+ho_in_answers_all() {
+  local st ids id
+  ho_tk_gh || return 0
+  for st in blocked needs-review; do
+    ids=$(ho_tickets ids "$st" 2>/dev/null) || continue
+    for id in $ids; do ho_in_answers "$id" "$st" || echo "error $id"; done
+  done
+}
+
 # ho_in_close_asked: close every session that asked a question and is not closed yet (H-032).
 # A close that fails is tried again at every tick, but reported once per question: one
 # "close-failed <session>" line and one owner-action line, until a newer question resets it.
@@ -705,6 +781,7 @@ ho_in_tick() {
   fi
   ho_in_close_asked
   ho_in_watch_all
+  ho_in_answers_all
   if ! ids=$(ho_tickets ids ready 2>/dev/null); then
     ho_in_record $(( $(ho_in_errors) + 1 )) || return 1
     ho_ledger_append poll-error errors "$(ho_in_errors)"
@@ -756,7 +833,7 @@ usage: harness intake <run-dir> <verb>
                       ready tickets up to the free worker slots (and N). Prints one line each:
                       start|blocked|needs-review|unblocked|kept-blocked|kept-in-progress|
                       kept-done|error <id>, change-applied|change-ignored <id>,
-                      change-ticket <id> <new-id>, closed|close-failed <session>,
+                      change-ticket <id> <new-id>, resume <id>, closed|close-failed <session>,
                       not-due <seconds>, tracker-error, stopped, ended
   poll [--max N]      tick until the run is stopped or has ended
   text <id>           the ticket text for a session: the description as picked up and the

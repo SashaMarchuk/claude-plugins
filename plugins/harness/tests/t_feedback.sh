@@ -376,7 +376,7 @@ out=$(cd "$proj" && "$h" feedback preview "$base/d1.txt")
 i=$(id_of "$out")
 case $i in ''|*/*|*.*) bad "#124 H-140: DRAFT is an opaque id, not a path" "it is [$i]" ;; *) ok "#124 H-140: DRAFT is an opaque id, not a path" ;; esac
 assert_eq "#124 H-140: the draft lives in the private draft folder" yes "$([ -f "$fbroot/$i/body.md" ] && echo yes || echo no)"
-assert_eq "#124 H-140: the draft folder is private (mode 700)" 700 "$(stat -f %Lp "$fbroot" 2>/dev/null || stat -c %a "$fbroot")"
+assert_eq "#124 H-140: the draft folder is private (mode 700)" 700 "$(if stat -c %a / >/dev/null 2>&1; then stat -c %a "$fbroot"; else stat -f %Lp "$fbroot"; fi)"
 assert_eq "#124 H-140: exactly one end marker line is printed" 1 "$(printf '%s\n' "$out" | grep -cxF "$marker")"
 rm -rf "${fbroot:?}/$i"
 # An outside folder holding a complete draft with a precomputed code: the forged pair in the

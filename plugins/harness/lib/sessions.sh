@@ -206,6 +206,11 @@ ho_cfg_user() {
   jq -c "$1" "$f"
 }
 
+# ho_session_account_name <role>: the account the user config maps the role to, or nothing.
+ho_session_account_name() {
+  ho_cfg_user ".accounts.roles[\"$1\"] // .accounts.roles.default" | jq -r '. // ""'
+}
+
 # ho_session_account <role> <requested> [profile]: print "<account>\t<env-command>", or nothing when no
 # account is configured. Refuses (65) a mismatch, an unknown account, or a command that fails.
 ho_session_account() {
@@ -215,7 +220,7 @@ ho_session_account() {
     printf 'harness: accounts are set in the project config %s; accounts belong in the user config only\n' "$proj" >&2
     return 65
   fi
-  mapped=$(ho_cfg_user ".accounts.roles[\"$role\"] // .accounts.roles.default" | jq -r '. // ""')
+  mapped=$(ho_session_account_name "$role") || return 78
   if [ -z "$mapped" ]; then
     [ -z "$want" ] && return 0
     printf 'harness: --account %s given, but no account is configured for role %s\n' "$want" "$role" >&2
@@ -406,6 +411,9 @@ ho_session_launcher_text() {
   printf 'export HO_SESSION_NAME=%s HO_SESSION_ROLE=%s HO_SESSION_ID=%s\n' "$(ho_q "$name")" "$(ho_q "$role")" "$(ho_q "$sid")"
   # D28: the account label the status line records its limits under (lib/limits.sh).
   printf 'export HO_ACCOUNT=%s\n' "$(ho_q "${account:-default}")"
+  # Issue #129: the user config folder of the run, so "run tick" inside a session reads the same
+  # gate, accounts, limits and channels as the start (checked by the launch).
+  printf 'export HO_USER_DIR=%s\n' "$(ho_q "$(ho_user_dir)")"
   # H-089 (D37-SESSIONS-2): the mark the liveness hook needs; without it the hook does nothing.
   # A config read that fails keeps every event on, never silently none.
   local hook_events
@@ -574,7 +582,10 @@ ho_session_launch_one() {
     ho_assert_abs "$prompt" "prompt file" || return 65
     [ -f "$prompt" ] && [ -s "$prompt" ] && [ -r "$prompt" ] || { printf 'harness: prompt file missing or empty: %s\n' "$prompt" >&2; return 65; }
   fi
-  local profile perm cmd cmdpath models acct acct_name="" acct_cmd=""
+  local profile perm cmd cmdpath models acct acct_name="" acct_cmd="" udir
+  # Issue #129: a session gets the run's user config folder, never another one.
+  ho_run_user_dir_check || return 65
+  udir=$(ho_user_dir) || return 65
   profile=$(ho_runtime_profile) || return $?
   # D37-FLOW-8: the permission mode is never read from the project config (interim, fail
   # closed, until the local approval record of D37-FLOW-8 (b) exists).
@@ -757,12 +768,13 @@ ho_session_launch_one() {
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
     --arg rpath "$cmdpath" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg aenv "$aenv" \
-    --arg ticket "$ticket" \
+    --arg ticket "$ticket" --arg udir "$udir" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
       account_env: (if $account != "" then null else ($aenv | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) end),
       runtime: $runtime, runtime_path: $rpath, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
-      transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end)}' \
+      transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end),
+      user_dir: $udir}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name" ticket "$ticket"
 

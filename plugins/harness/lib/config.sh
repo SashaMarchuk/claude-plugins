@@ -49,6 +49,39 @@ ho_project_root() {
 
 ho_user_config() { printf '%s/config.json\n' "${HO_USER_DIR:-$HOME/.claude/harness}"; }
 
+# ho_user_dir: the user config folder this command runs with (HO_USER_DIR, else the default
+# under HOME), resolved once: one absolute path, no line break or tab, no trailing slash.
+# Issue #129: a run records it, every session it launches gets it, and a command of the run
+# that runs with another folder is refused (ho_run_user_dir_check).
+ho_user_dir() {
+  local d=${HO_USER_DIR:-$HOME/.claude/harness}
+  case $d in
+    *$'\n'* | *$'\t'*) echo "harness: HO_USER_DIR has a line break or a tab" >&2; return 65 ;;
+    /*) ;;
+    *) printf 'harness: HO_USER_DIR must be an absolute folder path, not %s\n' "$d" >&2; return 65 ;;
+  esac
+  while [ "$d" != / ] && [ "${d%/}" != "$d" ]; do d=${d%/}; done
+  printf '%s\n' "$d"
+}
+
+# ho_run_user_dir_check [warn]: 0 when the open run recorded no user config folder (a run of an
+# older engine) or the one this command runs with. Else 65 with the run's folder named: the
+# gate, accounts, limits and channels of a run come from one user config. With "warn" (a read
+# only verb) the mismatch is printed and 0 returned. The recorded folder is never adopted: run
+# state is writable by sessions, and the user config holds commands (agent decision, D37).
+ho_run_user_dir_check() {
+  local recd cur
+  recd=$(jq -r '.userDir // "" | strings' "$HO_RUN_DIR/run.json" 2>/dev/null) || recd=""
+  [ -n "$recd" ] || return 0
+  cur=$(ho_user_dir) || return 65
+  [ "$recd" = "$cur" ] && return 0
+  if [ -d "$recd" ] && [ -d "$cur" ] && [ "$(cd -P "$recd" && pwd -P)" = "$(cd -P "$cur" && pwd -P)" ]; then return 0; fi
+  printf 'harness: run %s was started with the user config folder %s, and this command runs with %s. Run it with HO_USER_DIR=%s; nothing was changed.\n' \
+    "$HO_RUN_ID" "$recd" "$cur" "$recd" >&2
+  [ "${1-}" = warn ] && return 0
+  return 65
+}
+
 # ho_config_file_check <file>: 0 if absent or valid schema 2; else print why and exit 78.
 ho_config_file_check() {
   local f=$1 v

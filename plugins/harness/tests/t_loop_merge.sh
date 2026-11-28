@@ -240,7 +240,29 @@ rc=$(merge_rc g)
 assert_eq "H-046: a merge whose confirmed line cannot be written is not exit 0" "yes" "$([ "$rc" -ne 0 ] && echo yes || echo no)"
 assert_eq "H-046: without its ledger line the recorded tip does not move" "$g_before" "$(jq -r .tip "$run/integration.json")"
 chmod u+w "$run/ledger.jsonl"
-assert_eq "H-046: the unconfirmed merge refuses the next merge" 65 "$(merge_rc g)"
+# Issue #129 item 3: a merge commit the engine made and never confirmed (a crash or a failed
+# ledger write between the merge and its record) is rolled back by the next merge, which then
+# merges again through the gate. It never blocks the lane for good.
+g_unrec=$(tip)
+assert_eq "#129 H-046: the next merge of the lane recovers the unconfirmed merge and merges again" 0 "$(merge_rc g)"
+assert_eq "#129 H-046: the recovery is recorded" 1 "$(ledger_has merge-recovered)"
+assert_eq "#129 H-046: the new merge starts from the last confirmed tip" "$g_before" "$(git -C "$proj" rev-parse "$(tip)^1")"
+assert_eq "#129 H-046: the new merge holds the lane's finalize commit" "$(lsha g)" "$(git -C "$proj" rev-parse "$(tip)^2")"
+assert_eq "#129 H-046: the recovered merge is confirmed in the ledger" "$(tip)" \
+  "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "g") | .tip' "$run/ledger.jsonl")"
+assert_eq "#129 H-046: the unconfirmed commit is no longer on the branch" 1 \
+  "$(git -C "$proj" merge-base --is-ancestor "$g_unrec" "$(tip)" && echo 0 || echo 1)"
+# A crash after the merge-confirmed line and before the tip write: the next merge writes the tip.
+g_tip=$(tip)
+jq --arg t "$g_before" '.tip = $t' "$run/integration.json" > "$PWD/ij.t" && mv "$PWD/ij.t" "$run/integration.json"
+lane g2 g2.txt "from g2"; verdict g2 passed
+assert_eq "#129 H-046: a confirmed merge whose tip was not written does not refuse the next merge" 0 "$(merge_rc g2)"
+assert_eq "#129 H-046: the missing tip write is recorded" 1 "$(ledger_has merge-tip-recovered)"
+assert_eq "#129 H-046: the next merge starts from the confirmed tip" "$g_tip" "$(git -C "$proj" rev-parse "$(tip)^1")"
+assert_eq "#129 H-046: the recorded tip follows the branch again" "$(tip)" "$(jq -r .tip "$run/integration.json")"
+# The tests below start from the tip before lane g.
+git -C "$int" reset -q --hard "$g_before"
+jq --arg t "$g_before" '.tip = $t' "$run/integration.json" > "$PWD/ij.t" && mv "$PWD/ij.t" "$run/integration.json"
 
 # ---- status ----------------------------------------------------------------------------------
 st=$("$h" loop "$run" status)

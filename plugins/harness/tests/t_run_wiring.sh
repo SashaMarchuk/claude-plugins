@@ -86,8 +86,19 @@ assert_eq "H-072: the refused start created no run" 0 "$(ls "$proj/.harness/runs
 select_config "$proj"
 t=$(cd "$proj" && "$h" tickets add "Add a greeting" "$base/body.md" ready 2>/dev/null | sed -n 's/^OK created ticket \([0-9]*\).*/\1/p')
 t2=$(cd "$proj" && "$h" tickets add "Add a farewell" "$base/body.md" ready 2>/dev/null | sed -n 's/^OK created ticket \([0-9]*\).*/\1/p')
+# Issue #129 item 2: a profile that merges into the run's integration branch needs a gate; the
+# start refuses at once instead of letting every ticket run and block at its merge.
+cp "$user/config.json" "$base/user-config.keep"
+jq 'del(.gate)' "$base/user-config.keep" > "$user/config.json"
+rc=0; "$h" run start >/dev/null 2>"$base/err" || rc=$?
+assert_eq "#129 H-046: a merging profile with no gate is refused at run start (exit 78)" 78 "$rc"
+assert_contains "#129 H-046: the refusal names the missing gate" "$(cat "$base/err")" "gate.use"
+assert_eq "#129 H-046: the refused start created no run" 0 "$(ls "$proj/.harness/runs" 2>/dev/null | wc -l | tr -d ' ')"
+mv "$base/user-config.keep" "$user/config.json"
 out=$("$h" run start 2>"$base/err") || true
 run=$(printf '%s\n' "$out" | sed -n 's/^run //p')
+assert_eq "#129: the orchestrator gets the run's user config folder" "export HO_USER_DIR=$user" \
+  "$(grep '^export HO_USER_DIR=' "$(jq -r .launcher "$run/sessions/orchestrator.json")" | tr -d "'")"
 assert_eq "#110: run start prints the new run" yes "$([ -n "$run" ] && [ -f "$run/run.json" ] && echo yes || echo no)"
 assert_eq "D23 D24: the handoff prompt is written with the engine path" yes \
   "$(grep -q "$HO_PLUGIN_ROOT/bin/harness" "$run/handoff.md" 2>/dev/null && ! grep -q '@HARNESS@' "$run/handoff.md" && echo yes || echo no)"
@@ -163,6 +174,14 @@ assert_contains "H-055: the tick reads the validator's passed verdict" "$out" "v
 out=$(tick)
 assert_contains "H-046: the engine-checked merge into the integration branch" "$out" "merged $t t$t"
 assert_eq "H-046: the merge is confirmed in the ledger" 1 "$(ledger_n merge-confirmed)"
+# Issue #129 item 3: a pass that finds the lane's merge already confirmed (a tick cut off after
+# the merge and before its record) moves the ticket on, never to blocked, and merges nothing.
+jq '.phase = "merge"' "$run/orch/$t.json" > "$base/o.t" && mv "$base/o.t" "$run/orch/$t.json"
+out=$(tick)
+assert_contains "#129 H-046: a confirmed merge is not merged again; the ticket moves on" "$out" "merged $t t$t"
+assert_eq "#129 H-046: it is recorded once, and no second merge or refusal is" "1 1 0" \
+  "$(ledger_n merge-already-confirmed) $(ledger_n merge-confirmed) $(ledger_n merge-refused)"
+assert_eq "#129 H-046: the ticket is not blocked" ship "$(rec "$t" .phase)"
 out=$(tick)
 assert_contains "H-043: the full profile pushes the ticket branch" "$out" "pushed $t"
 assert_contains "H-043: and opens the PR" "$out" "pr $t #1"

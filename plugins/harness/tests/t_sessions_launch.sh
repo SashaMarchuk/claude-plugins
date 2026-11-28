@@ -32,6 +32,18 @@ assert_eq "Rebuild launcher: PATH drops a folder that holds a 0.6.0 engine scrip
 assert_contains "Rebuild launcher: the cd is guarded and stops the launch on failure" "$(grep '^cd ' "$launcher")" "|| ho_fatal"
 assert_contains "Rebuild launcher: 0.6.0 variables are removed" "$(cat "$launcher")" "unset HARNESS_PROJECT"
 assert_exit "Rebuild launcher: the generated launcher is valid bash" 0 bash -n "$launcher"
+# Issue #129 item 1: the user config folder the run was started with reaches every session, so
+# a "run tick" inside a session reads the same gate, accounts, limits and channels.
+assert_eq "#129: the launcher passes the resolved user config folder to the session" "export HO_USER_DIR=$user" \
+  "$(grep '^export HO_USER_DIR=' "$launcher" | tr -d "'")"
+assert_eq "#129: the run records the user config folder it was started with" "$user" "$(jq -r '.userDir // ""' "$run/run.json")"
+assert_eq "#129: the session record names it too" "$user" "$(rec w1 '.user_dir // ""')"
+mkdir -p "$base/other-user" && cp "$user/config.json" "$base/other-user/config.json"
+out=$(HO_USER_DIR="$base/other-user" launch wx 2>&1) && rc=0 || rc=$?
+assert_eq "#129: a launch from another user config folder than the run's is refused (exit 65)" 65 "$rc"
+assert_contains "#129: the refusal names the run's user config folder" "$out" "$user"
+assert_eq "#129: the refused launch registered nothing" no "$([ -f "$run/sessions/wx.json" ] && echo yes || echo no)"
+assert_exit "#129: run tick from another user config folder is refused too (exit 65)" 65 env HO_USER_DIR="$base/other-user" "$h" run tick "$run"
 
 # ---- one registry record per session, each with process ID and session ID ------------
 launch w2 >/dev/null

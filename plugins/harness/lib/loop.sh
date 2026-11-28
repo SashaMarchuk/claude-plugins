@@ -309,6 +309,41 @@ ho_loop_undo() {
   esac
 }
 
+# ho_loop_recover: a merge that was cut off between git and its record (issue #129: a crash, a
+# KILL, a failed ledger write). Uses ij, iwt, branch and old of the caller; acts only while the
+# integration branch is checked out and its tip is not the recorded tip. Two cases, each proven:
+#   - the ledger has a merge-confirmed line from the recorded tip to the branch tip: the merge
+#     passed every check and only the tip write was lost. The tip is written (old moves on).
+#   - the branch tip is a merge commit the engine made and never confirmed: exactly two parents,
+#     the first the recorded tip, the subject "merge(<lane>): <second parent> into <branch>". It
+#     is rolled back the safe way (ho_loop_rollback), and this merge then runs every check again,
+#     the gate included. A rollback that cannot run leaves it to the tip check, which refuses.
+# Anything else is left to the tip check. Returns 1 only when a write fails.
+ho_loop_recover() {
+  local cur p2 subj line r=0
+  [ "$(git -C "$iwt" symbolic-ref -q HEAD 2>/dev/null)" = "refs/heads/$branch" ] || return 0
+  cur=$(ho_loop_ref "$iwt" "refs/heads/$branch") || return 0
+  [ "$cur" != "$old" ] || return 0
+  line=$(ho_ledger_events | jq -c --arg b "$old" --arg t "$cur" --arg br "$branch" \
+    'select(.kind == "merge-confirmed" and .base == $b and .tip == $t and .branch == $br)' 2>/dev/null | tail -n 1) || line=""
+  if [ -n "$line" ]; then
+    jq --arg tip "$cur" '.tip = $tip' "$ij" | ho_atomic_write "$ij" || return 1
+    ho_loop_ledger merge-tip-recovered lane "$(printf '%s' "$line" | jq -r '.lane // ""')" branch "$branch" base "$old" tip "$cur" || return 1
+    old=$cur
+    return 0
+  fi
+  [ "$(ho_loop_ref "$iwt" "$cur^1")" = "$old" ] || return 0
+  p2=$(ho_loop_ref "$iwt" "$cur^2") || return 0
+  ! ho_loop_ref "$iwt" "$cur^3" >/dev/null || return 0
+  subj=$(git -C "$iwt" log -1 --format=%s "$cur" 2>/dev/null) || return 0
+  case $subj in "merge("*"): $p2 into $branch") ;; *) return 0 ;; esac
+  ho_loop_rollback "$iwt" "$branch" "$old" "$cur" || r=$?
+  [ "$r" -eq 0 ] || return 0
+  ho_loop_ledger merge-recovered branch "$branch" base "$old" tip "$cur" sha "$p2" \
+    reason "an unconfirmed merge commit of the engine was rolled back; the merge runs again with every check" || return 1
+  return 0
+}
+
 # ---- merge <lane> ------------------------------------------------------------------------
 ho_loop_merge_locked() {
   local lane=$1 ij="$HO_RUN_DIR/integration.json" lj="$HO_RUN_DIR/lanes/$1.json"
@@ -345,6 +380,9 @@ ho_loop_merge_locked() {
   esac
   rc=0; ho_loop_clean "$lwt" || rc=$?
   [ "$rc" -eq 0 ] || { ho_loop_refuse 65 "$lane" "the lane worktree is not clean (or cannot be read)"; return; }
+
+  # Issue #129: a merge cut off before its record is recovered first (ho_loop_recover).
+  ho_loop_recover || return 1
 
   # Tip check before: the checked-out integration branch is at the last confirmed tip, clean.
   [ "$(git -C "$iwt" symbolic-ref -q HEAD 2>/dev/null)" = "refs/heads/$branch" ] \

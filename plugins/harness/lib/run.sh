@@ -546,8 +546,11 @@ ho_run_new() {
   ho_life_stamp "$dir" "$standby" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
   # The permission prompt setting (H-052, D37-FLOW-8) is fixed for the run as well.
   ho_perm_stamp "$dir" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
-  jq -n --argjson schema "$HO_RUN_SCHEMA" --arg engine "$HO_ENGINE" --arg id "$id" --arg ts "$(ho_now)" \
-    '{schemaVersion: $schema, engine: $engine, runId: $id, created: $ts}' | ho_atomic_write "$dir/run.json" || exit 1
+  # Issue #129: the user config folder the run starts with, so every session gets the same one.
+  local udir
+  udir=$(ho_user_dir) || { rm -rf "$dir"; exit 65; }
+  jq -n --argjson schema "$HO_RUN_SCHEMA" --arg engine "$HO_ENGINE" --arg id "$id" --arg ts "$(ho_now)" --arg u "$udir" \
+    '{schemaVersion: $schema, engine: $engine, runId: $id, created: $ts, userDir: $u}' | ho_atomic_write "$dir/run.json" || exit 1
   HO_RUN_DIR=$dir
   HO_RUN_DIR_PHYS=""
   HO_RUN_ID=$id

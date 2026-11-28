@@ -138,7 +138,8 @@ ho_cfg() {
       printf 'harness: cannot read %s from config %s\n' "$path" "$f" >&2
       exit "$HO_EXIT_CONFIG"
     }
-    [ "$v" = null ] && continue
+    # Only a real null falls through; a value that is the text "null" is a value (#88).
+    [ "$v" = null ] && [ "$(jq -r "($path) | type" "$f" 2>/dev/null)" = null ] && continue
     printf '%s\n' "$v"
     return 0
   done <<EOF_FILES
@@ -158,6 +159,8 @@ EOF_FILES
 ho_cfg_int() {
   local path=${1:?jq path required} def=${2:?integer default required} v
   v=$(ho_cfg "$path" "$def") || exit $?
+  # More than 18 digits would wrap in 64-bit shell arithmetic (#88).
+  [ "${#v}" -le 18 ] || v="$v (too long)"
   case $v in
     '' | *[!0-9]*)
       printf 'harness: config %s=%s is not a non-negative integer; using %s\n' "$path" "$v" "$def" >&2
@@ -187,6 +190,13 @@ ho_config_main() {
   case ${1-} in
     get)
       shift
+      # A key from the command line is a plain path (.a.b), never a jq program: only engine
+      # code may pass a filter to the lookup (#88).
+      local key=${1-}
+      [ "$key" != --int ] || key=${2-}
+      if [ -n "$key" ] && ! printf '%s' "$key" | grep -Eqx '(\.[A-Za-z_][A-Za-z0-9_]*)+'; then
+        printf 'harness: config get takes a plain key such as .flow.use, not %s\n' "$key" >&2; exit 64
+      fi
       if [ "${1-}" = --int ]; then
         shift
         [ -n "${1-}" ] && [ -n "${2-}" ] || { ho_config_usage; exit 64; }

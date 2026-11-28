@@ -332,7 +332,10 @@ ho_live_hooks() {
   if [ ! -e "$log" ]; then state=missing
   elif [ ! -r "$log" ] || [ ! -f "$log" ]; then state=unreadable
   else state=present; fi
-  events=$(ho_live_hook_events 2>/dev/null) || events=$HO_LIVE_HOOK_EVENTS_ALL
+  # The events the session was launched with (its record), else today's config: a config
+  # change during the run never changes what a running session tracks (#110).
+  events=$(jq -r '.hook_events | if type == "string" and test("^[A-Za-z ]*$") then . else error("none") end' "$rec" 2>/dev/null) \
+    || events=$(ho_live_hook_events 2>/dev/null) || events=$HO_LIVE_HOOK_EVENTS_ALL
   case " $events " in *" PreToolUse "*) case " $events " in *" PostToolUse "*) case " $events " in
     *" PostToolUseFailure "*) tracked=true ;; esac ;; esac ;; esac
   maxs=$(ho_cfg_int '.liveness.tool_running_max_minutes' 60 2>/dev/null) || maxs=60
@@ -349,20 +352,24 @@ ho_live_hooks() {
   { grep -F -- "\"$sid\"" "$log" 2>/dev/null || true; } | jq -R -s -c --arg sid "$sid" --argjson now "$(date +%s)" --argjson max "$maxs" --argjson tr "$tracked" \
     --argjson quiet "$HO_LIVE_QUIET_SECONDS" --arg v "$verdict" '
     [split("\n")[] | select(length > 0) | (try fromjson catch null)
-      | select(type == "object" and .session_id == $sid and (.t | type) == "number" and (.event | type) == "string")] as $r
-    # The reduce is parenthesized before "as": jq 1.7 (the macOS default) requires it.
-    | (reduce $r[] as $e ({open: {}, order: [], stop_error: null};
+      | select(type == "object" and .session_id == $sid and (.t | type) == "number" and (.event | type) == "string")
+      # A line timed in the future (beyond a minute of clock skew) is ignored: it could hold the
+      # quiet flag off for ever (#110).
+      | select(.t <= $now + 60)] as $r
+    # The reduce is parenthesized before "as": jq 1.7 (the macOS default) requires it. Open
+    # calls live in one object keyed by call ID, so the pass stays linear with no Stop (#110).
+    | (reduce $r[] as $e ({open: {}, stop_error: null};
         if $e.event == "PreToolUse" and (($e.tool_use_id // "") | type) == "string" and ($e.tool_use_id // "") != "" then
-          .open[$e.tool_use_id] = {tool: $e.tool, tool_use_id: $e.tool_use_id, t: $e.t} | .order += [$e.tool_use_id]
+          .open[$e.tool_use_id] = {tool: $e.tool, tool_use_id: $e.tool_use_id, t: $e.t}
         elif $e.event == "PostToolUse" or $e.event == "PostToolUseFailure" then
           (($e.tool_use_id // "") | tostring) as $id | del(.open[$id])
         elif $e.event == "Stop" or $e.event == "StopFailure" or $e.event == "SessionEnd" then
-          .open = {} | .order = []
+          .open = {}
           | if $e.event == "StopFailure" then .stop_error = ($e.error // "unknown")
             elif $e.event == "Stop" then .stop_error = null else . end
         else . end)) as $s
     | ($r | last) as $last
-    | (if $tr then [$s.order | unique[] as $id | $s.open[$id] | select(. != null)] | sort_by(.t)
+    | (if $tr then [$s.open[]] | sort_by(.t)
          | map({tool, tool_use_id, age_seconds: ([$now - .t, 0] | max)}) else [] end) as $open
     | ($open | map(select(.age_seconds < $max)) | length > 0) as $running
     | (if $last == null then null else ([$now - $last.t, 0] | max) end) as $age

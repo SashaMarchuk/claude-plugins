@@ -100,6 +100,8 @@ run=$(printf '%s\n' "$out" | sed -n 's/^run //p')
 assert_eq "#129: the orchestrator gets the run's user config folder" "export HO_USER_DIR=$user" \
   "$(grep '^export HO_USER_DIR=' "$(jq -r .launcher "$run/sessions/orchestrator.json")" | tr -d "'")"
 assert_eq "#110: run start prints the new run" yes "$([ -n "$run" ] && [ -f "$run/run.json" ] && echo yes || echo no)"
+assert_eq "H-067 (#101): run start lists the flow's hints in the ledger (an own flow: none)" "1 0" \
+  "$(ledger_n flow-hints) $(jq -r 'select(.kind == "flow-hints") | .count' "$run/ledger.jsonl" 2>/dev/null)"
 assert_eq "D23 D24: the handoff prompt is written with the engine path" yes \
   "$(grep -q "$HO_PLUGIN_ROOT/bin/harness" "$run/handoff.md" 2>/dev/null && ! grep -q '@HARNESS@' "$run/handoff.md" && echo yes || echo no)"
 assert_eq "#110: the orchestrator session is launched with the handoff prompt" orchestrator \

@@ -65,8 +65,13 @@ ho_stop_file() {
     f="$(dirname "$(dirname "$d")")/STOP"
     [ -e "$f" ] && { printf '%s\n' "$f"; return 0; }
   done
-  # The project the engine runs in counts too: its runs folder may be a link elsewhere.
-  if d=$(ho_project_root 2>/dev/null); then
+  # The run's own project counts too: its runs folder may be a link elsewhere. The project is
+  # the one recorded in run.json at start (#88), so a run opened by its physical path from
+  # outside still sees it, and another project's STOP file never stops this run. A run stamped
+  # before the field existed falls back to the project the engine runs in.
+  d=$(jq -r '.project // empty | strings' "$HO_RUN_DIR/run.json" 2>/dev/null) || d=""
+  case $d in /*) ;; *) d=$(ho_project_root 2>/dev/null) || d="" ;; esac
+  if [ -n "$d" ]; then
     f="$d/.harness/STOP"
     [ -e "$f" ] && { printf '%s\n' "$f"; return 0; }
   fi
@@ -127,19 +132,33 @@ ho_ledger_unlock() {
 # ho_ledger_lock <dir>: mkdir lock with the holder's PID inside. A lock whose holder is dead
 # is taken over at once. A lock with no PID file (holder killed between mkdir and writing
 # the PID) counts as stale after one minute. No lock after 90 s is an error.
-# Known gap: two waiters that see the same dead holder at the same instant can race.
+# A stale lock is removed only under a second lock, <lock>.takeover, after its holder is read
+# again: two waiters that see the same dead holder can no longer remove each other's new lock
+# (#88). A takeover lock older than one minute is itself stale.
+ho_ledger_takeover() { # <lock> <pid seen, or empty for "no PID file">
+  local lock=$1 seen=$2 now
+  if mkdir "$lock.takeover" 2>/dev/null; then
+    now=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -d "$lock" ] && [ "$now" = "$seen" ]; then
+      if [ -n "$seen" ] || [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then rm -rf "$lock"; fi
+    fi
+    rmdir "$lock.takeover" 2>/dev/null || true
+  elif [ -n "$(find "$lock.takeover" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+    rmdir "$lock.takeover" 2>/dev/null || true
+  fi
+  # 0 only when the stale lock is gone, so the caller retries at once; else it waits as usual.
+  [ ! -d "$lock" ]
+}
 ho_ledger_lock() {
   local lock=$1 n=0 pid
   HO_LEDGER_LOCK=$lock
   until mkdir "$lock" 2>/dev/null; do
     pid=$(cat "$lock/pid" 2>/dev/null || true)
     if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-      [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$pid" ] && rm -rf "$lock"
-      continue
+      ! ho_ledger_takeover "$lock" "$pid" || continue
     fi
     if [ -z "$pid" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-      rm -rf "$lock"
-      continue
+      ! ho_ledger_takeover "$lock" "" || continue
     fi
     n=$((n + 1))
     if [ "$n" -ge 1800 ]; then
@@ -360,6 +379,8 @@ ho_state_begin() {
       "$(jq -r '.for // "?"' "$HO_RUN_DIR/pauses/$t.json" 2>/dev/null)" "$s" >&2
     return 75
   fi
+  # An ended run gets this one line only (#110), not the gate's line plus "stopped".
+  ! ho_run_ended || { printf 'harness: the run has ended; ticket %s step %s does not begin (record a resume to open it again)\n' "$t" "$s" >&2; return 75; }
   ho_stop_gate "$t" || rc=$?
   case $rc in
     0)
@@ -411,6 +432,11 @@ ho_marker() {
   f="$HO_RUN_DIR/markers/$name"
   case $sub in
     set)
+      # Something other than a plain file at the marker path would take the write and still
+      # read as "not set" (#88): refuse it before anything is written.
+      if [ -e "$f" ] || [ -L "$f" ]; then
+        [ -f "$f" ] && [ ! -L "$f" ] || { echo "harness: $f is not a plain file; the marker is not set" >&2; exit 1; }
+      fi
       # Ledger line first: a marker must never exist without its ledger line.
       ho_ledger_append marker-set name "$name"
       mkdir -p "$HO_RUN_DIR/markers"
@@ -550,7 +576,8 @@ ho_run_new() {
   local udir
   udir=$(ho_user_dir) || { rm -rf "$dir"; exit 65; }
   jq -n --argjson schema "$HO_RUN_SCHEMA" --arg engine "$HO_ENGINE" --arg id "$id" --arg ts "$(ho_now)" --arg u "$udir" \
-    '{schemaVersion: $schema, engine: $engine, runId: $id, created: $ts, userDir: $u}' | ho_atomic_write "$dir/run.json" || exit 1
+    --arg proj "$(cd -P "$proj" && pwd -P)" \
+    '{schemaVersion: $schema, engine: $engine, runId: $id, created: $ts, userDir: $u, project: $proj}' | ho_atomic_write "$dir/run.json" || exit 1
   HO_RUN_DIR=$dir
   HO_RUN_DIR_PHYS=""
   HO_RUN_ID=$id

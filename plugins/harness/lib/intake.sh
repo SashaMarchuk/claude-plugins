@@ -157,6 +157,10 @@ ho_in_record() { # <errors>: write the poll record; its time is now
 HO_IN_MAX_Q=10
 HO_IN_MAX_QLEN=300
 HO_IN_MAX_BRIEF=6000
+# The runtime adds the signed-in account's e-mail address to the judge's context, and an
+# injected ticket could ask for it in a question (#110). Every address-shaped word in what the
+# judge returns is replaced by a fixed mark before anything is posted; the text itself stays.
+HO_IN_JQ_NOADDR='def noaddr: gsub("[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+"; "[address removed]"); '
 ho_in_judge() {
   local id=$1 qf=$2 prof timeout sid tmpl prompt out err ticket rc=0 i=0 verdict cwd
   local -a argv
@@ -220,16 +224,16 @@ ho_in_judge() {
       # A question that holds the person's home folder path is dropped: it may carry a local path
       # or file content, and it would be posted to the ticket.
       printf '%s' "$verdict" | jq -r --argjson n "$HO_IN_MAX_Q" --argjson l "$HO_IN_MAX_QLEN" --arg home "${HOME:-}" \
-        '[.questions[] | gsub("[[:cntrl:]]"; " ") | select(test("\\S"))
+        "$HO_IN_JQ_NOADDR"'[.questions[] | gsub("[[:cntrl:]]"; " ") | noaddr | select(test("\\S"))
           | select(($home | length) < 2 or (contains($home) | not))][:$n][] | .[:$l]' > "$qf"
       # Assumptions (assume mode) and the working brief get the same bounds; a brief that holds
       # the home folder path is dropped whole.
       printf '%s' "$verdict" | jq -r --argjson n "$HO_IN_MAX_Q" --argjson l "$HO_IN_MAX_QLEN" --arg home "${HOME:-}" \
-        '[(.assumptions // [])[] | select(type == "string") | gsub("[[:cntrl:]]"; " ") | select(test("\\S"))
+        "$HO_IN_JQ_NOADDR"'[(.assumptions // [])[] | select(type == "string") | gsub("[[:cntrl:]]"; " ") | noaddr | select(test("\\S"))
           | select(($home | length) < 2 or (contains($home) | not))][:$n][] | .[:$l]' > "$qf.assumptions"
       printf '%s' "$verdict" | jq -r --argjson l "$HO_IN_MAX_BRIEF" --arg home "${HOME:-}" \
-        '.brief | select(type == "string") | explode | map(select(. == 9 or . == 10 or (. >= 32 and . != 127))) | implode
-          | select(test("\\S")) | select(($home | length) < 2 or (contains($home) | not)) | .[:$l]' > "$qf.brief"
+        "$HO_IN_JQ_NOADDR"'.brief | select(type == "string") | explode | map(select(. == 9 or . == 10 or (. >= 32 and . != 127))) | implode
+          | noaddr | select(test("\\S")) | select(($home | length) < 2 or (contains($home) | not)) | .[:$l]' > "$qf.brief"
       if [ "$(printf '%s' "$verdict" | jq -r .ready)" = true ]; then
         # Ready only with no open question for a human (H-012).
         if [ -s "$qf" ]; then HO_IN_VERDICT=not-ready; else HO_IN_VERDICT=ready; fi
@@ -261,21 +265,27 @@ ho_in_review() {
 # fails too, one owner-action line says what a person does.
 ho_in_pickup() {
   local rc=0 left=""
-  HO_IN_STEP=access HO_IN_CLAIMED=0
+  HO_IN_STEP=access HO_IN_CLAIMED=0 HO_IN_CLAIM_SURE=1
   ho_in_pickup_steps "$1" || rc=$?
   case $rc in
     0) return 0 ;;
     1) return 1 ;;
   esac
   if [ "$HO_IN_CLAIMED" = 1 ]; then
+    # A claim whose result could not be read may have left the ticket ready or in progress: the
+    # words then say "may be" and the comment names no known start state (#110).
+    local from=in-progress was="is in progress" how="a tracker step failed after the claim"
+    if [ "$HO_IN_CLAIM_SURE" != 1 ]; then
+      from=unknown was="may be in progress (or still ready)" how="the claim failed and the ticket's state could not be read after it"
+    fi
     if ho_in_set_state "$1" blocked; then
       left=blocked
-      printf 'Reason: a tracker step failed after the claim (%s).\nNext: A person with write access checks the ticket and sets the ready label to take it again.\n' "${HO_IN_STEP:-unknown}" |
-        ho_tk_post "$1" orchestrator status "pickup failed, blocked" - from in-progress to blocked >/dev/null 2>&1 || true
+      printf 'Reason: %s (%s).\nNext: A person with write access checks the ticket and sets the ready label to take it again.\n' "$how" "${HO_IN_STEP:-unknown}" |
+        ho_tk_post "$1" orchestrator status "pickup failed, blocked" - from "$from" to blocked >/dev/null 2>&1 || true
     else
-      left=in-progress
-      ho_ledger_append owner-action title "ticket $1 is in progress with no worker" \
-        why "a tracker step failed after the claim (${HO_IN_STEP:-unknown}), and the move to blocked failed too" \
+      left=$([ "$HO_IN_CLAIM_SURE" = 1 ] && echo in-progress || echo unknown)
+      ho_ledger_append owner-action title "ticket $1 $was with no worker" \
+        why "$how (${HO_IN_STEP:-unknown}), and the move to blocked failed too" \
         command "harness tickets block $1 <why-file>, or set its blocked label by hand" verify "the ticket carries only the blocked label"
     fi
     ho_ledger_append pickup-error ticket "$1" step "${HO_IN_STEP:-unknown}" state "$left"
@@ -411,12 +421,12 @@ EOF_REPOS
       if now=$(ho_tk_gh_state "$id" 2>/dev/null); then
         case " $now " in *" in-progress "*) HO_IN_CLAIMED=1 ;; esac
       else
-        HO_IN_CLAIMED=1
+        HO_IN_CLAIMED=1 HO_IN_CLAIM_SURE=0
       fi
       return 2
     fi
   else
-    if ho_tk_ad; then ho_tk_ad_set_state "$id" in-progress || { HO_IN_CLAIMED=1; return 2; }
+    if ho_tk_ad; then ho_tk_ad_set_state "$id" in-progress || { HO_IN_CLAIMED=1 HO_IN_CLAIM_SURE=0; return 2; }
     else ho_tk_locked ho_tk_l_set_state_locked "$id" in-progress ready || return 2; fi
   fi
   HO_IN_CLAIMED=1 HO_IN_STEP=pickup-comment

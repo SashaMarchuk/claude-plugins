@@ -194,7 +194,10 @@ chmod +x "$proj/bin/claude"
 rc=0; out=$(cd "$proj" && PATH="$proj/bin:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?
 assert_eq "H-140 runtime guard: a preview with a project claude first on PATH exits 0" "0" "$rc"
 assert_eq "H-140 runtime guard: the project's own claude is not run" "no" "$([ -e "$base/ran" ] && echo yes || echo no)"
-assert_contains "H-140 runtime guard: its version shows as unknown" "$out" "- Runtime: claude-code, version unknown"
+# The project folder is left out of the probe's PATH (#89), so the probe finds the runtime outside
+# the project, or none; the project binary's version never shows.
+assert_eq "H-140 runtime guard: the project binary's version never shows" "" "$(printf '%s\n' "$out" | grep -F 'Runtime: claude-code, 9.9.9' || true)"
+assert_contains "H-140 runtime guard: the runtime line is still there" "$out" "- Runtime: claude-code"
 rm -f "$base/ran"; rm -rf "$(draft_of "$out")"
 # In real use HO_PROJECT_DIR is unset: the project comes from the current folder.
 rc=0; out=$(cd "$proj" && env -u HO_PROJECT_DIR PATH="$proj/bin:$PATH" "$h" feedback preview "$base/d1.txt") || rc=$?

@@ -100,6 +100,18 @@ ho_loop_ready() {
   [ -n "$wt" ] || { ho_loop_usage; return 64; }
   ho_loop_lane_ok "$lane" || return 65
   [ -f "$HO_RUN_DIR/integration.json" ] || { ho_loop_err "run $HO_RUN_ID has no integration branch yet"; return 65; }
+  # The ticket decides whether a soft:ticket stop lets the lane merge (D25a). Called as a worker
+  # session of this run, the ticket must be the one in that worker's own record (#110).
+  local sf srole sticket
+  case ${HO_SESSION_NAME-} in '' | */* | .*) sf="" ;; *) sf="$HO_RUN_DIR/sessions/$HO_SESSION_NAME.json" ;; esac
+  if [ -n "$sf" ] && [ -f "$sf" ] && [ "$(jq -r '.session_id // ""' "$sf" 2>/dev/null)" = "${HO_SESSION_ID-}" ]; then
+    srole=$(jq -r '.role // ""' "$sf" 2>/dev/null) || srole=""
+    sticket=$(jq -r '.ticket // "" | tostring' "$sf" 2>/dev/null) || sticket=""
+    if [ "$srole" = worker ] && [ -n "$ticket" ] && [ "$ticket" != "$sticket" ]; then
+      ho_loop_err "lane $lane: --ticket $ticket is not the ticket of worker $HO_SESSION_NAME (${sticket:-none}); not ready"
+      return 65
+    fi
+  fi
   branch=$(git -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null) || { ho_loop_err "lane $lane: $wt is not on a branch"; return 65; }
   ho_loop_clean "$wt" || rc=$?
   [ "$rc" -eq 0 ] || { ho_loop_err "lane $lane: the worktree $wt is not clean (or cannot be read); not ready"; return 65; }
@@ -347,10 +359,11 @@ ho_loop_recover() {
 # ---- merge <lane> ------------------------------------------------------------------------
 ho_loop_merge_locked() {
   local lane=$1 ij="$HO_RUN_DIR/integration.json" lj="$HO_RUN_DIR/lanes/$1.json"
-  local iwt branch old lwt lbranch lsha worker why vsnap gate mc stopped=0 rc=0 new gw log grc=0 gpid prof
+  local iwt branch old lwt lbranch lsha worker why vsnap gate mc stopped=0 rc=0 new gw log grc=0 gpid prof lticket
   # A stop refuses the merge, except for the lane of a ticket that a soft:ticket stop lets run to
   # its end (H-086, D25a); a lane with no ticket counts as new work.
-  ho_stop_gate "$(jq -r '.ticket // ""' "$lj" 2>/dev/null || true)" || stopped=$?
+  lticket=$(jq -r '.ticket // ""' "$lj" 2>/dev/null || true)
+  ho_stop_gate "$lticket" || stopped=$?
   [ "$stopped" -eq 0 ] || { ho_loop_err "the run is stopped (or its stop state is unknown); no merge"; return 75; }
   [ "$ho_loop_sig" -eq 0 ] || { ho_loop_err "the merge was stopped by a signal before it started"; return 75; }
   [ -f "$ij" ] || { ho_loop_err "run $HO_RUN_ID has no integration branch"; return 65; }
@@ -474,6 +487,10 @@ ho_loop_merge_locked() {
   if ! ho_loop_verdict_check "$lane" "$lsha" "$worker" || [ "$HO_LOOP_VSNAP" != "$vsnap" ]; then
     ho_loop_undo 65 "$lane" "the verdict for $lsha changed while the gate ran${HO_LOOP_VWHY:+ ($HO_LOOP_VWHY)}" "$new"; return
   fi
+  # The stop and the run end again, after the gate (#110): a stop or a run end that came while
+  # the gate ran refuses the merge before it is confirmed, with the same rule as before it.
+  stopped=0; ho_stop_gate "$lticket" 2>/dev/null || stopped=$?
+  [ "$stopped" -eq 0 ] || { ho_loop_undo 75 "$lane" "the run was stopped or ended while the gate ran (or its stop state is unknown)" "$new"; return; }
   [ "$ho_loop_sig" -eq 0 ] || { ho_loop_undo 75 "$lane" "the merge was stopped by a signal" "$new"; return; }
 
   # Confirm and record. Ledger line first: if the tip write then fails, the next merge refuses

@@ -26,12 +26,28 @@ ho_hook_main() {
     case " $HO_HOOK_EVENTS " in *" $ev "*) ;; *) return 0 ;; esac
   fi
   [ -d "${log%/*}" ] || return 0
+  # D42l: at most 1 MiB is parsed, so a huge tool input or output cannot hold the hook past its
+  # 1 s bound. A larger payload is read from its first MiB with the streaming parser, top-level
+  # fields only: the event and session ID are kept, a tool call ID only when it lies inside
+  # that MiB. The rest of stdin is read and dropped by ho_hook_drain.
+  local max=1048576 body mode=whole
+  body=$(LC_ALL=C head -c $((max + 1)); echo x) || return 0
+  body=${body%x}
+  [ "$(printf '%s' "$body" | LC_ALL=C wc -c | tr -d ' ')" -le "$max" ] || { body=$(printf '%s' "$body" | LC_ALL=C head -c "$max"); mode=stream; }
   # One jq call reads named fields only; anything that is not a JSON object writes nothing.
-  line=$(jq -c --arg ev "$ev" 'select(type == "object") | (now | floor) as $t
+  local pick='(now | floor) as $t
     | def s: if type == "string" then .[0:200] else null end;
     {t: $t, ts: ($t | todate), event: $ev, session_id: (.session_id | s)}
     + (if .tool_use_id != null then {tool: (.tool_name | s), tool_use_id: (.tool_use_id | s)} else {} end)
-    + (if $ev == "StopFailure" then {error: (if (.error | type) == "string" and (.error | test("^[a-z_]{1,40}$")) then .error else "unknown" end)} else {} end)' 2>/dev/null) || return 0
+    + (if $ev == "StopFailure" then {error: (if (.error | type) == "string" and (.error | test("^[a-z_]{1,40}$")) then .error else "unknown" end)} else {} end)'
+  if [ "$mode" = whole ]; then
+    line=$(printf '%s' "$body" | jq -c --arg ev "$ev" "select(type == \"object\") | $pick" 2>/dev/null) || return 0
+  else
+    line=$(printf '%s' "$body" | jq -c -n --stream --arg ev "$ev" 'reduce (try inputs catch empty) as $e ({ok: null, v: {}};
+        if .ok == null then .ok = (($e[0][0] | type) == "string") else . end
+        | if ($e | length) == 2 and ($e[0] | length) == 1 then .v[$e[0][0] | tostring] = $e[1] else . end)
+      | select(.ok == true) | .v | '"$pick" 2>/dev/null) || return 0
+  fi
   [ -n "$line" ] || return 0
   case $line in *$'\n'*) return 0 ;; esac
   printf '%s\n' "$line" >> "$log"

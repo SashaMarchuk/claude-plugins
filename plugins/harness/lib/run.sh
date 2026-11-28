@@ -348,15 +348,36 @@ ho_state_begin() {
   done
   [ -n "$t" ] && [ -n "$s" ] || { ho_state_usage; return 64; }
   printf '%s' "$s" | grep -Eqx '[a-z0-9][a-z0-9-]{0,39}' || { printf 'harness: a step id uses a-z 0-9 - (at most 40), not %s\n' "$s" >&2; return 64; }
+  # A lane paused for an urgent ticket begins no next step until intake lets it go (H-084, D3).
+  if [ -f "$HO_RUN_DIR/pauses/$t.json" ]; then
+    printf 'harness: ticket %s is paused for urgent ticket %s; step %s does not begin\n' "$t" \
+      "$(jq -r '.for // "?"' "$HO_RUN_DIR/pauses/$t.json" 2>/dev/null)" "$s" >&2
+    return 75
+  fi
   ho_stop_gate "$t" || rc=$?
   case $rc in
     0)
       ho_ledger_append step-begin ticket "$t" step "$s"
       printf 'OK ticket %s step %s may begin\n' "$t" "$s"
+      ho_state_notes "$t"
       ;;
     2) printf 'harness: the stop state is unknown; ticket %s step %s does not begin\n' "$t" "$s" >&2; return 75 ;;
     *) printf 'harness: the run is stopped (%s); ticket %s step %s does not begin\n' "${HO_STOP_TYPE:-stop}" "$t" "$s" >&2; return 75 ;;
   esac
+}
+
+# ho_state_notes <ticket>: hand each accepted ticket change (intake, H-023, D37-INTAKE-3) to the
+# step that begins, once: one "change <note-file>" line each, oldest first, and one
+# change-delivered ledger line. The orchestrator gives the note to the worker and returns the
+# ticket to its execution step (D37-INTAKE-6).
+ho_state_notes() {
+  local d="$HO_RUN_DIR/notes/$1" f
+  [ -d "$d" ] || return 0
+  for f in $(cd "$d" && ls | grep -E '^[0-9]+\.md$' | sort -n); do
+    ho_ledger_events | jq -e --arg n "$d/$f" 'select(.kind == "change-delivered" and .note == $n)' >/dev/null 2>&1 && continue
+    ho_ledger_append change-delivered ticket "$1" note "$d/$f"
+    printf 'change %s\n' "$d/$f"
+  done
 }
 
 ho_marker_name_ok() {

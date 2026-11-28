@@ -4,7 +4,7 @@
 # Every call is logged as one tab-separated line to $HO_FAKE_GH_DIR/calls.log.
 # The signed-in account is $HO_FAKE_GH_USER (default harness-bot).
 # Supported: label create; issue create|view|list (at most --limit, default 30, as gh does)|
-# edit|comment|close; api user, api repos/<r>/issues (open issues, per_page, --paginate),
+# edit (labels, assignees, --body-file)|comment|close; api user, api repos/<r>/issues (open issues, per_page, --paginate),
 # api repos/<r>/collaborators/<login>/permission, api repos/<r>/issues/<n>/events.
 # Label events: every label that issue create or issue edit adds or removes is recorded in
 # $HO_FAKE_GH_DIR/events/<n>.json as a "labeled" or "unlabeled" event whose actor is the
@@ -189,6 +189,7 @@ case "$group $cmd" in
             ! jq -e --arg l "$one" '.labels | index($l)' "$f" >/dev/null || label_event "$n" unlabeled "$one"
           done
           save "$f" '.labels = (.labels - ($l | split(",")))' --arg l "$2"; shift 2 ;;
+        --body-file) save "$f" '.body = $b' --rawfile b "$2"; shift 2 ;;
         --add-assignee) save "$f" '.assignees = (.assignees + [$u] | unique)' --arg u "${2/#@me/$user}"; shift 2 ;;
         --remove-assignee) save "$f" '.assignees = (.assignees - [$u])' --arg u "${2/#@me/$user}"; shift 2 ;;
         *) fail "issue edit: unsupported flag $1" ;;

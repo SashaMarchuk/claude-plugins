@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Fake external tracker adapter for tests: a tracker with statuses and no labels, in the adapter
+# protocol of lib/tickets.sh (HO_TICKETS_SOURCE=adapter). Never calls the network.
+# State: one JSON file per ticket in $HO_FAKE_TRACKER_DIR (default $HOME/fake-tracker):
+#   {id, title, body, status, status_by, text_by, comments: [{email, body}]}
+# status_by is the e-mail of whoever set the current status, text_by of whoever wrote the body;
+# either may be null (the tracker cannot say). The adapter's own account is $HO_FAKE_TRACKER_ME
+# (default harness@example.invalid). Every call is logged to calls.log.
+#   list                      [{id, title, status, body}] of every ticket
+#   view <id>                 {id, title, body, status, comments: [{email, body}]}
+#   set-status <id> <status>  the adapter account sets the status
+#   set-body <id> <file>      the adapter account replaces the body
+#   comment <id> <file>       the adapter account adds a comment
+#   trigger <id> status|text  {email}: who set the current status / wrote the body (null: unknown)
+#   new <title> <body-file> <status> [email]   test helper: a ticket created by that person
+#   person-status <id> <status> <email|->      test helper: a person sets the status
+set -euo pipefail
+dir=${HO_FAKE_TRACKER_DIR:-$HOME/fake-tracker}
+me=${HO_FAKE_TRACKER_ME:-harness@example.invalid}
+mkdir -p "$dir"
+printf '%s\n' "$*" >> "$dir/calls.log"
+f() { case ${1:-} in '' | *[!0-9]*) echo "fake-tracker: bad id" >&2; exit 2 ;; esac; [ -f "$dir/$1.json" ] || { echo "fake-tracker: no ticket $1" >&2; exit 1; }; printf '%s/%s.json\n' "$dir" "$1"; }
+save() { local file=$1 tmp; shift; tmp=$(mktemp "$dir/.t.XXXXXX"); jq "$@" "$file" > "$tmp"; mv "$tmp" "$file"; }
+case ${1:-} in
+  list) find "$dir" -name '*.json' -exec cat {} + 2>/dev/null | jq -s -c 'sort_by(.id) | map({id, title, status, body})' ;;
+  view) jq -c '{id, title, body, status, comments}' "$(f "$2")" ;;
+  set-status) save "$(f "$2")" '.status = $s | .status_by = $m' --arg s "$3" --arg m "$me" ;;
+  set-body) save "$(f "$2")" '.body = $b | .text_by = $m' --rawfile b "$3" --arg m "$me" ;;
+  comment) save "$(f "$2")" '.comments += [{email: $m, body: $b}]' --rawfile b "$3" --arg m "$me" ;;
+  trigger) jq -c --arg k "$3" '{email: (if $k == "status" then .status_by else .text_by end)}' "$(f "$2")" ;;
+  new)
+    n=$(( $(find "$dir" -name '*.json' | wc -l) + 1 ))
+    jq -n --argjson n "$n" --arg t "$2" --rawfile b "$3" --arg s "$4" --arg e "${5:-}" \
+      '{id: $n, title: $t, body: $b, status: $s, status_by: (if $e == "" then null else $e end),
+        text_by: (if $e == "" then null else $e end), comments: []}' > "$dir/$n.json"
+    echo "$n" ;;
+  person-status) save "$(f "$2")" '.status = $s | .status_by = (if $e == "-" then null else $e end)' --arg s "$3" --arg e "$4" ;;
+  *) echo "fake-tracker: unsupported call: $*" >&2; exit 2 ;;
+esac

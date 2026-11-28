@@ -13,6 +13,7 @@
     "autonomy.allow_zero_tests": {"kind": "order", "order": [false, true]},
     "autonomy.always_human_paths": {"kind": "remove"},
     "session.permissions": {"kind": "order", "order": ["dontAsk", "acceptEdits", "auto", "bypass"]},
+    "session.permission_prompts": {"kind": "order", "order": ["off", "analyse"]},
     "tickets.readiness.on_not_ready": {"kind": "order", "order": ["ask", "assume"]},
     "external_review_bots": {"kind": "add"},
     "external_review.mode": {"kind": "order", "order": ["ask", "react", "ignore"]},

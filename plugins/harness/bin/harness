@@ -46,6 +46,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/runtime.sh"
 # shellcheck source=../lib/screen.sh
 . "$HO_ROOT/lib/screen.sh"
+# shellcheck source=../lib/permission.sh
+. "$HO_ROOT/lib/permission.sh"
 # shellcheck source=../lib/intake.sh
 . "$HO_ROOT/lib/intake.sh"
 # shellcheck source=../lib/lifecycle.sh

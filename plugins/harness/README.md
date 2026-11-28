@@ -183,6 +183,17 @@ Every close goes through `session close`, by the exact process, over this run's 
 
 Settings (OPEN-9): `run.standby` (`true` or `false`, default `false`), overridden for one run by `run new --standby on|off`. `run.on_only_human_blocked` (`wait` or `end`, default `wait`). Both are fixed in `<run>/lifecycle.json` at run start and written once to the ledger as `run-settings`. Any other value is a config error (exit 78).
 
+## Permission prompts (H-052, D37-AUTONOMY-1, D37-AUTONOMY-2)
+
+The permission mode stays your own setting: `session.permissions` in the user config (`bypass`, the shipped default, `auto`, `acceptEdits` or `dontAsk`). The plugin passes it to each session and enforces nothing else. Under `bypass` prompts normally do not appear.
+
+`session.permission_prompts` decides what the harness does when a permission prompt is on a session's screen (screen class `permission`). It never changes the mode and adds no deny list.
+
+- `off` (the default): no answer. One owner-action line goes to the run ledger, once per screen.
+- `analyse`: the main runtime reads the prompt with no tools, from an empty folder, with the screen inside an untrusted fence (`templates/permission-prompt.md`). If it answers `{"acceptable": true}`, the harness reads the screen again and, when it is unchanged, presses the runtime's accept-once key (`permission_prompt.accept_once` in the runtime profile) once and writes a `permission-answer` ledger line. It never picks "always allow". Doubt, a failed analysis, a changed screen or a runtime without the key escalates as with `off`. There is no always-accept value.
+
+`bin/harness screen <run-dir> permission <session>` reads the screen and reacts; `screen ... watch` does the same when it sees the prompt. The setting is a recorded field of D37-FLOW-8: a committed config that moves it from `off` to `analyse` stops the next run start. The shipped screen pattern file has no permission shape yet, so until it gets one, real prompts read as other screen text; the tests use a synthetic pattern.
+
 ## Autonomy profiles
 
 An autonomy profile holds gates and permissions only; the steps stay in the flow config (D12, D37-FLOW-3). Four ready-made profiles ship in `autonomy/`. None of them deploys to production, and none names a stage environment.

@@ -18,6 +18,7 @@ The engine commands below all start with `"${CLAUDE_PLUGIN_ROOT}/bin/harness"`. 
 4. **Walk the settings** (every setting the plugin offers; skip what the person already has and does not want to change). Write the answers into the project config (`.harness/config.json`, or `.harness/config.<owner>.json` when the person wants a config named for them) or into the user config, as the person chooses, each file with `"schemaVersion": 2`:
    - Autonomy: `autonomy.profile` — `safe` (the default; nothing leaves the machine), `gated`, `draft-pr`, `full`, or `custom` with every field in `autonomy.custom`. `autonomy list` describes them. The "always a human" paths: `autonomy.always_human_paths`.
    - Permission mode: `session.permissions` (`bypass`, `auto`, `acceptEdits`, `dontAsk`), user config only.
+   - Permission prompts: `session.permission_prompts` — `off` (the default; the harness never answers and escalates) or `analyse` (a model accepts a clearly acceptable prompt once and escalates any doubt).
    - Limits: the worker cap `limits.workers` (default 1), `limits.heavy`, `limits.stages.<id>`. Offer a threshold of 90% for every usage window, and switch thresholds on only after a yes (H-110).
    - Run end: `run.standby` (true or false) and `run.on_only_human_blocked` (`wait` or `end`).
    - Runtime and terminal: `runtime.main`, `terminal.app`.

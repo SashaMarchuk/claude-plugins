@@ -133,6 +133,10 @@
     "status_separator": " · ",
     "cut_mark": "…"
   },
+  "_comment_permission_prompt": "H-052, D37-AUTONOMY-1: with session.permission_prompts analyse, a permission prompt the model judges acceptable is accepted once with this key (enter or escape: the terminal adapter's key names). The first choice of the prompt is the accept-once choice; the engine never picks an always-allow choice. The pattern that recognises the prompt (screen class permission) belongs in the screen pattern file.",
+  "permission_prompt": {
+    "accept_once": "enter"
+  },
   "force_send": {
     "bytes": [
       24,

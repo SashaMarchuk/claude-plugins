@@ -105,7 +105,8 @@ ho_runtime_profile() {
     and ([.argv.new, .argv.resume, .argv.model, .argv.title, .argv.prompt] | all(type == "array" and all(type == "string" and (test("\n") | not))))
     and (.permissions | type == "object")
     and (.exit_command | type == "string" and length > 0 and (test("\n") | not))
-    and ((.account_env // []) | type == "array" and all(type == "string" and test("\\A[A-Z_][A-Z0-9_]*\\z")))' "$f" >/dev/null 2>&1 || {
+    and ((.account_env // []) | type == "array" and all(type == "string" and test("\\A[A-Z_][A-Z0-9_]*\\z")))
+    and ((.credential_env // []) | type == "array" and all(type == "string" and test("\\A[A-Z_][A-Z0-9_]*\\z")))' "$f" >/dev/null 2>&1 || {
     printf 'harness: runtime file %s is not a valid schemaVersion 2 runtime\n' "$f" >&2
     return 78
   }
@@ -124,16 +125,43 @@ ho_session_account_env_names() {
   jq -r '(.account_env // [.config_dir.env, .transcript.root_env]) | map(strings) | unique | .[]' "$1"
 }
 
+# ho_session_runtime_files: every runtime profile the engine can use, user folder first, one
+# per line (the screen data files beside them are not profiles).
+ho_session_runtime_files() {
+  local udir f n seen=" "
+  udir=$(dirname "$(ho_user_config)")
+  for f in "$udir"/runtimes/*.json "$HO_ROOT"/runtimes/*.json; do
+    [ -f "$f" ] || continue
+    n=$(basename "$f" .json)
+    case $n in '' | *[!a-z0-9-]*) continue ;; esac
+    case $seen in *" $n "*) continue ;; esac
+    seen="$seen$n "
+    printf '%s\n' "$f"
+  done
+}
+
+# ho_session_scrub_names [account|credential]: the variable names of every runtime profile
+# (issue #119): with "account", the account variables (ho_session_account_env_names); with
+# "credential", credential_env (variables that hold a login credential); with neither, both.
+# A mixed-runtime flow then removes the same names in the start check and in every launcher,
+# whatever runtime a step uses. Only names the harness may set are printed.
+ho_session_scrub_names() {
+  local kind=${1-} f
+  ho_session_runtime_files | while IFS= read -r f; do
+    [ "$kind" = credential ] || ho_session_account_env_names "$f" 2>/dev/null
+    [ "$kind" = account ] || jq -r '.credential_env // [] | .[]? | strings' "$f" 2>/dev/null
+  done | grep -E '^[A-Z_][A-Z0-9_]*$' | grep -vE '^(PATH|HOME|HO_.*)$' | LC_ALL=C sort -u
+}
+
 # ho_session_account_cmd <profile> <command>: run an account command as the launcher runs it,
-# with the runtime's account variables removed (the launcher unsets them first), so a command
-# that reads one of them gets the same answer in the launch check, the start check and the
-# launcher. With no profile it runs as it is.
+# with the account and credential variables of every runtime removed (the launcher unsets
+# them first), so a command that reads one of them gets the same answer in the launch check,
+# the start check and the launcher, whatever runtime the step uses (issue #119). The profile
+# argument is kept for the callers; the names do not depend on it.
 ho_session_account_cmd() {
   local -a u=()
   local v
-  if [ -n "$1" ]; then
-    for v in $(ho_session_account_env_names "$1"); do u+=(-u "$v"); done
-  fi
+  for v in $(ho_session_scrub_names); do u+=(-u "$v"); done
   /usr/bin/env ${u[@]+"${u[@]}"} /bin/bash -c "$2"
 }
 
@@ -156,18 +184,58 @@ ho_session_account_env() {
   done
 }
 
-# ho_session_account_env_lines <account-env> <account>: the launcher lines for them. With an
-# account command the variables are removed, and the command sets what it sets: the caller's
-# folder belongs to the caller's account, not the role's.
+# ho_session_account_env_lines <account-env> <account>: the launcher lines for them (issue #119).
+#   - HOME is the caller's, so the session and the start check agree on it; an account command
+#     that sets HOME still wins, because it runs later in the launcher.
+#   - Credential variables (credential_env of every runtime) are always removed: their value is
+#     never written to a launcher, and a stale one in the terminal never chooses the account.
+#     Only the role's account command may set them again.
+#   - With an account command the account variables of every runtime are removed, and the
+#     command sets what it sets: the caller's folder belongs to the caller's account, not the
+#     role's. With none, each account variable of the runtime gets the caller's value, or is
+#     removed when the caller has none.
+# The launch compares the launcher's export and unset lines with this output.
 ho_session_account_env_lines() {
-  local line
+  local line v
+  case ${HOME-} in /*) printf 'export HOME=%s\n' "$(ho_q "$HOME")" ;; esac
+  for v in $(ho_session_scrub_names credential); do printf 'unset %s\n' "$v"; done
+  if [ -n "$2" ]; then
+    for v in $(ho_session_scrub_names account); do printf 'unset %s\n' "$v"; done
+    return 0
+  fi
   printf '%s\n' "$1" | while IFS= read -r line; do
     [ -n "$line" ] || continue
     case $line in
-      *$'\t'*) if [ -n "$2" ]; then printf 'unset %s\n' "${line%%$'\t'*}"; else printf 'export %s=%s\n' "${line%%$'\t'*}" "$(ho_q "${line#*$'\t'}")"; fi ;;
+      *$'\t'*) printf 'export %s=%s\n' "${line%%$'\t'*}" "$(ho_q "${line#*$'\t'}")" ;;
       *) printf 'unset %s\n' "$line" ;;
     esac
   done
+}
+
+# ho_session_resume_account <sid> <account> <account-env>: the reader of the record's account and
+# account_env fields (issue #119). A resume must run on the account folder the session ran on,
+# or the runtime does not find its transcript. Every earlier record of this run with that
+# session ID must name the same account, and with no account the same account variables, as
+# this launch; else the launch is refused (65). The record only checks: the values a launcher
+# gets still come from the caller or the account command, never from a run file.
+ho_session_resume_account() {
+  local sid=$1 acct=$2 aenv=$3 f now bad
+  now=$(printf '%s\n' "$aenv" | jq -Rn '[inputs | select(length > 0) | split("\t") | {key: .[0], value: .[1]}] | from_entries')
+  for f in "$HO_RUN_DIR"/sessions/*.json; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    bad=$(jq -r --arg sid "$sid" --arg acct "$acct" --argjson now "$now" '
+      select(type == "object" and .session_id == $sid and has("account_env"))
+      | if (.account // "") != $acct then "the account (\(.account // "none") at launch)"
+        elif $acct != "" then empty
+        elif (.account_env | type) != "object" then empty
+        else [.account_env | to_entries[] | select(.value != $now[.key]) | .key] | select(length > 0) | join(", ")
+        end' "$f" 2>/dev/null) || continue
+    [ -z "$bad" ] || {
+      printf 'harness: session %s ran on another account folder; this launch differs in %s. Resume it from a caller with the same account settings.\n' "$sid" "$bad" >&2
+      return 65
+    }
+  done
+  return 0
 }
 
 # ho_account_env_parse: read an account command's output on stdin; print "KEY<tab>VALUE" lines.
@@ -601,6 +669,8 @@ ho_session_launch_one() {
   fi
   local aenv
   aenv=$(ho_session_account_env "$profile") || return 65
+  case ${HOME-} in *$'\n'* | *$'\t'*) echo "harness: HOME has a line break or a tab; the session was not launched" >&2; return 65 ;; esac
+  if [ -n "$resume" ]; then ho_session_resume_account "$resume" "$acct_name" "$aenv" || return 65; fi
   cmd=$(jq -r .command "$profile")
   cmdpath=$(command -v "$cmd" 2>/dev/null || true)
   case $cmdpath in /*) ;; *) printf 'harness: the runtime command %s is not on PATH\n' "$cmd" >&2; return 65 ;; esac

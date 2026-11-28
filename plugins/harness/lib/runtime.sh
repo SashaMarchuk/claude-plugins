@@ -154,9 +154,9 @@ ho_rt_probe() {
   return "$rc"
 }
 
-# ho_rt_home <account-pairs>: the HOME a launched session gets. The launcher keeps the
-# terminal's HOME and exports the account's variables on top (lib/sessions.sh), so the
-# account's HOME wins over the caller's.
+# ho_rt_home <account-pairs>: the HOME a launched session gets. The launcher exports the
+# caller's HOME (issue #119), then the account's variables on top (lib/sessions.sh), so the
+# account's HOME wins over the caller's, and the terminal's own HOME is never used.
 ho_rt_home() {
   local h
   h=$(printf '%s\n' "$1" | awk -F '\t' '$1 == "HOME" { v = $2 } END { print v }')
@@ -167,14 +167,14 @@ ho_rt_home() {
 # ho_rt_config_dir <profile> <account-pairs>: the tool's own folder, as a launched session gets
 # it (issue #119): from the account's variables; with no account, from the caller's environment;
 # then the profile default under the session's HOME. With an account the launcher removes the
-# runtime's account variables (ho_session_account_env_names) before the account command, so the
+# account variables of every runtime (ho_session_scrub_names) before the account command, so the
 # caller's value of such a variable is not used here either.
 ho_rt_config_dir() {
   local f=$1 pairs=$2 var dir=""
   var=$(jq -r '.config_dir.env // ""' "$f")
   if [ -n "$var" ]; then
     dir=$(printf '%s\n' "$pairs" | awk -F '\t' -v k="$var" '$1 == k { v = $2 } END { print v }')
-    if [ -z "$dir" ] && { [ -z "$pairs" ] || ! ho_session_account_env_names "$f" | grep -qxF "$var"; }; then
+    if [ -z "$dir" ] && { [ -z "$pairs" ] || ! ho_session_scrub_names account | grep -qxF "$var"; }; then
       dir=$(printenv "$var" || true)
     fi
   fi
@@ -240,14 +240,15 @@ EOF_ENV
     # A whole number (ho_rt_check); floor prints 1.0 or 2e1 the way shell arithmetic reads it.
     tmo=$(jq -r '(.check.timeout_seconds // 20) | floor' "$f")
     argv=()
-    # With an account, the login check runs without the caller's account variables, as the
-    # launcher removes them before the account command (issue #119); the account's own come after.
+    # The login check runs as the launcher runs a session (issue #119): never with a credential
+    # variable of the caller (the launcher removes them; only the account command may set one),
+    # and with an account also without the account variables of every runtime; the account's
+    # own come after.
     local -a unsets=()
-    if [ -n "$pairs" ]; then
-      while IFS= read -r a; do [ -n "$a" ] && unsets+=(-u "$a"); done <<EOF_UNSET
-$(ho_session_account_env_names "$f")
+    while IFS= read -r a; do [ -n "$a" ] && unsets+=(-u "$a"); done <<EOF_UNSET
+$(ho_session_scrub_names credential)
+$([ -z "$pairs" ] || ho_session_scrub_names account)
 EOF_UNSET
-    fi
     while IFS= read -r a; do [ -n "$a" ] && argv+=("$a"); done <<EOF_ARGV
 $(jq -r '.check.argv[]' "$f")
 EOF_ARGV

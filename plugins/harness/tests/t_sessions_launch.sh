@@ -112,6 +112,54 @@ assert_eq "#119: with an account the record keeps no caller folder" "null" "$(re
 printf '%s\n' '{"config_dir": {"env": "FAKE_HOME_X"}, "transcript": {"root_env": "FAKE_ROOT_Y"}}' > "$base/rt-noaenv.json"
 assert_eq "#119: without account_env the folder variables of the profile are used" "FAKE_HOME_X	/x FAKE_ROOT_Y " "$(FAKE_HOME_X=/x bash -c '. "$1/lib/sessions.sh" 2>/dev/null; ho_session_account_env "$2"' _ "$HO_PLUGIN_ROOT" "$base/rt-noaenv.json" | tr '\n' ' ')"
 
+# ---- issue #119 follow-ups ----------------------------------------------------------------
+# envof <name> <VAR>: what the session process saw for VAR.
+envof() { grep -A6 -F -- "--session-id	$(rec "$1" .session_id)" "$HO_FAKE_CLAUDE_LOG" | grep -m1 "^env $2=" || true; }
+# (1) Credential variables never reach a launcher file, and a terminal's stale one never chooses
+# the account: the launcher removes them; only the role's account command may set them.
+canary="cred""canary-""Zq81"
+ANTHROPIC_API_KEY=$canary CLAUDE_CODE_OAUTH_TOKEN=$canary HO_FAKE_TERM_ENV="ANTHROPIC_API_KEY=stale-term-key
+ANTHROPIC_AUTH_TOKEN=stale-term-token" HO_FAKE_CLAUDE_SHOW_ENV="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN" launch c1 >/dev/null
+assert_eq "#119: a terminal's stale API key does not reach the session" "env ANTHROPIC_API_KEY=" "$(envof c1 ANTHROPIC_API_KEY)"
+assert_eq "#119: a terminal's stale auth token does not reach the session" "env ANTHROPIC_AUTH_TOKEN=" "$(envof c1 ANTHROPIC_AUTH_TOKEN)"
+assert_contains "#119: the launcher removes the credential variables" "$(cat "$(rec c1 .launcher)")" "unset ANTHROPIC_API_KEY"
+assert_eq "#119: no credential value is written to the launcher, the record, the ledger or the launcher log" "" \
+  "$(grep -rlF -- "$canary" "$run" 2>/dev/null || true)"
+printf 'acct-key-value-9\n' > "$base/keyfile"
+jq --arg c "printf 'ANTHROPIC_API_KEY=%s\\n' \"\$(cat $base/keyfile)\"; echo \"SEEN=\${ANTHROPIC_API_KEY:-none}\"" \
+  '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: $c}}}' "$base/user.keep.json" > "$user/config.json"
+ANTHROPIC_API_KEY=$canary HO_FAKE_TERM_ENV="ANTHROPIC_API_KEY=stale-term-key" HO_FAKE_CLAUDE_SHOW_ENV="ANTHROPIC_API_KEY SEEN" launch c2 >/dev/null
+assert_eq "#119: a key named by the role's account command reaches the session" "env ANTHROPIC_API_KEY=acct-key-value-9" "$(envof c2 ANTHROPIC_API_KEY)"
+assert_eq "#119: the account command sees no terminal credential (as in the start check)" "env SEEN=none" "$(envof c2 SEEN)"
+assert_eq "#119: the account's key is not written to any run file" "" "$(grep -rlF -- acct-key-value-9 "$run" 2>/dev/null || true)"
+cp "$base/user.keep.json" "$user/config.json"
+# (2) With no account HOME setting, the session gets the caller's HOME, not the terminal's.
+HO_FAKE_TERM_ENV="HOME=$base/term-home" HO_FAKE_CLAUDE_SHOW_ENV=HOME launch c3 >/dev/null
+assert_eq "#119: with no account the session gets the caller's HOME, not the terminal's" "env HOME=$HOME" "$(envof c3 HOME)"
+jq --arg c "echo HOME=$base/acct-home" '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: $c}}}' "$base/user.keep.json" > "$user/config.json"
+HO_FAKE_TERM_ENV="HOME=$base/term-home" HO_FAKE_CLAUDE_SHOW_ENV=HOME launch c4 >/dev/null
+assert_eq "#119: an account that sets HOME still wins" "env HOME=$base/acct-home" "$(envof c4 HOME)"
+cp "$base/user.keep.json" "$user/config.json"
+# (3) Mixed runtimes: the account command runs without the account variables of every runtime,
+# in the start check and in the launcher alike.
+jq '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: "echo \"CLAUDE_CONFIG_DIR=${CODEX_HOME:-$HOME/.cw}\""}}}' "$base/user.keep.json" > "$user/config.json"
+CODEX_HOME=$base/codex-caller HO_FAKE_TERM_ENV="CODEX_HOME=$base/codex-term" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR launch c5 >/dev/null
+assert_eq "#119: the account command in the launcher does not see another runtime's account variable" "env CLAUDE_CONFIG_DIR=$HOME/.cw" "$(envof c5 CLAUDE_CONFIG_DIR)"
+cp "$base/user.keep.json" "$user/config.json"
+assert_eq "#119: the account command check removes every runtime's account and credential variables" "unset unset unset" \
+  "$(CODEX_HOME=/x ANTHROPIC_API_KEY=k CLAUDE_CONFIG_DIR=/y bash -c '. "$1/lib/common.sh"; . "$1/lib/config.sh"; . "$1/lib/sessions.sh"; HO_ROOT=$1; ho_session_account_cmd "$1/runtimes/claude-code.json" "echo \${CODEX_HOME-unset} \${ANTHROPIC_API_KEY-unset} \${CLAUDE_CONFIG_DIR-unset}"' _ "$HO_PLUGIN_ROOT" 2>/dev/null)"
+# (4) The record's account_env is read back: a resume must run on the account folder the
+# session ran on, so a resume from a caller with another folder is refused.
+mkdir -p "$base/acct-other"; cp "$ax/.claude.json" "$base/acct-other/.claude.json"
+CLAUDE_CONFIG_DIR=$ax launch c6 >/dev/null
+c6sid=$(rec c6 .session_id)
+"$h" session "$run" close c6 >/dev/null 2>&1 || true
+assert_exit "#119: a resume from a caller with another account folder is refused" 65 env CLAUDE_CONFIG_DIR="$base/acct-other" "$h" session "$run" launch --role worker --name c6r --cwd "$proj/src" --resume "$c6sid"
+assert_contains "#119: the refusal names the variable" "$(env CLAUDE_CONFIG_DIR="$base/acct-other" "$h" session "$run" launch --role worker --name c6s --cwd "$proj/src" --resume "$c6sid" 2>&1 || true)" "CLAUDE_CONFIG_DIR"
+assert_exit "#119: a resume from a caller with no account folder is refused too" 65 env -u CLAUDE_CONFIG_DIR "$h" session "$run" launch --role worker --name c6t --cwd "$proj/src" --resume "$c6sid"
+CLAUDE_CONFIG_DIR=$ax "$h" session "$run" launch --role worker --name c6u --cwd "$proj/src" --resume "$c6sid" >/dev/null
+assert_eq "#119: a resume from the same account folder starts" "$c6sid" "$(rec c6u .session_id)"
+
 # ---- model chain a|b: a start failure falls through, the PID is the one that runs ------
 jq '.models.worker = "m-bad | m-good"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 HO_FAKE_CLAUDE_FAIL_MODEL=m-bad launch w6 >/dev/null

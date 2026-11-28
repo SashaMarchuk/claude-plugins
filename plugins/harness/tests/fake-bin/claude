@@ -6,7 +6,7 @@
 # Either way it ends after HO_FAKE_CLAUDE_HOLD_MAX seconds (default 20).
 # HO_FAKE_CLAUDE_FAIL_MODEL=<m>: exit 1 when started with "--model <m>", at once or after
 # HO_FAKE_CLAUDE_FAIL_AFTER seconds.
-# HO_FAKE_CLAUDE_SHOW_ENV=<NAME>: also log "env NAME=<value>".
+# HO_FAKE_CLAUDE_SHOW_ENV="<NAME> ...": also log "env NAME=<value>" for each name, in that order.
 # HO_FAKE_CLAUDE_ON_EXIT=<shell command>: run just before it leaves on "/exit".
 # HO_FAKE_CLAUDE_TRANSCRIPT=1: also write a transcript line (see below).
 # HO_FAKE_CLAUDE_VERSION=<v>: what --version prints first (default 0.0.0).
@@ -37,9 +37,9 @@ for a in "$@"; do
   if [ -z "$line" ]; then line=$a; else line="$line	$a"; fi
 done
 printf '%s\n' "$line" >> "$log"
-if [ -n "${HO_FAKE_CLAUDE_SHOW_ENV:-}" ]; then
-  printf 'env %s=%s\n' "$HO_FAKE_CLAUDE_SHOW_ENV" "$(printenv "$HO_FAKE_CLAUDE_SHOW_ENV" || true)" >> "$log"
-fi
+for ho_fc_v in ${HO_FAKE_CLAUDE_SHOW_ENV:-}; do
+  printf 'env %s=%s\n' "$ho_fc_v" "$(printenv "$ho_fc_v" || true)" >> "$log"
+done
 # HO_FAKE_CLAUDE_TRANSCRIPT=1: write one line to the transcript Claude Code would keep for this
 # session: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<working folder, each other byte as ->/<id>.jsonl
 if [ "${HO_FAKE_CLAUDE_TRANSCRIPT:-}" = 1 ]; then

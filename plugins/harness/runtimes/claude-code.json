@@ -82,6 +82,8 @@
     "env": "CLAUDE_CONFIG_DIR",
     "default": "{home}/.claude"
   },
+  "_comment_credential_env": "Issue #119: the variables that hold a login credential. A launcher always removes them, and only the role's account command may set them again (its output is read at launch and never written to a file), so a stale key in a terminal never chooses the account and no secret is written to disk. The start check removes them too.",
+  "credential_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
   "_comment_account_env": "Issue #119: the variables that choose the account folder. A launch sets each one to the caller's value, or removes it when the caller has none, so the terminal's inherited environment never picks the account; with an account command they are removed and the command sets them. Folder paths only, never secrets: the value is written into the launcher.",
   "account_env": [
     "CLAUDE_CONFIG_DIR"

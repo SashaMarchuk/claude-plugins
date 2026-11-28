@@ -37,7 +37,7 @@
 #   <run>/intake/poll.json   {"errors": n}; its modification time is the time of the last poll
 #
 # Settings: tickets.poll_seconds, tickets.required_content, tickets.target_repos,
-# tickets.readiness_timeout_seconds, tickets.readiness.on_not_ready, tickets.normalize, tickets.changes.mode. No command is read from any config: the judge's command
+# tickets.readiness_timeout_seconds, tickets.readiness.on_not_ready, tickets.normalize, tickets.changes.mode, tickets.urgent.pause. No command is read from any config: the judge's command
 # line comes from the runtime profile, which a project cannot add (D37-FLOW-8).
 # Exit codes: 64 usage, 69 the tracker could not be read, 75 the run is stopped or has ended,
 # 78 bad settings.
@@ -717,6 +717,92 @@ ho_in_answers_all() {
   done
 }
 
+# ---- urgent ticket out of turn (H-083, H-084, D3) -------------------------------------------
+# The label <prefix>:urgent on a ready ticket, set by a writer (the newest labeled event for it),
+# puts the ticket first. A reader's urgent label gives no priority (one urgent-refused ledger
+# line). One urgent ticket at a time: while one is in progress or blocked, another urgent ticket
+# waits ("urgent-waiting <id>"). With a free worker slot the urgent ticket starts at once
+# (urgent-start). With none, the newest lane of this run (its pickup line is the latest) pauses:
+#   <run>/pauses/<ticket>.json   {for: <urgent id>, type: step|hard}
+# "state begin" refuses its next step (exit 75), so it pauses after its current step (D3 default);
+# tickets.urgent.pause "hard" also closes that ticket's sessions at once (H-084). The urgent
+# ticket waits for the freed slot; the cap is never exceeded (H-105), because only free slots
+# start work. When the urgent ticket is no longer ready, in progress or blocked, its pause is removed
+# ("unpause <ticket>").
+ho_in_urgent_pause_type() {
+  local v
+  v=$(ho_in_cfg_json '.tickets.urgent.pause')
+  case $v in
+    null | '"step"') echo step ;;
+    '"hard"') echo hard ;;
+    *) ho_in_err "tickets.urgent.pause must be step or hard, not $v"; exit 78 ;;
+  esac
+}
+# ho_in_active_urgent: the urgent ticket of this run that is in progress or blocked, or nothing.
+ho_in_active_urgent() {
+  local t st
+  for t in $(ho_ledger_events | jq -r 'select(.kind == "urgent-start") | .ticket' | awk '!seen[$0]++'); do
+    st=$(ho_tk_gh_state "$t" 2>/dev/null) || { echo "$t"; return 0; }
+    case " $st " in *" in-progress "* | *" blocked "*) echo "$t"; return 0 ;; esac
+  done
+}
+# ho_in_unpause: let go every pause whose urgent ticket is no longer active.
+ho_in_unpause() {
+  local f t u st
+  for f in "$HO_RUN_DIR"/pauses/*.json; do
+    [ -f "$f" ] || continue
+    t=${f##*/}; t=${t%.json}
+    u=$(jq -r '.for // ""' "$f" 2>/dev/null) || u=""
+    # The pause holds while its urgent ticket waits for the slot (ready) or runs (in progress or
+    # blocked); a state that cannot be read keeps it too.
+    case $u in '' | *[!0-9]*) ;; *)
+      st=$(ho_tk_gh_state "$u" 2>/dev/null) || continue
+      case " $st " in *" ready "* | *" in-progress "* | *" blocked "*) continue ;; esac ;;
+    esac
+    rm -f "$f" || continue
+    ho_ledger_append urgent-unpause ticket "$t" for "$u"
+    echo "unpause $t"
+  done
+}
+# ho_in_is_urgent <id>: 0 when the ticket carries the urgent label set by a writer.
+ho_in_is_urgent() {
+  local labels ev last login
+  labels=$(ho_tk_gh_labels "$1" 2>/dev/null) || return 1
+  printf '%s\n' "$labels" | grep -qxF "$HO_TK_PREFIX:urgent" || return 1
+  ev=$(ho_tk_gh_events "$1") || ev='[]'
+  last=$(ho_tk_last_labeled "$ev" "$HO_TK_PREFIX:urgent")
+  login=${last#* }
+  if [ -n "$last" ] && ho_tk_login_ok "$login" && [ "$(ho_tk_access "$login")" = writer ]; then return 0; fi
+  ho_ledger_events | jq -e --arg t "$1" 'select(.kind == "urgent-refused" and .ticket == $t)' >/dev/null 2>&1 ||
+    ho_ledger_append urgent-refused ticket "$1" by "${login:-unknown}"
+  return 1
+}
+# ho_in_pause_newest <urgent-id>: pause the newest lane of this run, once per urgent ticket.
+ho_in_pause_newest() {
+  local u=$1 t st type s
+  for t in "$HO_RUN_DIR"/pauses/*.json; do
+    [ -f "$t" ] && [ "$(jq -r '.for // ""' "$t" 2>/dev/null)" = "$u" ] && return 0
+  done
+  for t in $(ho_ledger_events | jq -r 'select(.kind == "pickup") | .ticket' | awk '{ a[NR] = $0 } END { for (i = NR; i > 0; i--) if (!seen[a[i]]++) print a[i] }'); do
+    [ "$t" = "$u" ] && continue
+    [ -f "$HO_RUN_DIR/pauses/$t.json" ] && continue
+    st=$(ho_tk_gh_state "$t" 2>/dev/null) || continue
+    case " $st " in *" in-progress "*) ;; *) continue ;; esac
+    type=$(ho_in_urgent_pause_type) || return 78
+    mkdir -p "$HO_RUN_DIR/pauses" || return 1
+    jq -cn --arg u "$u" --arg ty "$type" '{for: $u, type: $ty}' | ho_atomic_write "$HO_RUN_DIR/pauses/$t.json" || return 1
+    ho_ledger_append urgent-pause ticket "$t" for "$u" type "$type"
+    if [ "$type" = hard ]; then
+      for s in "$HO_RUN_DIR"/sessions/*.json; do
+        [ -f "$s" ] && [ "$(jq -r '.ticket // ""' "$s" 2>/dev/null)" = "$t" ] || continue
+        ho_session_close "$(basename "$s" .json)" >/dev/null 2>&1 || true
+      done
+    fi
+    echo "pause $t for $u"
+    return 0
+  done
+}
+
 # ho_in_close_asked: close every session that asked a question and is not closed yet (H-032).
 # A close that fails is tried again at every tick, but reported once per question: one
 # "close-failed <session>" line and one owner-action line, until a newer question resets it.
@@ -770,6 +856,7 @@ ho_in_tick() {
   HO_IN_NORM=$(ho_in_normalize) || return
   HO_IN_MODE=$(ho_in_mode) || return
   HO_IN_CHANGES=$(ho_in_changes_mode) || return
+  ho_in_urgent_pause_type >/dev/null || return
   ho_tk_settings || return
   if ho_tk_ad; then ho_tk_status_map >/dev/null || return; fi
   ho_in_halted || return
@@ -791,6 +878,29 @@ ho_in_tick() {
   ho_in_record 0 || return 1
   free=$(ho_in_free_workers)
   [ -n "$max" ] && [ "$max" -lt "$free" ] && free=$max
+  # Urgent tickets first (H-083, H-084, D3).
+  if ho_tk_gh; then
+    local urg="" rest="" act
+    ho_in_unpause
+    for id in $ids; do if ho_in_is_urgent "$id"; then urg="$urg $id"; else rest="$rest $id"; fi; done
+    act=$(ho_in_active_urgent)
+    for id in $urg; do
+      if [ -n "$act" ]; then echo "urgent-waiting $id"; continue; fi
+      if [ "$started" -ge "$free" ]; then
+        ho_in_pause_newest "$id" || return
+        echo "urgent-waiting $id"
+        act=$id
+        continue
+      fi
+      ho_in_halted || return
+      if ho_in_pickup "$id"; then
+        started=$((started + 1))
+        ho_ledger_append urgent-start ticket "$id"
+        act=$id
+      fi
+    done
+    ids=$rest
+  fi
   for id in $ids; do
     [ "$started" -lt "$free" ] || break
     # A stop or a run end recorded during an earlier pickup (a readiness check can take
@@ -833,7 +943,8 @@ usage: harness intake <run-dir> <verb>
                       ready tickets up to the free worker slots (and N). Prints one line each:
                       start|blocked|needs-review|unblocked|kept-blocked|kept-in-progress|
                       kept-done|error <id>, change-applied|change-ignored <id>,
-                      change-ticket <id> <new-id>, resume <id>, closed|close-failed <session>,
+                      change-ticket <id> <new-id>, resume <id>, urgent-waiting <id>,
+                      pause <id> for <urgent-id>, unpause <id>, closed|close-failed <session>,
                       not-due <seconds>, tracker-error, stopped, ended
   poll [--max N]      tick until the run is stopped or has ended
   text <id>           the ticket text for a session: the description as picked up and the

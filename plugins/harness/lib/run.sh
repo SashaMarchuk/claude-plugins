@@ -334,6 +334,12 @@ ho_state_begin() {
   done
   [ -n "$t" ] && [ -n "$s" ] || { ho_state_usage; return 64; }
   printf '%s' "$s" | grep -Eqx '[a-z0-9][a-z0-9-]{0,39}' || { printf 'harness: a step id uses a-z 0-9 - (at most 40), not %s\n' "$s" >&2; return 64; }
+  # A lane paused for an urgent ticket begins no next step until intake lets it go (H-084, D3).
+  if [ -f "$HO_RUN_DIR/pauses/$t.json" ]; then
+    printf 'harness: ticket %s is paused for urgent ticket %s; step %s does not begin\n' "$t" \
+      "$(jq -r '.for // "?"' "$HO_RUN_DIR/pauses/$t.json" 2>/dev/null)" "$s" >&2
+    return 75
+  fi
   ho_stop_gate "$t" || rc=$?
   case $rc in
     0)

@@ -66,3 +66,5 @@ urgent rita "$t5"
 out=$(tick)
 assert_contains "D3 a reader's urgent label gives no priority: the older ticket starts" "$out" "start $t4"
 assert_contains "D3 the refused urgency is recorded" "$(jq -c 'select(.kind == "urgent-refused")' "$run/ledger.jsonl")" "\"ticket\":\"$t5\""
+jq '.tickets.urgent.pause = "now"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
+assert_exit "H-084 an unknown pause type is refused (exit 78)" 78 tick

@@ -552,6 +552,8 @@ ho_session_launch_one() {
   local lrc=0
   ho_limits_gate "$role" || lrc=$?
   [ "$lrc" -eq 0 ] || return "$lrc"
+  # D22: no new session while the service is down.
+  if ho_watch_outage_open; then echo "harness: the service is down (an outage is open in the run ledger); no session is launched" >&2; return "$HO_EXIT_OUTAGE"; fi
   local stopped=0
   ho_stop_gate "$ticket" || stopped=$?
   [ "$stopped" -eq 0 ] || { echo "harness: the run is stopped (or its stop state is unknown); no session is launched" >&2; return 75; }

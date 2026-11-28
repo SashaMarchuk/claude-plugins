@@ -104,6 +104,11 @@
     "used": "used_percentage",
     "resets": "resets_at"
   },
+  "_comment_outage": "Outage monitor (D22, H-096): the two plain HTTP checks of the watch script. The service is up when it answers below 500; the internet is up when it answers at all. The user or project config may set watch.service_url and watch.internet_url instead.",
+  "outage": {
+    "service_url": "https://api.anthropic.com/",
+    "internet_url": "https://www.gstatic.com/generate_204"
+  },
   "capabilities": {
     "hooks": true,
     "session_messages": true

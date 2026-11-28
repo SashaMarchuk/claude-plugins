@@ -347,9 +347,12 @@ ho_deliver_scan() {
 #     profile). A prompt line with no colour code at all (a plain capture, as iTerm2 gives) or
 #     with any other colour reads as unknown, so nothing is typed. A draft is still a draft.
 # For the check before Enter, "draft <text>" carries the box text, its lines joined. With the
-# third argument "reread", a first line "busy" or "idle" tells whether a busy mark shows.
+# third argument "reread", a first line "busy" or "idle" tells whether a busy mark shows. With
+# "learn" (issue #108, harness screen learn), lines under the box that are not the status area
+# do not stop the read; every other check stays, and an idle screen ends with "learn <width>"
+# (the frame width) and then the lines under the box, or "learned" when they all read already.
 ho_deliver_screen() {
-  local rec=$1 profile=$2 mode=${3-} cap plain esc rc sgr bsgr isgr sep cutm k kend i n line raw text part mark p pfx="" prefixes marks cand=0 csi top busy=""
+  local rec=$1 profile=$2 mode=${3-} cap plain esc rc sgr bsgr isgr sep cutm k kend i n line raw text part mark p pfx="" prefixes marks cand=0 csi top busy="" learn_under=0
   esc=$(printf '\033')
   csi="$esc\\[[0-?]*[ -/]*[@-~]"
   cap=$(HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec") ho_term_capture "$(jq -r '.handle // ""' "$rec")" \
@@ -441,7 +444,10 @@ EOF_PFX2
     (i=$((kend + 1)); while [ "$i" -lt "$n" ]; do printf '%s\n' "${P[i]}"; i=$((i + 1)); done) | ho_screen_status_area "$sdata" || src=$?
     case $src in
       0) ;;
-      1) echo "unknown a line under the input box is not the runtime's status area"; return 0 ;;
+      1)
+        if [ "$mode" = learn ]; then learn_under=1
+        else echo "unknown a line under the input box is not the runtime's status area (a custom status line can be learned once: harness screen <run> learn <session>)"; return 0; fi
+        ;;
       *) echo "unknown the status area under the input box could not be read"; return 0 ;;
     esac
   fi
@@ -527,6 +533,12 @@ EOF_BUSY2
     "$esc[${isgr}m$pfx"* | "$esc[${isgr}m${pfx% }") ;;
     *) echo "unknown the prompt does not show the idle colour, so idle is not proven"; return 0 ;;
   esac
+  if [ "$mode" = learn ]; then
+    [ "$learn_under" -eq 1 ] || { echo "learned"; return 0; }
+    printf 'learn %s\n' "$(printf '%s\n' "$top" | HO_SC_CONT=$(printf '[\200-\277]') LC_ALL=C awk '{ gsub(ENVIRON["HO_SC_CONT"], ""); print length($0) }')"
+    i=$((kend + 1)); while [ "$i" -lt "$n" ]; do printf '%s\n' "${P[i]}"; i=$((i + 1)); done
+    return 0
+  fi
   echo "empty"
 }
 

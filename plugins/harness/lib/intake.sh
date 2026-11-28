@@ -19,8 +19,13 @@
 #   3. Readiness: the main runtime, run without a terminal and with no tools (sandbox.no-tools
 #      of its runtime profile), from an empty folder, judges the fenced ticket text against the
 #      required content (tickets.required_content, default D6). Its verdict goes to the run ledger at every pickup. ready -> "start <id>" for
-#      the orchestrator; not ready -> numbered questions on the ticket and blocked (H-032; the
-#      configurable reaction of H-016 belongs to #51); no readable verdict -> needs-review.
+#      the orchestrator; not ready -> numbered questions on the ticket and blocked (H-032);
+#      no readable verdict -> needs-review. The mode (H-016, D37-INTAKE-5) is
+#      tickets.readiness.on_not_ready, else assume under the full profile and ask otherwise:
+#      ask turns every gap into a question; assume fills what it can and lists each assumption
+#      in one comment before the work starts. A ticket that starts gets the working brief
+#      (H-014, D8, D37-INTAKE-4): a "Working brief" comment, or with tickets.normalize "body" a
+#      new description, or with "off" nothing.
 #
 # Unblock (H-031, OPEN-10 decided under D37): a ready label on a blocked ticket is the unblock
 # command. A writer's ready label that is newer than the newest blocked label returns the ticket
@@ -32,7 +37,7 @@
 #   <run>/intake/poll.json   {"errors": n}; its modification time is the time of the last poll
 #
 # Settings: tickets.poll_seconds, tickets.required_content, tickets.target_repos,
-# tickets.readiness_timeout_seconds. No command is read from any config: the judge's command
+# tickets.readiness_timeout_seconds, tickets.readiness.on_not_ready, tickets.normalize. No command is read from any config: the judge's command
 # line comes from the runtime profile, which a project cannot add (D37-FLOW-8).
 # Exit codes: 64 usage, 69 the tracker could not be read, 75 the run is stopped or has ended,
 # 78 bad settings.
@@ -93,6 +98,33 @@ ho_in_targets() {
     { [ "$v" = '[]' ] && return 0; ho_in_err "tickets.target_repos must be a list of owner/name texts"; exit 78; }
 }
 
+# ho_in_mode: the reaction to a ticket that is not ready (H-016, D7, D37-INTAKE-5): ask or assume.
+# tickets.readiness.on_not_ready wins when set; otherwise the run's autonomy profile gives the
+# default: full assumes, every other profile (or one that cannot be read) asks.
+ho_in_mode() {
+  local v name
+  v=$(ho_in_cfg_json '.tickets.readiness.on_not_ready')
+  case $v in
+    '"ask"' | '"assume"') v=${v#\"}; printf '%s\n' "${v%\"}"; return 0 ;;
+    null) ;;
+    *) ho_in_err "tickets.readiness.on_not_ready must be ask or assume, not $v"; exit 78 ;;
+  esac
+  name=$(ho_au_profile 2>/dev/null | jq -r '.name // empty' 2>/dev/null) || name=""
+  if [ "$name" = full ]; then echo assume; else echo ask; fi
+}
+# ho_in_normalize: where the working brief goes (H-014, D8, D37-INTAKE-4): comment (not set),
+# body or off.
+ho_in_normalize() {
+  local v
+  v=$(ho_in_cfg_json '.tickets.normalize')
+  case $v in
+    null | '"comment"') echo comment ;;
+    '"body"') echo body ;;
+    '"off"') echo off ;;
+    *) ho_in_err "tickets.normalize must be body or off (or unset), not $v"; exit 78 ;;
+  esac
+}
+
 # ---- poll timing (D4) ----------------------------------------------------------------------
 ho_in_state() { printf '%s/intake/poll.json\n' "$HO_RUN_DIR"; }
 ho_in_errors() {
@@ -124,11 +156,14 @@ ho_in_record() { # <errors>: write the poll record; its time is now
 # verdict, and the ticket goes to needs-review.
 HO_IN_MAX_Q=10
 HO_IN_MAX_QLEN=300
+HO_IN_MAX_BRIEF=6000
 ho_in_judge() {
   local id=$1 qf=$2 prof timeout sid tmpl prompt out err ticket rc=0 i=0 verdict cwd
   local -a argv
   HO_IN_VERDICT=unknown
   : > "$qf"
+  : > "$qf.assumptions"
+  : > "$qf.brief"
   prof=$(ho_runtime_profile) || return 0
   if ! jq -e '(.modes | index("noninteractive")) != null
       and (.sandbox["no-tools"] | type == "array" and length > 0 and all(type == "string"))' "$prof" >/dev/null 2>&1; then
@@ -143,6 +178,18 @@ ho_in_judge() {
     while IFS= read -r line || [ -n "$line" ]; do
       case $line in
         (@REQUIRED@) ho_in_required | sed 's/^/- /' ;;
+        (@MODE@)
+          if [ "$HO_IN_MODE" = assume ]; then
+            printf '%s\n' 'Fill every gap you can infer from the text yourself, and list each such assumption in "assumptions", one short line each. Put in "questions" only what a person alone can answer; with no such question the ticket is ready.'
+          else
+            printf '%s\n' 'Put every gap in "questions": do not fill gaps with assumptions, and leave "assumptions" empty.'
+          fi ;;
+        (@BRIEF@)
+          if [ "$HO_IN_NORM" = off ]; then
+            printf '%s\n' 'Leave "brief" empty.'
+          else
+            printf '%s\n' 'When the ticket is ready, write in "brief" a structured working version of it in Markdown, with the headings Outcome, Scope, Acceptance criteria and Checks. Name the checks you infer from the text when the ticket names none. Keep the meaning of the ticket; add nothing it does not imply.'
+          fi ;;
         (@TICKET@) printf '%s\n' "$ticket" ;;
         (*) printf '%s\n' "$line" ;;
       esac
@@ -175,6 +222,14 @@ ho_in_judge() {
       printf '%s' "$verdict" | jq -r --argjson n "$HO_IN_MAX_Q" --argjson l "$HO_IN_MAX_QLEN" --arg home "${HOME:-}" \
         '[.questions[] | gsub("[[:cntrl:]]"; " ") | select(test("\\S"))
           | select(($home | length) < 2 or (contains($home) | not))][:$n][] | .[:$l]' > "$qf"
+      # Assumptions (assume mode) and the working brief get the same bounds; a brief that holds
+      # the home folder path is dropped whole.
+      printf '%s' "$verdict" | jq -r --argjson n "$HO_IN_MAX_Q" --argjson l "$HO_IN_MAX_QLEN" --arg home "${HOME:-}" \
+        '[(.assumptions // [])[] | select(type == "string") | gsub("[[:cntrl:]]"; " ") | select(test("\\S"))
+          | select(($home | length) < 2 or (contains($home) | not))][:$n][] | .[:$l]' > "$qf.assumptions"
+      printf '%s' "$verdict" | jq -r --argjson l "$HO_IN_MAX_BRIEF" --arg home "${HOME:-}" \
+        '.brief | select(type == "string") | explode | map(select(. == 9 or . == 10 or (. >= 32 and . != 127))) | implode
+          | select(test("\\S")) | select(($home | length) < 2 or (contains($home) | not)) | .[:$l]' > "$qf.brief"
       if [ "$(printf '%s' "$verdict" | jq -r .ready)" = true ]; then
         # Ready only with no open question for a human (H-012).
         if [ -s "$qf" ]; then HO_IN_VERDICT=not-ready; else HO_IN_VERDICT=ready; fi
@@ -349,19 +404,31 @@ EOF_REPOS
     ho_tk_post "$id" orchestrator pickup "picked up" - from ready to in-progress || return 2
   ho_ledger_append pickup ticket "$id" by "$login"
 
-  # 3. Readiness check, at every pickup (H-012).
+  # 3. Readiness check, at every pickup (H-012), in the mode of H-016 (ask or assume).
   HO_IN_STEP=readiness
   qf=$(mktemp "${TMPDIR:-/tmp}/ho-questions.XXXXXX") || return 2
   ho_in_judge "$id" "$qf"
-  ho_ledger_append readiness ticket "$id" verdict "$HO_IN_VERDICT" questions "$(grep -c . "$qf" || true)"
+  ho_ledger_append readiness ticket "$id" verdict "$HO_IN_VERDICT" mode "$HO_IN_MODE" \
+    questions "$(grep -c . "$qf" || true)" assumptions "$(grep -c . "$qf.assumptions" || true)"
   case $HO_IN_VERDICT in
-    ready) rm -f "$qf"; echo "start $id"; return 0 ;;
+    ready)
+      # assume: every assumption is listed on the ticket before the work starts (H-016).
+      if [ "$HO_IN_MODE" = assume ] && [ -s "$qf.assumptions" ]; then
+        HO_IN_STEP=assumptions
+        { printf 'The ticket left gaps; the harness filled them with these assumptions:\n\n'
+          sed 's/^/- /' "$qf.assumptions"
+          printf '\nIf one is wrong, a person with write access says so in a comment.\n'
+        } | ho_tk_post "$id" orchestrator assumptions "assumptions" - || { ho_in_rm_q "$qf"; return 2; }
+      fi
+      HO_IN_STEP=working-brief
+      ho_in_brief "$id" "$qf.brief" || { ho_in_rm_q "$qf"; return 2; }
+      ho_in_rm_q "$qf"; echo "start $id"; return 0 ;;
     not-ready)
-      ho_tk_ask "$id" "$qf" orchestrator || { rm -f "$qf"; return 2; }
-      rm -f "$qf"
+      ho_tk_ask "$id" "$qf" orchestrator || { ho_in_rm_q "$qf"; return 2; }
+      ho_in_rm_q "$qf"
       echo "blocked $id" ;;
     *)
-      rm -f "$qf"
+      ho_in_rm_q "$qf"
       if ho_tk_gh; then
         ho_in_review "$id" in-progress "the readiness check gave no readable verdict" || return 2
       else
@@ -370,6 +437,26 @@ EOF_REPOS
       echo "needs-review $id" ;;
   esac
   return 1
+}
+
+ho_in_rm_q() { rm -f "$1" "$1.assumptions" "$1.brief"; }
+
+# ho_in_brief <id> <brief-file>: the working brief (H-014, D8, D37-INTAKE-4). Not set: a new
+# "Working brief" comment, and the description stays as picked up. body: the description is
+# replaced by the brief. off: nothing. A judge that wrote no brief leaves one ledger line; it
+# never blocks the pickup (D8: structure does not gate).
+ho_in_brief() {
+  local id=$1 bf=$2
+  [ "$HO_IN_NORM" = off ] && return 0
+  if [ ! -s "$bf" ]; then
+    ho_ledger_append brief-missing ticket "$id"
+    return 0
+  fi
+  case $HO_IN_NORM in
+    body) ho_tk_set_body "$id" "$bf" || return 1 ;;
+    *) ho_tk_post "$id" orchestrator working-brief "Working brief" "$bf" || return 1 ;;
+  esac
+  ho_ledger_append working-brief ticket "$id" where "$HO_IN_NORM"
 }
 
 # ho_in_close_asked: close every session that asked a question and is not closed yet (H-032).
@@ -422,6 +509,8 @@ ho_in_tick() {
   ho_in_required >/dev/null || return
   ho_in_targets >/dev/null || return
   ho_in_seconds readiness_timeout_seconds 300 10 1800 >/dev/null || return
+  HO_IN_NORM=$(ho_in_normalize) || return
+  HO_IN_MODE=$(ho_in_mode) || return
   ho_tk_settings || return
   ho_in_halted || return
   if [ -f "$(ho_in_state)" ]; then

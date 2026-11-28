@@ -527,6 +527,29 @@ ho_tk_post() {
   rm -f "$tmp"
   return "$rc"
 }
+# ho_tk_set_body <id> <body-file>: replace the description (tickets.normalize "body", D37-INTAKE-4).
+# Local: the header's body-lines changes with it, and the comment log after the body is kept.
+ho_tk_set_body() {
+  if ho_tk_gh; then gh issue edit "$1" --repo "$HO_TK_REPO" --body-file "$2" >/dev/null
+  else ho_tk_locked ho_tk_l_set_body_locked "$1" "$2"; fi
+}
+ho_tk_l_set_body_locked() { # <id> <body-file>
+  local f start
+  f=$(ho_tk_l_file "$1") || return
+  start=$(ho_tk_l_log_start "$f")
+  [ -n "$start" ] || { ho_tk_err "local ticket $1 has no body-lines field; its description is not replaced"; return 65; }
+  ho_tk_l_write "$f" ho_tk_l_body_text "$f" "$2" "$start"
+}
+ho_tk_l_body_text() { # <file> <body-file> <log-start>
+  local n
+  n=$(LC_ALL=C awk 'END { print NR }' "$2") || return 1
+  ho_tk_l_header "$1" | LC_ALL=C awk -v n="$n" '/^body-lines:/ { print "body-lines: " n; next } { print }' || return 1
+  printf '\n'
+  cat "$2" || return 1
+  # Keep the old line break before the log: a body without a final line break gets one.
+  [ -z "$(tail -c 1 "$2")" ] || printf '\n'
+  LC_ALL=C awk -v s="$3" 'NR >= s' "$1"
+}
 # ho_tk_status_comment <id> <role> <from> <to> <reason> <next>: the D5 status-change comment.
 ho_tk_status_comment() {
   printf 'Reason: %s\nNext: %s\n' "$5" "$6" | ho_tk_post "$1" "$2" status "$3 -> $4" - from "$3" to "$4"

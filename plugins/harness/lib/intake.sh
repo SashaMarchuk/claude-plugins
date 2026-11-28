@@ -37,7 +37,7 @@
 #   <run>/intake/poll.json   {"errors": n}; its modification time is the time of the last poll
 #
 # Settings: tickets.poll_seconds, tickets.required_content, tickets.target_repos,
-# tickets.readiness_timeout_seconds, tickets.readiness.on_not_ready, tickets.normalize. No command is read from any config: the judge's command
+# tickets.readiness_timeout_seconds, tickets.readiness.on_not_ready, tickets.normalize, tickets.changes.mode. No command is read from any config: the judge's command
 # line comes from the runtime profile, which a project cannot add (D37-FLOW-8).
 # Exit codes: 64 usage, 69 the tracker could not be read, 75 the run is stopped or has ended,
 # 78 bad settings.
@@ -422,6 +422,8 @@ EOF_REPOS
       fi
       HO_IN_STEP=working-brief
       ho_in_brief "$id" "$qf.brief" || { ho_in_rm_q "$qf"; return 2; }
+      HO_IN_STEP=watch
+      ho_in_watch_init "$id" || { ho_in_rm_q "$qf"; return 2; }
       ho_in_rm_q "$qf"; echo "start $id"; return 0 ;;
     not-ready)
       ho_tk_ask "$id" "$qf" orchestrator || { ho_in_rm_q "$qf"; return 2; }
@@ -457,6 +459,164 @@ ho_in_brief() {
     *) ho_tk_post "$id" orchestrator working-brief "Working brief" "$bf" || return 1 ;;
   esac
   ho_ledger_append working-brief ticket "$id" where "$HO_IN_NORM"
+}
+
+# ---- ticket changes through comments (H-019 to H-023, D9) -----------------------------------
+# The tick reads new comments on every in-progress ticket this run picked up (GitHub only: local
+# tickets have no other authors). State per ticket, set when the work starts:
+#   <run>/intake/watch/<id>.json   {seen: <comments read>, body: <digest>, edit_noted: bool}
+#   <run>/notes/<id>/<n>.md        an accepted change, fenced, waiting for the next step boundary
+# A harness report (own account, ending in a machine line) is never a change. For every other comment:
+#   - an author without confirmed write access: a new linked ticket in needs-review
+#     (H-021, D37-INTAKE-2); the running work does not change;
+#   - a writer: the first line harness:apply or harness:new-ticket chooses, else
+#     tickets.changes.mode (apply by default, new-ticket, ignore; H-022, D37-INTAKE-6). apply
+#     after the ticket's lane merged becomes a new linked ticket. An applied change that names a
+#     configured target repository needs its author's write access there (D37-FLOW-8 c), else
+#     the ticket moves to needs-review. Otherwise it is queued as a note: "state begin" hands
+#     it to the worker at the next step boundary (H-023, D37-INTAKE-3), and the orchestrator
+#     returns the ticket to its execution step (D37-INTAKE-6).
+# A description edit is no change (D37-INTAKE-7): the first one gets one comment asking for the
+# change as a comment; later edits get none.
+ho_in_changes_mode() {
+  local v
+  v=$(ho_in_cfg_json '.tickets.changes.mode')
+  case $v in
+    null | '"apply"') echo apply ;;
+    '"new-ticket"') echo new-ticket ;;
+    '"ignore"') echo ignore ;;
+    *) ho_in_err "tickets.changes.mode must be apply, new-ticket or ignore, not $v"; exit 78 ;;
+  esac
+}
+ho_in_watch_file() { printf '%s/intake/watch/%s.json\n' "$HO_RUN_DIR" "$1"; }
+ho_in_digest() { cksum | awk '{ print $1 "-" $2 }'; }
+# ho_in_watch_init <id>: every comment so far counts as read; the description as picked up.
+ho_in_watch_init() {
+  local id=$1 json
+  ho_tk_gh || return 0
+  json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json body,comments 2>/dev/null) || return 1
+  mkdir -p "$HO_RUN_DIR/intake/watch" || return 1
+  jq -cn --argjson n "$(printf '%s' "$json" | jq '.comments | length')" \
+    --arg b "$(printf '%s' "$json" | jq -r '.body // ""' | ho_in_digest)" \
+    '{seen: $n, body: $b, edit_noted: false}' | ho_atomic_write "$(ho_in_watch_file "$id")"
+}
+# ho_in_merged <id>: the ticket's lane has a merge-confirmed line in this run.
+ho_in_merged() {
+  local lj lane
+  for lj in "$HO_RUN_DIR"/lanes/*.json; do
+    [ -f "$lj" ] || continue
+    [ "$(jq -r '.ticket // ""' "$lj" 2>/dev/null)" = "$1" ] || continue
+    lane=$(jq -r '.lane // ""' "$lj" 2>/dev/null)
+    ho_ledger_events | jq -e --arg l "$lane" 'select(.kind == "merge-confirmed" and .lane == $l)' >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+# ho_in_change_ticket <id> <n> <login> <text-file> <state>: a new ticket linked to the comment.
+ho_in_change_ticket() {
+  local id=$1 n=$2 who=$3 tf=$4 st=$5 bf url new
+  bf=$(mktemp "${TMPDIR:-/tmp}/ho-change.XXXXXX") || return 1
+  { printf 'A change proposed by %s in a comment on #%s, comment %s.\n\n' "$who" "$id" "$n"
+    cat "$tf"; } > "$bf"
+  url=$(gh issue create --repo "$HO_TK_REPO" --title "Change to #$id from comment $n" --body-file "$bf" --label "$HO_TK_PREFIX:$st") || { rm -f "$bf"; return 1; }
+  rm -f "$bf"
+  new=${url##*/}
+  case $new in '' | *[!0-9]*) return 1 ;; esac
+  printf 'Reason: the change in comment %s became a new ticket, #%s (%s).\nNext: The running work does not change.\n' "$n" "$new" "$st" |
+    ho_tk_post "$id" orchestrator change "change became #$new" - || return 1
+  HO_IN_NEW=$new
+}
+ho_in_watch() {
+  local id=$1 wf json own seen total k login body first who mode tf note repo named st extra=0
+  wf=$(ho_in_watch_file "$id")
+  [ -f "$wf" ] || { ho_in_watch_init "$id"; return 0; }
+  json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json body,comments 2>/dev/null) || return 1
+  seen=$(jq -r '.seen // 0' "$wf" 2>/dev/null) || seen=0
+  case $seen in '' | *[!0-9]*) seen=0 ;; esac
+  total=$(printf '%s' "$json" | jq '.comments | length')
+  own=$(ho_tk_own_login)
+  # Without the harness's own account no report can be told apart from a person's: wait.
+  [ -n "$own" ] || return 0
+  # D37-INTAKE-7: description edits.
+  if [ "$(printf '%s' "$json" | jq -r '.body // ""' | ho_in_digest)" != "$(jq -r '.body // ""' "$wf")" ] &&
+    [ "$(jq -r '.edit_noted' "$wf")" != true ]; then
+    printf 'The harness works from the description as it was picked up, so an edit to it is not taken into the work.\nPlease add the change as a comment on this ticket; a comment from a person with write access reaches the work at its next step.\n' |
+      ho_tk_post "$id" orchestrator edit-noted "description edit not taken" - || return 1
+    extra=1
+    jq -c '.edit_noted = true' "$wf" | ho_atomic_write "$wf" || return 1
+    ho_ledger_append change-edit ticket "$id"
+  fi
+  mode=$HO_IN_CHANGES
+  k=$seen
+  while [ "$k" -lt "$total" ]; do
+    login=$(printf '%s' "$json" | jq -r --argjson k "$k" '.comments[$k].author.login // ""')
+    k=$((k + 1))
+    # The harness's own reports end in a machine line (D13); a plain comment from the same
+    # account is a person's (a one-person setup signs in as the person).
+    if [ "$login" = "$own" ] && printf '%s' "$json" | jq -e --argjson k "$((k - 1))" --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE"'
+        (.comments[$k].body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "" | mline($re) != null' >/dev/null 2>&1; then
+      continue
+    fi
+    body=$(printf '%s' "$json" | jq -r --argjson k "$((k - 1))" '.comments[$k].body // ""' | LC_ALL=C tr -d '\r')
+    first=$(printf '%s\n' "$body" | awk 'NF { print tolower($0); exit }' | tr -d ' \t')
+    tf=$(mktemp "${TMPDIR:-/tmp}/ho-change-text.XXXXXX") || return 1
+    printf '%s\n' "$body" > "$tf"
+    ho_tk_login_ok "$login" || login=unknown
+    if [ "$(ho_tk_access "$login")" != writer ]; then
+      who=reader st=needs-review
+    else
+      who=writer st=ready
+      case $first in harness:apply) mode=apply ;; harness:new-ticket) mode=new-ticket ;; *) mode=$HO_IN_CHANGES ;; esac
+      [ "$mode" = apply ] && ho_in_merged "$id" && mode=new-ticket
+    fi
+    [ "$who" = reader ] && mode=new-ticket
+    case $mode in
+      ignore)
+        ho_ledger_append change ticket "$id" comment "$k" by "$login" result ignored
+        echo "change-ignored $id" ;;
+      new-ticket)
+        ho_in_change_ticket "$id" "$k" "$login" "$tf" "$st" || { rm -f "$tf"; return 1; }
+        ho_ledger_append change ticket "$id" comment "$k" by "$login" result "new-ticket" new "$HO_IN_NEW"
+        echo "change-ticket $id $HO_IN_NEW" ;;
+      apply)
+        named=""
+        while IFS= read -r repo; do
+          [ -n "$repo" ] || continue
+          printf '%s\n' "$body" | LC_ALL=C grep -Fqi -- "$repo" || continue
+          if [ "$(ho_tk_access "$login" "$repo")" != writer ]; then named=$repo; break; fi
+        done <<EOF_REPOS
+$(ho_in_targets | grep -vxF -- "$HO_TK_REPO" || true)
+EOF_REPOS
+        if [ -n "$named" ]; then
+          ho_tk_gh_set_state "$id" needs-review || { rm -f "$tf"; return 1; }
+          ho_tk_status_comment "$id" orchestrator in-progress needs-review \
+            "the change in comment $k names $named, where its author has no confirmed write access; it is not applied" \
+            "A person with write access to $named checks the change and sets the ready label again." || { rm -f "$tf"; return 1; }
+          ho_ledger_append change ticket "$id" comment "$k" by "$login" result needs-review repo "$named"
+          echo "needs-review $id"
+          k=$total
+        else
+          mkdir -p "$HO_RUN_DIR/notes/$id" || { rm -f "$tf"; return 1; }
+          note="$HO_RUN_DIR/notes/$id/$k.md"
+          { printf 'A change from %s (comment %s) arrived while you worked. Take it into the work from the execution step on.\n\n' "$login" "$k"
+            ho_tk_fence "$id" < "$tf"; } | ho_atomic_write "$note" || { rm -f "$tf"; return 1; }
+          ho_ledger_append change ticket "$id" comment "$k" by "$login" result applied note "$note"
+          echo "change-applied $id"
+        fi ;;
+    esac
+    rm -f "$tf"
+  done
+  # The harness's own comments posted during this watch are read too.
+  jq -c --argjson n "$((total + extra))" '.seen = $n' "$wf" | ho_atomic_write "$wf"
+}
+# ho_in_watch_all: every in-progress ticket this run picked up.
+ho_in_watch_all() {
+  local ids id
+  ho_tk_gh || return 0
+  ids=$(ho_tickets ids in-progress 2>/dev/null) || return 0
+  for id in $ids; do
+    ho_ledger_events | jq -e --arg t "$id" 'select(.kind == "pickup" and .ticket == $t)' >/dev/null 2>&1 || continue
+    ho_in_watch "$id" || echo "error $id"
+  done
 }
 
 # ho_in_close_asked: close every session that asked a question and is not closed yet (H-032).
@@ -511,6 +671,7 @@ ho_in_tick() {
   ho_in_seconds readiness_timeout_seconds 300 10 1800 >/dev/null || return
   HO_IN_NORM=$(ho_in_normalize) || return
   HO_IN_MODE=$(ho_in_mode) || return
+  HO_IN_CHANGES=$(ho_in_changes_mode) || return
   ho_tk_settings || return
   ho_in_halted || return
   if [ -f "$(ho_in_state)" ]; then
@@ -520,6 +681,7 @@ ho_in_tick() {
     if [ "$age" -lt "$wait" ]; then echo "not-due $((wait - age))"; return 0; fi
   fi
   ho_in_close_asked
+  ho_in_watch_all
   if ! ids=$(ho_tickets ids ready 2>/dev/null); then
     ho_in_record $(( $(ho_in_errors) + 1 )) || return 1
     ho_ledger_append poll-error errors "$(ho_in_errors)"
@@ -570,7 +732,8 @@ usage: harness intake <run-dir> <verb>
   tick [--max N]      one poll when it is due: close sessions that asked a question, then take
                       ready tickets up to the free worker slots (and N). Prints one line each:
                       start|blocked|needs-review|unblocked|kept-blocked|kept-in-progress|
-                      kept-done|error <id>, closed|close-failed <session>,
+                      kept-done|error <id>, change-applied|change-ignored <id>,
+                      change-ticket <id> <new-id>, closed|close-failed <session>,
                       not-due <seconds>, tracker-error, stopped, ended
   poll [--max N]      tick until the run is stopped or has ended
 USAGE

@@ -48,6 +48,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/intake.sh"
 # shellcheck source=../lib/ship.sh
 . "$HO_ROOT/lib/ship.sh"
+# shellcheck source=../lib/verify.sh
+. "$HO_ROOT/lib/verify.sh"
 # shellcheck source=../lib/stop.sh
 . "$HO_ROOT/lib/stop.sh"
 # shellcheck source=../lib/lifecycle.sh
@@ -71,6 +73,7 @@ verbs:
   slot       slot <run-dir> acquire|release|list|limits|heavy-ops|heavy-add: engine-enforced limits
   loop       loop <run-dir> integration|ready|verdict|merge|status: the engine-checked merge
   ship       ship <run-dir> push|pr|merged|status: ticket branch, draft PR, merge confirmed by git
+  verify     verify <run-dir> record|tests|block|comment|remarks|reviews: the Verification block and verdict paths
   autonomy   autonomy show|list|migrate, or autonomy <run-dir> check|approve|end: profile checks
   flow       flows: list | check | steps | plan | preflight <flow> | copy <flow> <new> | render <flow> <role> ...
   screen     screen text: classify a capture, watch a session, pre-trust a folder, wait
@@ -96,6 +99,7 @@ case $verb in
   flow)     ho_flow_main "$@" ;;
   loop)     ho_loop_main "$@" ;;
   ship)     ho_ship_main "$@" ;;
+  verify)   ho_verify_main "$@" ;;
   autonomy) ho_autonomy_main "$@" ;;
   screen)   ho_screen_main "$@" ;;
   intake)   ho_intake_main "$@" ;;

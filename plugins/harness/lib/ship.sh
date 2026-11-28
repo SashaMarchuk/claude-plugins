@@ -32,7 +32,8 @@
 # Exit codes: 64 usage, 65 refused (missing record, bad name), 70 not confirmed by git, 72 the
 # smoke test failed, 76 waits for a human (the profile runs no post-merge steps), 77 the
 # autonomy profile does not allow it, 78 config error.
-# Requires lib/run.sh, lib/config.sh, lib/autonomy.sh, lib/loop.sh, lib/tickets.sh, lib/sessions.sh.
+# Requires lib/run.sh, lib/config.sh, lib/autonomy.sh, lib/loop.sh, lib/tickets.sh, lib/sessions.sh
+# and ho_vf_block from lib/verify.sh.
 
 ho_ship_err() { printf 'harness: ship: %s\n' "$*" >&2; }
 
@@ -178,7 +179,10 @@ ho_ship_pr() {
     else
       printf 'Ticket: local ticket %s\n' "$S_TICKET"
     fi
+    echo
   } > "$body"
+  # H-053: every PR the harness opens holds the Verification block, built from recorded results.
+  ho_vf_block "$lane" >> "$body" || { ho_ship_err "the Verification block cannot be built; no PR is opened"; return 65; }
   url=$(gh pr create --draft --head "$S_BRANCH" --base "$base" --title "$S_TITLE" --body-file "$body" $(ho_ship_gh_repo) 2>"$HO_RUN_DIR/logs/ship-pr.log") \
     || { ho_ledger_append ship-pr-failed lane "$lane"; ho_ship_err "gh pr create failed (see $HO_RUN_DIR/logs/ship-pr.log)"; return 70; }
   url=$(printf '%s\n' "$url" | tail -n 1)

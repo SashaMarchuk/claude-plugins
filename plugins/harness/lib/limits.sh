@@ -229,6 +229,61 @@ ho_limits_status_lines() {
   printf '%s' "$1" | jq -r '.rows[] | "\(.account)\t\(.window)\t\(if .used == null or .state == "unknown" then "unknown" else "\(.used)%" end)\t\(if .resets_at == null then "-" else (.resets_at | todate) end)\t\(.state)\(if .at != null then "\tthreshold \(.at)% \(.action)" else "" end)"'
 }
 
+# ho_limits_wait <account> [--until EPOCH]: the STOP-aware wait for a hit limit (H-114, D28c).
+# The reset time is --until, else the one an open wait of this account recorded (PR-8: a reading
+# that turns unreadable or disagrees does not move it), else the latest reset of the account's
+# windows at 100% (else of all its windows), else limits.unknown_wait_seconds (900) from now. One
+# wait-begin line, one wait-end line (PR-5: one wait, not one line per cycle). The D21 attempt
+# clock stops while the wait is open (lib/recover.sh). Exit 0 at the reset time plus
+# limits.resume_margin_seconds (60): the caller continues the run with no owner action, a
+# session by its ID (D37-LIFECYCLE-1). Exit 75 when a STOP arrives during the wait.
+ho_limits_wait() {
+  local a=${1-} until="" slice margin now left st reading
+  shift || true
+  ho_limits_account_ok "$a" || { echo "harness: limits wait needs an account label (a-z 0-9 -)" >&2; return 64; }
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --until) [ $# -ge 2 ] && case $2 in '' | *[!0-9]*) false ;; esac || { echo "harness: --until needs epoch seconds" >&2; return 64; }; until=$2; shift 2 ;;
+      *) ho_limits_usage; return 64 ;;
+    esac
+  done
+  slice=$(ho_cfg_int '.limits.wait_slice_seconds' 30) || return 78
+  [ "$slice" -ge 1 ] || slice=1
+  margin=$(ho_cfg_int '.limits.resume_margin_seconds' 60) || return 78
+  local open
+  open=$(ho_ledger_events | jq -sr --arg a "$a" '[.[] | select((.kind == "wait-begin" or .kind == "wait-end") and .reason == "limit" and .account == $a)] | last // {} | if .kind == "wait-begin" then .until else "" end')
+  if [ -n "$open" ]; then
+    until=$open
+  else
+    if [ -z "$until" ]; then
+      reading=$(ho_limits_reading "$a")
+      until=$(printf '%s' "$reading" | jq -r 'if . == null then "" else
+          ([.windows[] | select((.used | type) == "number" and .used >= 100) | .resets_at | numbers] | max)
+          // ([.windows[] | .resets_at | numbers] | max) // "" end' 2>/dev/null) || until=""
+      [ -n "$until" ] || until=$(( $(date +%s) + $(ho_cfg_int '.limits.unknown_wait_seconds' 900) ))
+    fi
+    ho_ledger_append wait-begin reason limit account "$a" until "$until"
+  fi
+  echo "limits: account $a waits until $(jq -rn --argjson u "$until" '$u | todate') (+${margin}s)"
+  while :; do
+    st=0; ho_stopped 2>/dev/null || st=$?
+    if [ "$st" -eq 0 ]; then
+      ho_ledger_append wait-end reason limit account "$a" result stopped
+      echo "limits: a stop ended the wait of account $a"
+      return 75
+    fi
+    now=$(date +%s)
+    left=$(( until + margin - now ))
+    if [ "$left" -le 0 ]; then
+      ho_ledger_append wait-end reason limit account "$a" result reset
+      echo "limits: account $a reset; continue"
+      return 0
+    fi
+    [ "$left" -le "$slice" ] || left=$slice
+    sleep "$left"
+  done
+}
+
 ho_limits_usage() {
   cat >&2 <<'USAGE'
 usage: harness limits record                 status line command: read the runtime's status line
@@ -237,6 +292,9 @@ usage: harness limits record                 status line command: read the runti
                                              ledger and run the threshold actions
        harness limits <run-dir> status       one line per account and window (unknown is never OK)
        harness limits <run-dir> gate [role]  exit 0 a start may go ahead, 74 spawns are paused
+       harness limits <run-dir> wait <account> [--until EPOCH]
+                                             wait for a hit limit to reset; 0 continue, 75 a
+                                             stop ended the wait
 USAGE
 }
 
@@ -256,6 +314,7 @@ ho_limits_main() {
       ho_limits_status_lines "$v"
       ;;
     gate) ho_limits_gate "${3:-worker}" || rc=$?; exit "$rc" ;;
+    wait) shift 2; ho_limits_wait "$@" || rc=$?; exit "$rc" ;;
     *) ho_limits_usage; exit 64 ;;
   esac
 }

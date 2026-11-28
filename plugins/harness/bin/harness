@@ -54,6 +54,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/limits.sh"
 # shellcheck source=../lib/recover.sh
 . "$HO_ROOT/lib/recover.sh"
+# shellcheck source=../lib/resources.sh
+. "$HO_ROOT/lib/resources.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -76,6 +78,7 @@ verbs:
   intake     intake <run-dir> interval|tick|poll: take labelled tickets, check access and readiness
   lifecycle  lifecycle <run-dir> check|done <name>: end of run, standby, closing finished sessions
   limits     limits record | limits <run-dir> check|status|gate|wait: subscription limits per account
+  resources  resources <run-dir> oom|sample | resources recommend: out-of-memory cap, usage history
   recover    recover last | recover <run-dir> tick|reopen|state: recovery of stopped sessions
   feedback   feedback preview <file> | send --draft <dir> --code <code> --yes: report a harness problem
 USAGE
@@ -103,6 +106,7 @@ case $verb in
   feedback) ho_feedback_main "$@" ;;
   limits)   ho_limits_main "$@" ;;
   recover)  ho_rec_main "$@" ;;
+  resources) ho_res_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

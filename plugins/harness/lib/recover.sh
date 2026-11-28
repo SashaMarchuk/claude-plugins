@@ -232,7 +232,10 @@ ho_rec_tick_one() {
   if [ "$n" -ge "$HO_REC_ATTEMPTS" ]; then
     s=$(jq -c --argjson late "$HO_REC_LATE" '.phase = "blocked" | .late_due = (if $late > 0 then .clock + $late * 3600 else null end)' <<<"$s")
     ho_rec_save "$t" "$s"
-    ho_rec_block "$t" "Recovery attempts ran out: $n attempts failed for this ticket's session. The ticket is blocked; set the ready label to try again."
+    local cause=""
+    ho_ledger_events | jq -e --arg t "$t" 'select(.kind == "oom-check" and .ticket == $t and .result == "confirmed")' >/dev/null 2>&1 \
+      && cause=" The cause was a confirmed out-of-memory stop of its container (D37-LIMITS-4)."
+    ho_rec_block "$t" "Recovery attempts ran out: $n attempts failed for this ticket's session.$cause The ticket is blocked; set the ready label to try again."
     echo "ticket $t blocked: attempts ran out"
     return 0
   fi

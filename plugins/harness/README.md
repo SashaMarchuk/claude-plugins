@@ -108,6 +108,13 @@ Design D14, D20, D21, D28c, D32, D37-LIFECYCLE-1, D37-LIFECYCLE-2, D37-SESSIONS-
 - **Wait for a limit reset.** `limits <run> wait <account> [--until EPOCH]` waits until the reset time of the hit window (the open wait's recorded time, else the reading, else `limits.unknown_wait_seconds`) plus `limits.resume_margin_seconds` (60), in slices of `limits.wait_slice_seconds` (30). Exit 0: continue the run with no owner action. A STOP during the wait ends it with exit 75. One `wait-begin` and one `wait-end` line per wait.
 - **Reboot.** Nothing starts by itself; the plugin installs nothing into the operating system. `recover last` names the newest unfinished run of the project. `recover <run> reopen` resumes each session whose process is gone by its recorded ID and leaves every live one; no recorded process ID is signalled. With `recovery.ask_first: true` it exits 77 and starts nothing unless `--yes` is given.
 
+## Out-of-memory cap and usage history (H-106, H-108)
+
+Design D26b, D37-LIMITS-1, D37-LIMITS-2, D37-LIMITS-4, D37-LIMITS-6, D37-FLOW-8. `lib/resources.sh`, `harness resources`.
+
+- **`resources <run> oom <container-id> [--ticket T]`.** A session reports a stopped container by its exact ID. The engine runs the check command for that one container: the shipped default in `limits/oom-check.json` (the container runtime's own record), or a user-config entry `limits.oom_check.list.<label>` with `argv` (`{container}` is filled in) and a `jq` filter that must give `true`. A project config may only select `limits.oom_check.label`; one that holds a command is refused at `run new` and by the check, and nothing from it runs. A failed, slow (20 s), unclear or missing answer leaves the cap as it is. A confirmed stop lowers the run's worker cap by one in `<run>/limits.json`, once per container ID, never below 1. The configured value is not touched, and the next run starts from it. The stopped task restarts through recovery when a slot is free; when its attempts run out, the block comment names the out-of-memory cause.
+- **`resources <run> sample`** appends one reading (CPU load, memory in use, process count, the run's workers) to `<project>/.harness/usage/history.jsonl`. **`resources recommend`** shows a recommended total (and 1 per stage and heavy job) only when that history holds readings with workers; it never writes a config.
+
 ## Flows
 
 A flow config is a folder with `flow.json` and one prompt file per step. It holds the steps, their order and their runners (S8-15). Gates and permissions belong to the autonomy profile, a separate file: a `flow.json` that sets one of its keys (`gates`, `push`, `pr`, `merge` and the like) is refused, and no flow verb writes outside the flow folder (D37-FLOW-3).

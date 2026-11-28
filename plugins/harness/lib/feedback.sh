@@ -4,11 +4,19 @@
 #
 #   harness feedback preview <description-file>
 #       Build the issue from the person's words plus the fixed technical context. Print the
-#       full text, a draft folder and a confirm code. Sends nothing (with a GitHub ticket
-#       source it reads ticket counts only).
-#   harness feedback send --draft <dir> --code <code> --yes
+#       full text, then the end marker line, then a draft id and a confirm code. Sends nothing
+#       (with a GitHub ticket source it reads ticket counts only).
+#   harness feedback send --draft <id> --code <code> --yes
 #       Send exactly the draft that was shown. Refused without --yes, with a wrong code, or
 #       when the context holds a line outside the fixed fields of lib/feedback.jq.
+#
+# Drafts (issue #124): a draft lives only in the private draft folder
+# $HO_USER_DIR/feedback-drafts (mode 700), under an opaque random id. send takes that id, or a
+# path whose real place is a draft of that folder; a link, or anything outside, is refused (65)
+# before anything is read, written or removed, and cleanup removes only inside the folder. The
+# control lines (DRAFT, CODE) follow a fixed end marker line that a description may not hold
+# (preview refuses it, 64), so description text can never imitate them. Drafts older than 7
+# days are removed at the next preview.
 #
 # The technical context is built from named fields only (D43): plugin version, runtime label
 # and version, operating system words, and a state summary of the last run (stop state, event
@@ -28,7 +36,7 @@ ho_fb_usage() {
 usage: harness feedback <verb>
 
   preview <description-file>                  show the full issue text; sends nothing
-  send --draft <dir> --code <code> --yes      file the shown draft as one issue, no labels
+  send --draft <id> --code <code> --yes       file the shown draft as one issue, no labels
 USAGE
 }
 
@@ -40,13 +48,51 @@ ho_fb_repo() {
     sed -nE 's#^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(/.*)?$#\1/\2#p'
 }
 
-# ho_fb_sha <file>: the confirm code of a draft (first 16 hex digits of its SHA-256).
+# ho_fb_sha: the confirm code of the text on stdin (first 16 hex digits of its SHA-256).
 ho_fb_sha() {
   local s
-  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 < "$1")
-  elif command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum < "$1")
+  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256)
+  elif command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum)
   else return 1; fi
+  [ -n "$s" ] || return 1
   printf '%s\n' "${s:0:16}"
+}
+
+# The line that ends the issue text; the control lines come only after it (issue #124).
+HO_FB_MARKER='=== end of the issue text; harness control lines follow ==='
+
+# ho_fb_root: the private draft folder, made with mode 700 if missing. Fails when it cannot be
+# made, or when it is a link or not a folder.
+ho_fb_root() {
+  local r="${HO_USER_DIR:-$HOME/.claude/harness}/feedback-drafts"
+  [ -L "$r" ] && return 1
+  (umask 077 && mkdir -p "$r") 2>/dev/null || return 1
+  [ -d "$r" ] && [ ! -L "$r" ] || return 1
+  chmod 700 "$r" 2>/dev/null || return 1
+  (cd "$r" && pwd -P)
+}
+
+# ho_fb_draft_dir <id-or-path>: the real folder of that draft, or fail. An id is letters and
+# digits only; a path must resolve, with no link in its last part, to a draft folder right
+# inside the draft folder.
+ho_fb_draft_dir() {
+  local root=$1 want=$2 d
+  case $want in
+    '') return 1 ;;
+    */*) d=$want ;;
+    *[!A-Za-z0-9]*) return 1 ;;
+    *) d="$root/$want" ;;
+  esac
+  d=${d%/}
+  # The folder it names must be the draft folder itself, before anything else is looked at.
+  [ "$(cd "$(dirname "$d")" 2>/dev/null && pwd -P)" = "$root" ] || return 1
+  case $(basename "$d") in '' | *[!A-Za-z0-9]*) return 1 ;; esac
+  [ -L "$d" ] && return 1
+  [ -d "$d" ] || return 2
+  d=$(cd "$d" 2>/dev/null && pwd -P) || return 1
+  [ "$(dirname "$d")" = "$root" ] || return 1
+  case $(basename "$d") in *[!A-Za-z0-9]*) return 1 ;; esac
+  printf '%s\n' "$d"
 }
 
 # ho_fb_jq <jq-expr> [jq-options...]: run jq with lib/feedback.jq loaded (one definition of the
@@ -187,14 +233,21 @@ ho_fb_summary() {
 
 # ho_fb_preview <description-file>
 ho_fb_preview() {
-  local desc=${1-} repo draft first title os why
+  local desc=${1-} repo draft first title os why root id code
   [ -n "$desc" ] && [ $# -eq 1 ] || { ho_fb_usage >&2; return 64; }
   [ -f "$desc" ] && [ -r "$desc" ] || { ho_fb_err "cannot read the description file"; return 74; }
   [ "$(wc -c < "$desc")" -le 60000 ] || { ho_fb_err "the description is over 60000 bytes; shorten it"; return 64; }
   [ -n "$(tr -d ' \t\r\n' < "$desc")" ] || { ho_fb_err "the description is empty; describe the problem first"; return 64; }
+  ! grep -qF -- "$HO_FB_MARKER" "$desc" ||
+    { ho_fb_err "the description holds the harness end marker line; remove that line"; return 64; }
   repo=$(ho_fb_repo)
   [ -n "$repo" ] || { ho_fb_err "the plugin manifest names no repository"; return 78; }
-  draft=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/ho-feedback.XXXXXX") || { ho_fb_err "cannot make a draft folder"; return 1; }
+  root=$(ho_fb_root) || { ho_fb_err "cannot make the private draft folder"; return 1; }
+  # Old drafts (the person said no) go after 7 days; only folders right inside the draft folder.
+  find "$root" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+  draft=$(umask 077 && mktemp -d "$root/XXXXXXXXXXXX") || { ho_fb_err "cannot make a draft folder"; return 1; }
+  id=$(basename "$draft")
+  case $id in *[!A-Za-z0-9]*) ho_fb_err "cannot make a draft id"; rm -rf "$draft"; return 1 ;; esac
   os="$(ho_fb_fit os_s "$(uname -s 2>/dev/null)") $(ho_fb_fit os_r "$(uname -r 2>/dev/null)") $(ho_fb_fit os_m "$(uname -m 2>/dev/null)")"
   # The description as written (trailing blank lines dropped), then the context from named
   # fields with fixed shapes.
@@ -219,20 +272,21 @@ ho_fb_preview() {
     rm -rf "$draft"
     return 65
   fi
-  if ! { cat "$draft/title.txt" "$draft/body.md" > "$draft/all.txt" && ho_fb_sha "$draft/all.txt" > "$draft/code.txt"; }; then
+  if ! code=$(cat "$draft/title.txt" "$draft/body.md" | ho_fb_sha); then
     ho_fb_err "no SHA-256 tool found"; rm -rf "$draft"; return 1
   fi
   printf 'This issue will be filed in %s under your own GitHub login, with no labels.\n' "$repo"
   printf 'Nothing is sent until you say yes.\n\n'
   printf 'Title: %s\n\n' "$title"
   cat "$draft/body.md"
-  printf '\nDRAFT %s\n' "$draft"
-  printf 'CODE %s\n' "$(cat "$draft/code.txt")"
+  printf '\n%s\n' "$HO_FB_MARKER"
+  printf 'DRAFT %s\n' "$id"
+  printf 'CODE %s\n' "$code"
 }
 
-# ho_fb_send --draft <dir> --code <code> --yes
+# ho_fb_send --draft <id> --code <code> --yes
 ho_fb_send() {
-  local draft="" code="" yes=0 repo want why url
+  local draft="" code="" yes=0 repo want why url root rc=0
   while [ $# -gt 0 ]; do
     case $1 in
       --draft) [ $# -ge 2 ] || { ho_fb_usage >&2; return 64; }; draft=$2; shift 2 ;;
@@ -243,17 +297,24 @@ ho_fb_send() {
   done
   [ "$yes" -eq 1 ] || { ho_fb_err "nothing sent: the person did not say yes (pass --yes only after a yes)"; return 65; }
   [ -n "$draft" ] && [ -n "$code" ] || { ho_fb_usage >&2; return 64; }
+  # Only a draft of the private draft folder, found before anything is read or removed (#124).
+  root=$(ho_fb_root) || { ho_fb_err "nothing sent: the private draft folder cannot be used"; return 65; }
+  draft=$(ho_fb_draft_dir "$root" "$draft") || rc=$?
+  case $rc in
+    0) ;;
+    2) ho_fb_err "no draft with that id; run preview first"; return 66 ;;
+    *) ho_fb_err "nothing sent: that is not a draft id of the private draft folder (pass the id from the DRAFT line)"; return 65 ;;
+  esac
   for f in title.txt body.md repo.txt; do
-    [ -f "$draft/$f" ] && [ ! -L "$draft/$f" ] || { ho_fb_err "no draft at that folder; run preview first"; return 66; }
+    [ -f "$draft/$f" ] && [ ! -L "$draft/$f" ] || { ho_fb_err "no draft with that id; run preview first"; return 66; }
   done
-  cat "$draft/title.txt" "$draft/body.md" > "$draft/all.txt" || { ho_fb_err "cannot read the draft"; return 66; }
-  want=$(ho_fb_sha "$draft/all.txt") || { ho_fb_err "no SHA-256 tool found"; return 1; }
+  want=$(cat "$draft/title.txt" "$draft/body.md" | ho_fb_sha) || { ho_fb_err "no SHA-256 tool found"; return 1; }
   [ "$code" = "$want" ] || { ho_fb_err "nothing sent: the draft is not the text that was shown (code mismatch); preview again"; return 65; }
   why=$(ho_fb_gate "$draft/body.md") || { ho_fb_err "nothing sent: the draft context is not the fixed one ($why)"; return 65; }
   repo=$(ho_fb_repo)
   [ -n "$repo" ] && [ "$repo" = "$(cat "$draft/repo.txt")" ] || { ho_fb_err "nothing sent: the draft names another repository"; return 65; }
   url=$(gh issue create --repo "github.com/$repo" --title "$(cat "$draft/title.txt")" --body-file "$draft/body.md") ||
-    { ho_fb_err "the issue was not created (the tracker call failed); the draft is kept at $draft"; return 1; }
+    { ho_fb_err "the issue was not created (the tracker call failed); the draft is kept (id $(basename "$draft"))"; return 1; }
   rm -rf "$draft"
   printf 'OK filed %s\n' "$url"
 }

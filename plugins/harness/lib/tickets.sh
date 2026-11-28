@@ -5,14 +5,19 @@
 #
 # Two backends, one verb set:
 #   github  issues with one state label <prefix>:<state>
+#   adapter an external tracker without labels, through an adapter program (H-007, D1): the five
+#           states map to the tracker's own statuses (tickets.status_map); with no status for
+#           ready, a line "harness:ready" in the ticket text is the last-resort trigger
 #   local   <dir>/<n>-<slug>.md with a header (title, status, created, body-lines), a blank
 #           line, the body, then the comment log. body-lines is the number of body lines, so
 #           the comment parser starts after the body and never reads body text as a record.
 # Five states (design D2): ready, in-progress, blocked, needs-review, done.
 #
 # Settings (own HO_ variables; the config lookup is a separate task and can set them later):
-#   HO_TICKETS_SOURCE     local (default) | github
+#   HO_TICKETS_SOURCE     local (default) | github | adapter
 #   HO_TICKETS_REPO       owner/name, required for github
+#   HO_TICKETS_ADAPTER    the adapter program, required for adapter. It comes from the caller's
+#                         environment (trusted, D61), never from a project config (D37-FLOW-8).
 #   HO_TICKETS_DIR        local ticket folder (default ./.harness/tickets)
 #   HO_STATE_PREFIX       state label prefix (default harness)
 #   HO_TICKET_LOCK_WAIT   seconds an add waits for the local lock (default 30)
@@ -81,7 +86,12 @@ ho_tk_settings() {
   case $HO_TK_SOURCE in
     local) ;;
     github) [ -n "$HO_TK_REPO" ] || { ho_tk_err "HO_TICKETS_SOURCE=github needs HO_TICKETS_REPO"; return 78; } ;;
-    *) ho_tk_err "unknown HO_TICKETS_SOURCE: $HO_TK_SOURCE (local or github)"; return 78 ;;
+    adapter)
+      HO_TK_ADAPTER=${HO_TICKETS_ADAPTER:-}
+      [ -n "$HO_TK_ADAPTER" ] && [ -f "$HO_TK_ADAPTER" ] && [ -x "$HO_TK_ADAPTER" ] ||
+        { ho_tk_err "HO_TICKETS_SOURCE=adapter needs HO_TICKETS_ADAPTER, an executable adapter program"; return 78; }
+      HO_TK_REPO=tracker ;;
+    *) ho_tk_err "unknown HO_TICKETS_SOURCE: $HO_TK_SOURCE (local, github or adapter)"; return 78 ;;
   esac
   case $HO_TK_PREFIX in
     ''|*[!A-Za-z0-9_.-]*) ho_tk_err "bad HO_STATE_PREFIX: $HO_TK_PREFIX"; return 78 ;;
@@ -93,6 +103,7 @@ ho_tk_settings() {
 }
 
 ho_tk_gh() { [ "$HO_TK_SOURCE" = github ]; }
+ho_tk_ad() { [ "$HO_TK_SOURCE" = adapter ]; }
 
 HO_TK_ID_MAX_DIGITS=9
 ho_tk_check_id() {
@@ -257,6 +268,103 @@ ho_tk_gh_comment() { # <id> <body-file>
   # every role signs in as one account, so editing the last comment erased other roles' reports.
   gh issue comment "$1" --repo "$HO_TK_REPO" --body-file "$2" >/dev/null || return 1
   echo "OK commented $1"
+}
+
+# ----------------------------------------------------------------------- adapter
+# Adapter protocol (one program, JSON on stdout, exit 0 on success):
+#   list                      [{id, title, status, body}]
+#   view <id>                 {id, title, body, status, comments: [{email, body}]}
+#   set-status <id> <status>  set-body <id> <file>  comment <id> <file>
+#   trigger <id> status|text  {email}: who set the current status, or wrote the text (null: unknown)
+# People are e-mail addresses from the tracker's own API, never from ticket text (D37-INTAKE-8).
+ho_tk_ad_call() { "$HO_TK_ADAPTER" "$@"; }
+# ho_tk_status_map: the map {state: status}, checked: every state but ready must be mapped, each
+# status at most once, statuses are one-line texts (D1). Exit 78 on a bad map.
+ho_tk_status_map() {
+  local v
+  v=$(ho_cfg '.tickets.status_map | tojson' '') || return 78
+  printf '%s' "${v:-null}" | jq -ce --arg s "$HO_STATES" '
+    select(type == "object" and (keys - ($s | split(" ")) | length) == 0
+      and all(.[]; type == "string" and length > 0 and length <= 100 and (test("[[:cntrl:]]") | not))
+      and ([.[]] | length) == ([.[]] | unique | length)) as $m
+    | select(all(["in-progress", "blocked", "needs-review", "done"][]; $m[.] != null)) | $m' 2>/dev/null ||
+    { ho_tk_err "tickets.status_map must map in-progress, blocked, needs-review and done (and ready, unless the text line is the trigger) to distinct tracker statuses"; return 78; }
+}
+# ho_tk_ad_state_of <ticket-json> <map>: the harness state of a tracker ticket, or nothing.
+ho_tk_ad_state_of() {
+  printf '%s' "$1" | jq -r --argjson m "$2" '. as $t | ([$m | to_entries[] | select(.value == $t.status) | .key] | first)
+    // (if $m.ready == null and ((.body // "") | gsub("\r"; "") | split("\n") | any(gsub("^\\s+|\\s+$"; "") == "harness:ready")) then "ready" else empty end)'
+}
+ho_tk_ad_state() { # <id> -> state or nothing
+  local map json
+  map=$(ho_tk_status_map) || return 78
+  json=$(ho_tk_ad_call view "$1") || return 1
+  ho_tk_ad_state_of "$json" "$map"
+}
+ho_tk_ad_rows() { # <state> -> number<TAB>title
+  local map
+  map=$(ho_tk_status_map) || return 78
+  ho_tk_ad_call list | jq -c '.[]' | while IFS= read -r t; do
+    [ "$(ho_tk_ad_state_of "$t" "$map")" = "$1" ] || continue
+    printf '%s' "$t" | jq -r '"\(.id)\t\(.title | gsub("[\r\n\t]"; " "))"'
+  done | sort -n
+}
+ho_tk_ad_set_state() { # <id> <state>
+  local map st
+  map=$(ho_tk_status_map) || return 78
+  st=$(printf '%s' "$map" | jq -r --arg s "$2" '.[$s] // empty')
+  [ -n "$st" ] || { ho_tk_err "the tracker has no status for $2; set it by hand"; return 1; }
+  ho_tk_ad_call set-status "$1" "$st" >/dev/null
+}
+# ho_tk_ad_trigger_login <id>: the code host account behind the ready trigger (status, or the
+# text line when the map has no ready status), through the identity map; nothing when unknown.
+ho_tk_ad_trigger_login() {
+  local map kind email
+  map=$(ho_tk_status_map) || return 78
+  kind=status
+  [ "$(printf '%s' "$map" | jq -r '.ready // empty')" != "" ] || kind=text
+  email=$(ho_tk_ad_call trigger "$1" "$kind" 2>/dev/null | jq -r '.email // empty' 2>/dev/null) || email=""
+  ho_tk_identity "$email"
+}
+ho_tk_ad_show() {
+  local id=$1 json map state c login ok
+  json=$(ho_tk_ad_call view "$id") || { ho_tk_err "no ticket $id"; return 66; }
+  map=$(ho_tk_status_map) || return 78
+  state=$(ho_tk_ad_state_of "$json" "$map")
+  printf '### Ticket %s (state: %s)\n' "$id" "${state:-none}"
+  # Only comments by a mapped writer reach the text (H-018, D9); the adapter's own reports carry
+  # a machine line and stay as harness text.
+  ok='[]'
+  while IFS= read -r c; do
+    login=$(ho_tk_identity "$(printf '%s' "$c" | jq -r '.email // empty')")
+    if [ -n "$login" ] && [ "$(ho_tk_access_all "$login")" = writer ]; then ok=$(printf '%s' "$ok" | jq -c '. + [true]')
+    elif printf '%s' "$c" | jq -e --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE"'(.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "" | mline($re) != null and (mline($re).author == null)' >/dev/null 2>&1; then
+      ok=$(printf '%s' "$ok" | jq -c '. + [true]')
+    else ok=$(printf '%s' "$ok" | jq -c '. + [false]'); fi
+  done <<EOF_C
+$(printf '%s' "$json" | jq -c '.comments[]?')
+EOF_C
+  printf '%s' "$json" | jq -r --argjson ok "$ok" '
+    "Title: \(.title)", "", (.body // ""),
+    (.comments // [] | to_entries[] | if $ok[.key] then "", "--- comment \(.key + 1) ---", .value.body
+      else "", "--- comment \(.key + 1): left out (no confirmed write access) ---" end)' | ho_tk_fence "$id"
+}
+
+# ---------------------------------------------------------------- identity map
+# ho_tk_identity <email>: the code host account for a tracker e-mail, from the one identity map
+# (D37-NOTIFICATIONS-3, D37-INTAKE-8) in the user config only, never the project config:
+#   "identities": [{"account": "<login>", "emails": ["..."], "senders": {"<channel>": "<id>"}}]
+# E-mails compare without regard to letter case. No e-mail, no entry, an e-mail in more than one
+# entry, a bad account name or an unreadable map: nothing (unmapped, so read-only).
+ho_tk_identity() {
+  local email=${1-} uf a
+  [ -n "$email" ] || return 0
+  uf=$(ho_user_config 2>/dev/null) || return 0
+  [ -f "$uf" ] && [ ! -L "$uf" ] || return 0
+  a=$(jq -r --arg e "$email" '[(.identities // [])[] | select(type == "object" and (.emails | type) == "array"
+      and any(.emails[]; type == "string" and ascii_downcase == ($e | ascii_downcase)))] | if length == 1 then .[0].account // empty else empty end' "$uf" 2>/dev/null) || a=""
+  ho_tk_login_ok "$a" && printf '%s\n' "$a"
+  return 0
 }
 
 # ------------------------------------------------------------------------- local
@@ -529,6 +637,7 @@ ho_tk_post() {
   tmp=$(mktemp "${TMPDIR:-/tmp}/ho-comment.XXXXXX") || return 1
   ho_tk_format "$@" > "$tmp" || { rm -f "$tmp"; return 1; }
   if ho_tk_gh; then ho_tk_gh_comment "$id" "$tmp" >/dev/null || rc=$?
+  elif ho_tk_ad; then ho_tk_ad_call comment "$id" "$tmp" >/dev/null || rc=$?
   else ho_tk_locked ho_tk_l_comment_locked "$id" "$tmp" || rc=$?; fi
   rm -f "$tmp"
   return "$rc"
@@ -537,6 +646,7 @@ ho_tk_post() {
 # Local: the header's body-lines changes with it, and the comment log after the body is kept.
 ho_tk_set_body() {
   if ho_tk_gh; then gh issue edit "$1" --repo "$HO_TK_REPO" --body-file "$2" >/dev/null
+  elif ho_tk_ad; then ho_tk_ad_call set-body "$1" "$2" >/dev/null
   else ho_tk_locked ho_tk_l_set_body_locked "$1" "$2"; fi
 }
 ho_tk_l_set_body_locked() { # <id> <body-file>
@@ -555,6 +665,12 @@ ho_tk_l_body_text() { # <file> <body-file> <log-start>
   # Keep the old line break before the log: a body without a final line break gets one.
   [ -z "$(tail -c 1 "$2")" ] || printf '\n'
   LC_ALL=C awk -v s="$3" 'NR >= s' "$1"
+}
+# ho_tk_set_state <id> <state>: the one state change on every backend (H-030).
+ho_tk_set_state() {
+  if ho_tk_gh; then ho_tk_gh_set_state "$1" "$2"
+  elif ho_tk_ad; then ho_tk_ad_set_state "$1" "$2"
+  else ho_tk_locked ho_tk_l_set_state_locked "$1" "$2"; fi
 }
 # ho_tk_status_comment <id> <role> <from> <to> <reason> <next>: the D5 status-change comment.
 ho_tk_status_comment() {
@@ -580,6 +696,21 @@ ho_tk_access() {
     case $p in admin | write) echo writer; return 0 ;; esac
   fi
   echo read-only
+}
+# ho_tk_access_all <login>: "writer" only with write access on every configured target repository
+# (tickets.target_repos); the adapter backend's tracker is no code host, so the access comes from
+# the code repositories (H-010). No target configured: read-only.
+ho_tk_access_all() {
+  local repos r n=0
+  repos=$(ho_cfg '.tickets.target_repos | if type == "array" then .[] else empty end' '' 2>/dev/null) || repos=""
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    n=$((n + 1))
+    [ "$(ho_tk_access "$1" "$r")" = writer ] || { echo read-only; return 0; }
+  done <<EOF_R
+$repos
+EOF_R
+  [ "$n" -gt 0 ] && echo writer || echo read-only
 }
 # ho_tk_gh_events <id>: the issue's events as one JSON array, oldest first; fails when unreadable.
 ho_tk_gh_events() {
@@ -654,8 +785,7 @@ ho_tk_ask() {
     printf '\nReply in a comment on this ticket. Only a reply from a person with write access resumes the work.\n'
   } | ho_tk_post "$id" "$role" question question - questions "$n" || { rm -f "$tmp"; return 1; }
   rm -f "$tmp"
-  if ho_tk_gh; then ho_tk_gh_set_state "$id" blocked || return 1
-  else ho_tk_locked ho_tk_l_set_state_locked "$id" blocked || return 1; fi
+  ho_tk_set_state "$id" blocked || return 1
   HO_TK_ASKED=$n
 }
 # ho_tk_step_records <id>: "<step>\t<result>" for each trusted step record, oldest first.
@@ -729,6 +859,13 @@ ho_tickets() {
       ho_tk_check_id "${1:-}" || return
       set -- "$((10#$1))" "${@:2}" ;;
   esac
+  # The adapter backend serves what intake needs; the other verbs come with a full tracker backend.
+  if ho_tk_ad; then
+    case $verb in
+      ids | list | show | render | fence | comment | ask | review | block | template | help) ;;
+      *) ho_tk_err "$verb is not available on the adapter backend in this beta"; return 64 ;;
+    esac
+  fi
   case $verb in
     bootstrap)
       if ho_tk_gh; then ho_tk_gh_bootstrap || return 1
@@ -739,14 +876,16 @@ ho_tickets() {
     ids|list)
       local state=${1:-ready} rows
       ho_tk_check_state "$state" || return
-      if ho_tk_gh; then rows=$(ho_tk_gh_rows "$state") || return 1; else rows=$(ho_tk_l_rows "$state") || return 1; fi
+      if ho_tk_gh; then rows=$(ho_tk_gh_rows "$state") || return 1
+      elif ho_tk_ad; then rows=$(ho_tk_ad_rows "$state") || return 1
+      else rows=$(ho_tk_l_rows "$state") || return 1; fi
       if [ "$verb" = ids ]; then
         [ -z "$rows" ] || printf '%s\n' "$rows" | cut -f1
       else
         { [ -z "$rows" ] || printf '%s\n' "$rows"; } | ho_tk_fence "list $state"
       fi ;;
     show|render)
-      if ho_tk_gh; then ho_tk_gh_show "$1"; else ho_tk_l_show "$1"; fi ;;
+      if ho_tk_gh; then ho_tk_gh_show "$1"; elif ho_tk_ad; then ho_tk_ad_show "$1"; else ho_tk_l_show "$1"; fi ;;
     fence)
       ho_tk_fence "$1" ;;
     add)
@@ -787,11 +926,7 @@ ho_tickets() {
       local brole
       ho_tk_need_file "${2:-}" || return
       brole=$(ho_tk_role "") || return 64
-      if ho_tk_gh; then
-        ho_tk_gh_set_state "$1" blocked || return
-      else
-        ho_tk_locked ho_tk_l_set_state_locked "$1" blocked || return
-      fi
+      ho_tk_set_state "$1" blocked || return
       ho_tk_post "$1" "$brole" blocked blocked "$2" || return
       echo "OK blocked $1" ;;
     ask)
@@ -837,8 +972,7 @@ ho_tickets() {
     template)
       ho_tk_template ;;
     review)
-      if ho_tk_gh; then ho_tk_gh_set_state "$1" needs-review || return
-      else ho_tk_locked ho_tk_l_set_state_locked "$1" needs-review || return; fi
+      ho_tk_set_state "$1" needs-review || return
       echo "OK needs-review $1" ;;
     release)
       if ho_tk_gh; then

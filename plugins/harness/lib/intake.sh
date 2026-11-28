@@ -249,7 +249,7 @@ HO_IN_NEXT_STEP="A person with write access should check the ticket and set the 
 
 # ho_in_review <id> <from> <reason>: -> needs-review with one status comment.
 ho_in_review() {
-  ho_tk_gh_set_state "$1" needs-review || return 1
+  ho_tk_set_state "$1" needs-review || return 1
   ho_tk_status_comment "$1" orchestrator "$2" needs-review "$3" "$HO_IN_NEXT_STEP" || return 1
 }
 
@@ -285,9 +285,7 @@ ho_in_pickup() {
   echo "error $1"
   return 1
 }
-ho_in_set_state() { # <id> <state>: on either backend
-  if ho_tk_gh; then ho_tk_gh_set_state "$1" "$2"; else ho_tk_locked ho_tk_l_set_state_locked "$1" "$2"; fi
-}
+ho_in_set_state() { ho_tk_set_state "$@"; } # <id> <state>: on every backend
 
 # ho_in_pickup_steps <id>: returns 0 start, 1 handled (not started), 2 a step failed.
 ho_in_pickup_steps() {
@@ -309,6 +307,18 @@ ho_in_pickup_steps() {
     fi
     # A login of an unexpected shape is no login: read-only, and it never reaches a path or the ledger.
     ho_tk_login_ok "$login" || login=""
+  elif ho_tk_ad; then
+    # A tracker without labels (H-007, D1): the state comes from the mapped status (or the
+    # last-resort text line), and the trigger author is the tracker's e-mail for whoever set it,
+    # matched to a code host account through the identity map (H-010, D37-INTAKE-8). An unknown
+    # author is no login: read-only.
+    state=$(ho_tk_ad_state "$id") || { ho_in_err "cannot read ticket $id on the tracker"; return 2; }
+    case " $state " in *" ready "*) ;; *)
+      ho_ledger_append pickup-skipped ticket "$id" state "${state:-none}" reason "no ready trigger"
+      return 1 ;;
+    esac
+    login=$(ho_tk_ad_trigger_login "$id") || login=""
+    ho_tk_login_ok "$login" || login=""
   else
     # Local tickets: whoever can write the ticket folder can write the repository.
     state=ready login=local
@@ -321,7 +331,7 @@ ho_in_pickup_steps() {
   local cur
   for cur in in-progress done; do
     case " $state " in *" $cur "*)
-      ho_tk_gh_set_state "$id" "$cur" || return 2
+      ho_tk_set_state "$id" "$cur" || return 2
       ho_ledger_append pickup-skipped ticket "$id" state "$cur" by "${login:-unknown}"
       echo "kept-$cur $id"
       return 1 ;;
@@ -346,7 +356,16 @@ ho_in_pickup_steps() {
     fi ;;
   esac
 
-  # 1. Write access of the trigger author, on the ticket repository and every named target.
+  # 1. Write access of the trigger author, on the ticket repository and every named target. On a
+  # tracker without labels it is the access on every configured target repository (H-010).
+  if ho_tk_ad; then
+    if [ -z "$login" ] || [ "$(ho_tk_access_all "$login")" != writer ]; then
+      ho_in_review "$id" ready "the person behind the ready trigger is unknown or has no confirmed write access to every target repository" || return 2
+      ho_ledger_append intake ticket "$id" verdict needs-review by "${login:-unknown}"
+      echo "needs-review $id"
+      return 1
+    fi
+  fi
   if ho_tk_gh; then
     if [ -z "$login" ] || [ "$(ho_tk_access "$login")" != writer ]; then
       ho_in_review "$id" ready "the person who set the ready label has no confirmed write access to $HO_TK_REPO" || return 2
@@ -397,7 +416,8 @@ EOF_REPOS
       return 2
     fi
   else
-    ho_tk_locked ho_tk_l_set_state_locked "$id" in-progress ready || return 2
+    if ho_tk_ad; then ho_tk_ad_set_state "$id" in-progress || { HO_IN_CLAIMED=1; return 2; }
+    else ho_tk_locked ho_tk_l_set_state_locked "$id" in-progress ready || return 2; fi
   fi
   HO_IN_CLAIMED=1 HO_IN_STEP=pickup-comment
   printf 'The harness took this ticket and checks its readiness now.\n' |
@@ -431,7 +451,7 @@ EOF_REPOS
       echo "blocked $id" ;;
     *)
       ho_in_rm_q "$qf"
-      if ho_tk_gh; then
+      if ho_tk_gh || ho_tk_ad; then
         ho_in_review "$id" in-progress "the readiness check gave no readable verdict" || return 2
       else
         ho_tk_locked ho_tk_l_set_state_locked "$id" needs-review || return 2
@@ -675,6 +695,7 @@ ho_in_tick() {
   HO_IN_MODE=$(ho_in_mode) || return
   HO_IN_CHANGES=$(ho_in_changes_mode) || return
   ho_tk_settings || return
+  if ho_tk_ad; then ho_tk_status_map >/dev/null || return; fi
   ho_in_halted || return
   if [ -f "$(ho_in_state)" ]; then
     wait=$(ho_in_wait "$interval" "$(ho_in_errors)")

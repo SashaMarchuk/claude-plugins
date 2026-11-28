@@ -19,7 +19,7 @@ two='{"acct-a": {"normal_login": true}, "acct-b": {"normal_login": true}}'
 setu ".accounts = {list: $two}"
 r=$("$h" run new)
 out=$(feed "$r" acct-a "{\"five_hour\":$(win 12.5),\"seven_day\":$(win 40),\"odd_window\":$(win 7)}")
-assert_contains "D28: the status line command prints the reading it kept" "$out" "limits acct-a:"
+assert_eq "D28: with no status line of the user's own the record command prints nothing" "" "$out"
 feed "$r" acct-b "{\"seven_day\":$(win 55)}" > /dev/null
 st=$("$h" limits "$r" status)
 assert_contains "H-109: both added accounts are read (first)" "$st" "acct-a	five_hour	12.5%"
@@ -27,6 +27,28 @@ assert_contains "H-109: both added accounts are read (second)" "$st" "acct-b	sev
 assert_contains "H-109: a window that is neither 5-hour nor weekly is read under its own name" "$st" "acct-a	odd_window	7%"
 assert_eq "H-109: an account with no 5-hour window is not an error" "1" "$(printf '%s\n' "$st" | grep -c '^acct-b')"
 assert_eq "H-109: no window reads unknown when every account reported" "0" "$(printf '%s\n' "$st" | grep -c unknown)"
+
+# ---- D28: a harness session keeps the user's own status line ----
+mkdir -p "$HOME/.claude"
+cat > "$base/userline.sh" <<'SH'
+#!/bin/bash
+m=$(jq -r .model.id)
+printf 'my line \033[2m%s\033[0m  \xe2\x94\x80 tail' "$m"
+SH
+chmod +x "$base/userline.sh"
+jq -n --arg c "$base/userline.sh" '{statusLine: {type: "command", command: $c}}' > "$HOME/.claude/settings.json"
+want=$(printf '{"model":{"id":"m"}}' | "$base/userline.sh" | od -An -tx1)
+got=$(feed "$r" acct-a "{\"seven_day\":$(win 41)}" | od -An -tx1)
+assert_eq "D28: the user's own status line passes through byte for byte" "$want" "$got"
+assert_eq "D28: the reading is still kept when the user's line runs" 41 "$(jq -r .windows.seven_day.used "$r/limits/acct-a.json")"
+jq -n '{statusLine: {type: "command", command: "echo broken >&2; exit 3"}}' > "$HOME/.claude/settings.json"
+rc=0; out=$(feed "$r" acct-a "{\"seven_day\":$(win 42)}") || rc=$?
+assert_eq "D28: a failing user status line never fails the record command" 0 "$rc"
+assert_eq "D28: a failing user status line never breaks the reading" 42 "$(jq -r .windows.seven_day.used "$r/limits/acct-a.json")"
+jq -n --arg h "$h" '{statusLine: {type: "command", command: ($h + " limits record")}}' > "$HOME/.claude/settings.json"
+feed "$r" acct-a "{\"seven_day\":$(win 40)}" > /dev/null
+assert_eq "D28: a user line that is the record command itself does not call itself again" 40 "$(jq -r .windows.seven_day.used "$r/limits/acct-a.json")"
+rm -f "$HOME/.claude/settings.json"
 
 # ---- H-110 / H-112: thresholds are off unless set ----
 feed "$r" acct-a "{\"five_hour\":$(win 99),\"seven_day\":$(win 99)}" > /dev/null

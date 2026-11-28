@@ -44,18 +44,31 @@ ho_limits_user_dir() { printf '%s/limits\n' "${HO_USER_DIR:-$HOME/.claude/harnes
 
 ho_limits_account_ok() { printf '%s' "${1-}" | grep -Eqx '[a-z0-9][a-z0-9-]{0,39}'; }
 
-# ho_limits_record: read the status line JSON on stdin, keep the reading, print a short line.
-# It never fails the status line: any problem prints a short note and exits 0.
+# ho_limits_record: read the status line JSON on stdin, keep the reading, then run the user's
+# own status line command with the same stdin and print its output unchanged, so a harness
+# session keeps the user's line (the screen reader expects its shape: status_first_line). The
+# user's command is the one in the settings the session would otherwise load
+# (status_line.user_settings and .user_command in runtime data, {config_dir} as the session
+# gets it). With none, nothing is printed. A failure of the reading or of the user's command
+# never fails the other, and the status line command always exits 0.
 ho_limits_record() {
-  local acct=${HO_ACCOUNT:-default} profile in w u r dir reading out
-  ho_limits_account_ok "$acct" || acct=default
+  local in profile
   in=$(cat) || in=""
-  profile=$(ho_runtime_profile 2>/dev/null) || { echo "limits: no runtime profile"; return 0; }
-  w=$(jq -r '.status_line.windows // empty' "$profile" 2>/dev/null)
-  u=$(jq -r '.status_line.used // empty' "$profile" 2>/dev/null)
-  r=$(jq -r '.status_line.resets // empty' "$profile" 2>/dev/null)
-  [ -n "$w" ] && [ -n "$u" ] && [ -n "$r" ] || { echo "limits: the runtime has no status line data"; return 0; }
-  reading=$(printf '%s' "$in" | jq -c --arg w "$w" --arg u "$u" --arg r "$r" --arg acct "$acct" --argjson ts "$(date +%s)" '
+  profile=$(ho_runtime_profile 2>/dev/null) || return 0
+  printf '%s' "$in" | ho_limits_keep "$profile" 2>/dev/null || true
+  ho_limits_user_line "$profile" "$in" || true
+  return 0
+}
+
+# ho_limits_keep <profile>: the reading of stdin, kept for $HO_ACCOUNT.
+ho_limits_keep() {
+  local profile=$1 acct=${HO_ACCOUNT:-default} w u r dir reading
+  ho_limits_account_ok "$acct" || acct=default
+  w=$(jq -r '.status_line.windows // empty' "$profile")
+  u=$(jq -r '.status_line.used // empty' "$profile")
+  r=$(jq -r '.status_line.resets // empty' "$profile")
+  [ -n "$w" ] && [ -n "$u" ] && [ -n "$r" ] || return 0
+  reading=$(jq -c --arg w "$w" --arg u "$u" --arg r "$r" --arg acct "$acct" --argjson ts "$(date +%s)" '
       def epoch: if type == "number" then floor
         elif type == "string" then (try (sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) catch null)
         else null end;
@@ -63,12 +76,26 @@ ho_limits_record() {
       | if ($win | type) != "object" then error("no windows") else . end
       | {schemaVersion: 2, account: $acct, ts: $ts,
          windows: ($win | with_entries(select(.key | test("^[A-Za-z0-9_-]{1,40}$"))
-           | .value = (if (.value | type) == "object" then {used: .value[$u], resets_at: (.value[$r] | epoch)} else {used: null, resets_at: null} end)))}' 2>/dev/null) \
-    || { echo "limits: no reading"; return 0; }
+           | .value = (if (.value | type) == "object" then {used: .value[$u], resets_at: (.value[$r] | epoch)} else {used: null, resets_at: null} end)))}') \
+    || return 0
   if [ -n "${HO_RUN_DIR:-}" ] && [ -f "$HO_RUN_DIR/run.json" ]; then dir="$HO_RUN_DIR/limits"; else dir=$(ho_limits_user_dir); fi
-  mkdir -p "$dir" 2>/dev/null && [ ! -L "$dir/$acct.json" ] && printf '%s\n' "$reading" | ho_atomic_write "$dir/$acct.json" 2>/dev/null || true
-  out=$(printf '%s' "$reading" | jq -r '.windows | to_entries | map("\(.key) \(if (.value.used | type) == "number" then "\(.value.used | floor)%" else "?" end)") | join(" · ")')
-  printf 'limits %s: %s\n' "$acct" "${out:-none}"
+  mkdir -p "$dir" && [ ! -L "$dir/$acct.json" ] && printf '%s\n' "$reading" | ho_atomic_write "$dir/$acct.json"
+}
+
+# ho_limits_user_line <profile> <stdin-text>: run the user's own status line command.
+ho_limits_user_line() {
+  local profile=$1 in=$2 cdir sf key cmd
+  # A user line that is itself this command must not call itself again.
+  [ -z "${HO_LIMITS_IN_RECORD:-}" ] || return 0
+  sf=$(jq -r '.status_line.user_settings // ""' "$profile")
+  key=$(jq -r '.status_line.user_command // ""' "$profile")
+  [ -n "$sf" ] && [ -n "$key" ] || return 0
+  cdir=$(ho_rt_config_dir "$profile" "" 2>/dev/null) || return 0
+  sf=${sf//\{config_dir\}/$cdir}
+  [ -f "$sf" ] || return 0
+  cmd=$(jq -r "$key | strings" "$sf" 2>/dev/null) || return 0
+  [ -n "$cmd" ] || return 0
+  printf '%s' "$in" | HO_LIMITS_IN_RECORD=1 /bin/bash -c "$cmd" 2>/dev/null || true
 }
 
 # ho_limits_accounts: the accounts to read: every label in the user config's accounts.list,

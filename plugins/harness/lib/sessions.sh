@@ -404,6 +404,8 @@ ho_session_launcher_text() {
   printf 'export PATH=%s\n' "$(ho_q "$path")"
   printf 'export HO_PROJECT_DIR=%s HO_RUN_DIR=%s HO_RUN_ID=%s\n' "$(ho_q "$HO_PROJECT_DIR")" "$(ho_q "$HO_RUN_DIR")" "$(ho_q "$HO_RUN_ID")"
   printf 'export HO_SESSION_NAME=%s HO_SESSION_ROLE=%s HO_SESSION_ID=%s\n' "$(ho_q "$name")" "$(ho_q "$role")" "$(ho_q "$sid")"
+  # D28: the account label the status line records its limits under (lib/limits.sh).
+  printf 'export HO_ACCOUNT=%s\n' "$(ho_q "${account:-default}")"
   # H-089 (D37-SESSIONS-2): the mark the liveness hook needs; without it the hook does nothing.
   # A config read that fails keeps every event on, never silently none.
   local hook_events
@@ -481,11 +483,12 @@ ho_session_attempts() {
         *) line="$line $(ho_q "$el")" ;;
       esac
     done <<EOF_ARGV
-$(jq -r --arg sid "$sid" --arg model "$m" --arg title "$title" --arg perm "$perm" --arg resume "$resume" '
-    def fill: gsub("\\{session_id\\}"; $sid) | gsub("\\{model\\}"; $model) | gsub("\\{title\\}"; $title);
+$(jq -r --arg sid "$sid" --arg model "$m" --arg title "$title" --arg perm "$perm" --arg resume "$resume" --arg sl "${HO_SL_FILE-}" '
+    def fill: gsub("\\{session_id\\}"; $sid) | gsub("\\{model\\}"; $model) | gsub("\\{title\\}"; $title) | gsub("\\{status_settings\\}"; $sl);
     (if $resume == "1" then .argv.resume else .argv.new end)
     + (if $model != "" then .argv.model else [] end)
     + .argv.title
+    + (if $sl != "" then (.status_line.argv // []) else [] end)
     + .permissions[$perm]
     + (if $resume == "1" then [] else .argv.prompt end)
     | map(fill) | .[]' "$profile")
@@ -544,6 +547,11 @@ ho_session_launch_one() {
   ho_session_name_ok "$name" || return 65
   # A stopped run launches nothing new (H-086, D25a). Only a soft:ticket stop lets a session of a
   # ticket that began before the stop start, so that ticket can run to its end.
+  # H-110 (D28): a limit threshold whose action pauses spawns refuses a worker start (74). An
+  # unreadable limit never refuses (H-111). It runs first, so a soft stop it records is seen below.
+  local lrc=0
+  ho_limits_gate "$role" || lrc=$?
+  [ "$lrc" -eq 0 ] || return "$lrc"
   local stopped=0
   ho_stop_gate "$ticket" || stopped=$?
   [ "$stopped" -eq 0 ] || { echo "harness: the run is stopped (or its stop state is unknown); no session is launched" >&2; return 75; }
@@ -709,7 +717,16 @@ ho_session_launch_one() {
     return 77
   fi
   [ "$trust_rc" -eq 0 ] || ho_ledger_append pretrust-skipped name "$name" cwd "$cwd" reason "$trust_why"
-  attempts=$(ho_session_attempts "$profile" "$sid" "$title" "$perm" "$([ -n "$resume" ] && echo 1 || echo 0)" "$models") || { rm -f "$rec"; return 78; }
+  # D28: the status line of each session records its account's limits (lib/limits.sh). The
+  # settings file comes from runtime data (status_line.settings); a runtime without it gets none.
+  local sl_file=""
+  if jq -e '(.status_line.settings | type) == "object" and (.status_line.argv | type) == "array"' "$profile" >/dev/null 2>&1; then
+    sl_file="$HO_RUN_DIR/status-line-settings.json"
+    jq --arg cmd "$(ho_q "$HO_ROOT/bin/harness") limits record" \
+      '.status_line.settings | walk(if type == "string" then gsub("\\{record_command\\}"; $cmd) else . end)' "$profile" \
+      | ho_atomic_write "$sl_file" || { rm -f "$rec"; return 1; }
+  fi
+  attempts=$(HO_SL_FILE=$sl_file ho_session_attempts "$profile" "$sid" "$title" "$perm" "$([ -n "$resume" ] && echo 1 || echo 0)" "$models") || { rm -f "$rec"; return 78; }
 
   ho_session_launcher_text "$name" "$role" "$acct_name" "$acct_cmd" "$sid" "$cwd" "$prompt" "$pidfile" "$closing" \
     "$HO_RUN_DIR/logs/launcher.log" "$path" "$(ho_cfg_int '.session.boot_grace_seconds' 45)" \

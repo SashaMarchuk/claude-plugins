@@ -87,6 +87,18 @@ The engine enforces the worker cap, one heavy job at a time and the stage limits
 - **Stages.** `acquire stage:<id>` and `release stage:<id>`; `browser` and every other stage default to 1 (`limits.stages.<id>`). A session that needs a stage slot and the heavy slot takes the stage slot first.
 - `slot <run-dir> list` shows the held slots and `slot <run-dir> limits` the limits. No free-memory check is made (S8-21).
 
+## Subscription limits (H-109 to H-112)
+
+Design D28, D28a, D28b, D29 and S8-23. `lib/limits.sh`, `harness limits`.
+
+- **Reading.** Each session gets the runtime's settings file argument (`status_line` in the runtime profile) with the status line command `harness limits record`. That command reads the status line JSON on stdin and keeps one reading per account in `<run>/limits/<account>.json`; outside a run it writes `<user dir>/limits/`. The launcher exports `HO_ACCOUNT`, the account label (`default` for the normal login). Every window the account reports is kept under its own name; the 5-hour window may be missing, and that is no error.
+- **Accounts.** Every label in the user config's `accounts.list` is read, plus any account with a reading in the run; with an empty list, the normal login (`default`).
+- **Thresholds.** Optional, per window: `limits.thresholds.<window>`, or `limits.thresholds["*"]` for every window without its own key. A value is a percent or `{"at": <percent>, "action": <action>}`. Lookup per window: project window, project `*`, user window, user `*`. Nothing set means off, and no reserve is kept; the reserve of a window is the part above its threshold (D29). A value above 100 never triggers. Actions: `pause_spawns` (the default), `soft_stop_step`, `soft_stop_ticket`, `hard_stop`. Until hard stops are built, `hard_stop` pauses spawns and records a decision line.
+- **Pause.** A worker launch in a run where a threshold paused spawns exits 74 and writes nothing. The pause stops nothing that runs. It lifts when the reading drops below the threshold, or when the window's reset time passes (the old reading then reads unknown).
+- **Unknown.** No reading, an unreadable one, or a window past its reset time reads `unknown` in `limits <run> status` and is recorded once in the run ledger (`limits-unknown`). Unknown never blocks a start (H-111).
+- `limits <run> check` reads every account, records changes (`limits-over`, `limits-clear`, `limits-unknown`) and runs the actions; a soft-stop action records the stop and prints its text for the caller to deliver. `limits <run> gate [role]` answers 0 or 74.
+- **Endpoint read.** Off by default (`limits.endpoint_read: false`). Only the user config can switch it on and name `limits.endpoint_command`, which prints `{"windows": {...}}` for the account in `HO_ACCOUNT`. It is used only for an account with no status line reading. A project config is never read for it.
+
 ## Flows
 
 A flow config is a folder with `flow.json` and one prompt file per step. It holds the steps, their order and their runners (S8-15). Gates and permissions belong to the autonomy profile, a separate file: a `flow.json` that sets one of its keys (`gates`, `push`, `pr`, `merge` and the like) is refused, and no flow verb writes outside the flow folder (D37-FLOW-3).

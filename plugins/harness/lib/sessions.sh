@@ -555,7 +555,12 @@ ho_session_launch_one() {
   # D22: no new session while the service is down.
   if ho_watch_outage_open; then echo "harness: the service is down (an outage is open in the run ledger); no session is launched" >&2; return "$HO_EXIT_OUTAGE"; fi
   local stopped=0
-  ho_stop_gate "$ticket" || stopped=$?
+  # D37-SESSIONS-4: during a soft stop the orchestrator still has work, so it and the context
+  # watcher may be (re)started under a soft stop; an unknown stop state still refuses.
+  case $role in
+    orchestrator | watcher) ho_stop_gate_soft || stopped=$? ;;
+    *) ho_stop_gate "$ticket" || stopped=$? ;;
+  esac
   [ "$stopped" -eq 0 ] || { echo "harness: the run is stopped (or its stop state is unknown); no session is launched" >&2; return 75; }
   # An ended run launches nothing (H-079); a recorded resume ("state <run> resume") opens it again.
   ! ho_run_ended || { echo "harness: the run has ended; no session is launched (record a resume to open it again)" >&2; return 75; }

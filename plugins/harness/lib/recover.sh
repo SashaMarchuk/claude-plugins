@@ -51,9 +51,16 @@ ho_rec_settings() {
 }
 
 # ho_rec_wait_open: 0 while a limit wait or an outage is open in the ledger (D21 clock stops).
+# Waits of different reasons may overlap (an outage inside a limit wait): each reason counts its
+# own begins and ends, and any reason with more begins than ends keeps the clock stopped.
 ho_rec_wait_open() {
-  [ "$(ho_ledger_events | jq -r 'select(.kind == "wait-begin" or .kind == "wait-end") | .kind' | tail -n 1)" = wait-begin ]
+  ho_ledger_events | jq -se 'map(select(.kind == "wait-begin" or .kind == "wait-end"))
+    | group_by(.reason // "") | any(.[]; (map(select(.kind == "wait-begin")) | length) > (map(select(.kind == "wait-end")) | length))' >/dev/null 2>&1
 }
+
+# A launch refused for now (73 no slot, 74 spawns paused, 75 stopped, 76 outage) is not an
+# attempt: the ticket waits for the next tick (D37-LIMITS-4, D21, D22).
+ho_rec_refused_now() { case $1 in 73 | 74 | 75 | 76) return 0 ;; esac; return 1; }
 
 # ho_rec_state <ticket>: the ticket's recovery state (JSON).
 ho_rec_state() {
@@ -207,6 +214,10 @@ ho_rec_tick_one() {
         fi
         sig=$(ho_rec_human_stop_blocked "$t") && { ho_ledger_append recover-late-skipped ticket "$t" reason "$sig"; echo "late attempt skipped for ticket $t: $sig"; return 0; }
         rc=0; ho_rec_launch "$t" "$rec" new "$(( $(jq -r .attempts <<<"$s") + 1 ))" || rc=$?
+        if ho_rec_refused_now "$rc"; then
+          s=$(jq -c '.late_done = false' <<<"$s"); ho_rec_save "$t" "$s"
+          echo "late attempt for ticket $t waits: the launch was refused for now (rc $rc)"; return 0
+        fi
         s=$(jq -c '.attempts += 1 | .phase = "late"' <<<"$s"); ho_rec_save "$t" "$s"
         [ "$rc" -eq 0 ] && echo "late attempt for ticket $t" || { ho_ledger_append recover-late-failed ticket "$t" rc "$rc"; echo "late attempt for ticket $t failed"; }
         return 0
@@ -220,9 +231,23 @@ ho_rec_tick_one() {
       ho_rec_save "$t" "$s"; return 0 ;;
     stopped) ho_rec_save "$t" "$s"; return 0 ;;
   esac
+  # A record that recovery itself closed for a resume that was refused for now still needs it.
+  if [ "$live" = closed ] && [ "$(jq -r '.pending_from // ""' <<<"$s")" = "$(jq -r .name "$rec")" ]; then live=dead; fi
   [ "$live" = dead ] || { ho_rec_save "$t" "$s"; return 0; }
   # A dead session: the fixed order (D20).
   if sig=$(ho_rec_human_stop "$t" "$rec"); then
+    if [ "$sig" = stop ]; then
+      # A run-level stop is not sticky: after a resume the ticket is recovered as usual. One
+      # ledger line per stop.
+      ho_stop_read
+      if [ "$(jq -r '.left_stop // ""' <<<"$s")" != "${HO_STOP_ID:-file}" ]; then
+        s=$(jq -c --arg id "${HO_STOP_ID:-file}" '.left_stop = $id' <<<"$s")
+        ho_ledger_append recover-left ticket "$t" name "$(jq -r .name "$rec")" reason "human stop: $sig"
+      fi
+      ho_rec_save "$t" "$s"
+      echo "ticket $t left stopped ($sig)"
+      return 0
+    fi
     s=$(jq -c '.phase = "stopped"' <<<"$s"); ho_rec_save "$t" "$s"
     ho_ledger_append recover-left ticket "$t" name "$(jq -r .name "$rec")" reason "human stop: $sig"
     echo "ticket $t left stopped ($sig)"
@@ -249,12 +274,23 @@ ho_rec_tick_one() {
   [ "$n" -eq 0 ] && ho_rec_resumable "$rec" && how=resume
   s=$(jq -c '.attempts += 1 | del(.waiting_since)' <<<"$s"); ho_rec_save "$t" "$s"
   rc=0; ho_rec_launch "$t" "$rec" "$how" "$((n + 1))" || rc=$?
+  if ho_rec_refused_now "$rc"; then
+    s=$(jq -c --arg n "$(jq -r .name "$rec")" '.attempts -= 1 | .pending_from = $n | .waiting_since = .clock' <<<"$s"); ho_rec_save "$t" "$s"
+    echo "ticket $t waits: the launch was refused for now (rc $rc); no attempt counted"
+    return 0
+  fi
+  s=$(jq -c 'del(.pending_from)' <<<"$s"); ho_rec_save "$t" "$s"
   if [ "$rc" -ne 0 ] && [ "$how" = resume ] && [ "$((n + 1))" -lt "$HO_REC_ATTEMPTS" ]; then
     # A failed or refused resume counts as an attempt; the new session starts at once (D14).
     echo "ticket $t: resume failed (rc $rc); a new session follows"
     s=$(jq -c '.attempts += 1' <<<"$s"); ho_rec_save "$t" "$s"
     how=new; n=$((n + 1)); rc=0
     ho_rec_launch "$t" "$rec" new "$((n + 1))" || rc=$?
+    if ho_rec_refused_now "$rc"; then
+      s=$(jq -c --arg n "$(jq -r .name "$rec")" '.attempts -= 1 | .pending_from = $n' <<<"$s"); ho_rec_save "$t" "$s"
+      echo "ticket $t waits: the launch was refused for now (rc $rc); no attempt counted"
+      return 0
+    fi
   fi
   echo "ticket $t: attempt $((n + 1)) $how rc $rc"
 }
@@ -305,9 +341,11 @@ ho_rec_reopen() {
     [ -f "$f" ] || continue
     name=$(jq -r '.name // ""' "$f" 2>/dev/null); [ -n "$name" ] || continue
     live=$(ho_rec_h session "$HO_RUN_DIR" status "$name" 2>/dev/null | jq -r '.liveness // "unknown"') || live=unknown
+    # A session closed by an earlier reopen whose launch failed is tried again.
+    if [ "$live" = closed ] && ho_ledger_events | jq -e --arg n "$name" 'select(.kind == "reopen" and .from == $n and .rc != "0")' >/dev/null 2>&1; then live=dead; fi
     [ "$live" = dead ] || continue
     # A session that a later reopen or recovery already replaced is not reopened twice.
-    ho_ledger_events | jq -e --arg n "$name" 'select((.kind == "recover-attempt" or .kind == "reopen") and .from == $n)' >/dev/null 2>&1 && continue
+    ho_ledger_events | jq -e --arg n "$name" 'select((.kind == "recover-attempt" or .kind == "reopen") and .from == $n and .rc == "0")' >/dev/null 2>&1 && continue
     role=$(jq -r .role "$f"); sid=$(jq -r '.session_id // ""' "$f"); cwd=$(jq -r '.cwd // ""' "$f"); ticket=$(jq -r '.ticket // "" | tostring' "$f")
     n=$((n + 1))
     rc=0

@@ -86,6 +86,61 @@ out=$("$h" recover "$r" tick)
 assert_contains "D21: the configured wait comes before the first attempt" "$out" "waits before attempt 1"
 jq '.recovery = {waits_seconds: [0, 0, 0], late_hours: 0}' "$pcfg" > "$base/c.json" && mv "$base/c.json" "$pcfg"
 
+# ---- D37-LIMITS-4 / D21: a launch refused for now is not an attempt; the ticket waits ----
+jq '.recovery = {attempts: 1, waits_seconds: [0], late_hours: 0}' "$pcfg" > "$base/c.json" && mv "$base/c.json" "$pcfg"
+r=$("$h" run new --workers 1)
+ta=$(ticket "Waits for a slot")
+tb=$(ticket "Holds the slot")
+work "$r" wa "$ta"
+die "$r" wa
+"$h" slot "$r" list > /dev/null
+work "$r" wb "$tb"
+out=$("$h" recover "$r" tick)
+assert_contains "D37-LIMITS-4: with no free slot the restart waits" "$out" "ticket $ta waits: the launch was refused for now (rc 73)"
+assert_eq "D37-LIMITS-4: the refused launch counts no attempt" 0 "$(jq -r .attempts "$r/recovery/$ta.json")"
+"$h" session "$r" close wb > /dev/null 2>&1
+out=$("$h" recover "$r" tick)
+assert_contains "D37-LIMITS-4: when the slot is free the stopped task restarts" "$out" "ticket $ta: attempt 1 resume rc 0"
+assert_eq "D37-LIMITS-4: the waiting ticket was not blocked" "" "$("$h" tickets ids blocked | grep -x "$ta" || true)"
+
+# ---- D20: a run-level stop is not sticky ----
+jq '.recovery = {waits_seconds: [0, 0, 0], late_hours: 0}' "$pcfg" > "$base/c.json" && mv "$base/c.json" "$pcfg"
+r=$("$h" run new)
+t=$(ticket "Stop then resume")
+work "$r" ws "$t"
+die "$r" ws
+"$h" state "$r" stop "pause for a moment" > /dev/null
+"$h" recover "$r" tick > /dev/null
+"$h" recover "$r" tick > /dev/null
+assert_eq "D20: a stop leaves the ticket, with one ledger line" 1 "$(events "$r" recover-left)"
+"$h" state "$r" resume > /dev/null
+out=$("$h" recover "$r" tick)
+assert_contains "D20: after a resume of the run the ticket is recovered" "$out" "attempt 1"
+
+# ---- D37-SESSIONS-1: the late attempt ----
+jq '.recovery = {attempts: 1, waits_seconds: [0], late_hours: 12}' "$pcfg" > "$base/c.json" && mv "$base/c.json" "$pcfg"
+r=$("$h" run new)
+t=$(ticket "Late attempt")
+work "$r" wl "$t"
+die "$r" wl
+"$h" recover "$r" tick > /dev/null
+die "$r" wl-r1
+"$h" recover "$r" tick > /dev/null
+assert_eq "D37-SESSIONS-1: the late attempt is due 12 hours after the block" 43200 "$(jq -r '.late_due - .clock' "$r/recovery/$t.json")"
+out=$("$h" recover "$r" tick)
+assert_eq "D37-SESSIONS-1: before it is due nothing more is tried" 1 "$(events "$r" recover-attempt)"
+jq -c '.clock = .late_due' "$r/recovery/$t.json" > "$base/s.json" && mv "$base/s.json" "$r/recovery/$t.json"
+out=$("$h" recover "$r" tick)
+assert_contains "D37-SESSIONS-1: when due, one late attempt with a new session" "$out" "late attempt for ticket $t"
+assert_eq "D37-SESSIONS-1: the late attempt is a new session with the context pack" new "$(jq -r 'select(.kind == "recover-attempt") | .how' "$r/ledger.jsonl" | tail -n 1)"
+latest=$(jq -r 'select(.kind == "recover-attempt") | .name' "$r/ledger.jsonl" | tail -n 1)
+die "$r" "$latest"
+"$h" recover "$r" tick > /dev/null
+"$h" recover "$r" tick > /dev/null
+assert_eq "D37-SESSIONS-1: a failed late attempt writes one ledger line" 1 "$(events "$r" recover-late-failed)"
+assert_eq "D37-SESSIONS-1: and no second comment" 1 "$("$h" tickets show "$t" | grep -c 'Recovery attempts ran out')"
+jq '.recovery = {waits_seconds: [0, 0, 0], late_hours: 0}' "$pcfg" > "$base/c.json" && mv "$base/c.json" "$pcfg"
+
 # ---- H-114 / D28c: a hit limit waits for the reset and continues; a STOP ends the wait ----
 jq '.limits.wait_slice_seconds = 1 | .limits.resume_margin_seconds = 0' "$pcfg" > "$base/c.json" && mv "$base/c.json" "$pcfg"
 r=$("$h" run new)
@@ -109,6 +164,11 @@ jq -c '.last_tick -= 100' "$r/recovery/$t.json" > "$base/s.json" && mv "$base/s.
 printf '{"ts":"x","run":"%s","kind":"wait-begin","reason":"outage"}\n' "$(basename "$r")" >> "$r/ledger.jsonl"
 "$h" recover "$r" tick > /dev/null
 assert_eq "D21: the attempt clock does not run during an open wait" 0 "$(jq -r .clock "$r/recovery/$t.json")"
+printf '{"ts":"x","run":"%s","kind":"wait-begin","reason":"limit"}\n{"ts":"x","run":"%s","kind":"wait-end","reason":"outage"}\n' "$(basename "$r")" "$(basename "$r")" >> "$r/ledger.jsonl"
+printf '{"ts":"x","run":"%s","kind":"wait-begin","reason":"outage"}\n{"ts":"x","run":"%s","kind":"wait-end","reason":"outage"}\n' "$(basename "$r")" "$(basename "$r")" >> "$r/ledger.jsonl"
+jq -c '.last_tick -= 100' "$r/recovery/$t.json" > "$base/s.json" && mv "$base/s.json" "$r/recovery/$t.json"
+"$h" recover "$r" tick > /dev/null
+assert_eq "D21: an outage that ends inside a limit wait does not start the clock" 0 "$(jq -r .clock "$r/recovery/$t.json")"
 
 # ---- H-088 / D32 / D37-LIFECYCLE-2: after a reboot nothing starts by itself ----
 assert_eq "D32: the plugin installs nothing that starts it at login" "" "$(grep -rIlE 'launchctl|LaunchAgents|crontab|systemctl' "$HO_PLUGIN_ROOT/lib" "$HO_PLUGIN_ROOT/bin" "$HO_PLUGIN_ROOT/hooks" || true)"

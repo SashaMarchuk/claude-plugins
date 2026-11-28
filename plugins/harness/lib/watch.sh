@@ -238,6 +238,12 @@ ho_watch_restart() {
     how=handoff; rc=0
     ho_watch_h session "$HO_RUN_DIR" launch --role orchestrator --name "$new" --cwd "$cwd" --prompt "$HO_RUN_DIR/handoff.md" >/dev/null 2>&1 || rc=$?
   fi
+  case $rc in 73 | 74 | 75 | 76)
+    # Refused for now: not a restart, so the hourly cap is not used; the next cycle tries again.
+    ho_ledger_append orchestrator-restart-deferred from "$name" rc "$rc"
+    echo "orchestrator restart deferred (rc $rc)"
+    return 0 ;;
+  esac
   ho_ledger_append orchestrator-restart name "$new" from "$name" how "$how" rc "$rc"
   echo "orchestrator restarted as $new ($how, rc $rc)"
 }
@@ -261,7 +267,16 @@ ho_watch_cycle() {
   local rec live
   rec=$(ho_watch_orch) || return 0
   live=$(ho_watch_h session "$HO_RUN_DIR" status "$(jq -r .name "$rec")" 2>/dev/null | jq -r '.liveness // "unknown"') || live=unknown
+  # A record closed by a deferred restart still needs one.
+  if [ "$live" = closed ] && ho_ledger_events | jq -e --arg n "$(jq -r .name "$rec")" 'select(.kind == "orchestrator-restart-deferred" and .from == $n)' >/dev/null 2>&1; then live=dead; fi
   [ "$live" != dead ] || ho_watch_restart || true
+  # H-108: a usage reading every watch.sample_seconds (300) while the run is active.
+  local s now every
+  s=$(ho_watch_state); now=$(date +%s); every=$(ho_cfg_int '.watch.sample_seconds' 300)
+  if [ $((now - $(jq -r '.last_sample // 0' <<<"$s"))) -ge "$every" ]; then
+    ho_res_sample >/dev/null 2>&1 || true
+    ho_watch_save "$(jq -c --argjson now "$now" '.last_sample = $now' <<<"$s")"
+  fi
 }
 
 # watch <run> loop [--cycles N]: the watch script. Ends when the run ends.

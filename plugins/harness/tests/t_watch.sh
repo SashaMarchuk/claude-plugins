@@ -79,6 +79,8 @@ sleep 1; echo up > "$FAKE_HTTP_STATE"; "$h" watch "$r" outage-check --now > /dev
 for i in 1 2 3 4; do sleep 1; "$h" watch "$r" back-check > /dev/null 2>&1 || true; done
 assert_eq "D22: the message repeats at most 3 times" 4 "$(events "$r" back-message)"
 assert_eq "D37-SESSIONS-4: with no event after 3 messages the orchestrator is not back" 1 "$(events "$r" orchestrator-not-back)"
+assert_eq "D37-SESSIONS-4: after 3 messages with no event the orchestrator is closed and resumed" 1 "$(events "$r" orchestrator-restart)"
+assert_eq "D37-SESSIONS-4: the idle restart resumed the same session ID" "$(jq -r .session_id "$r/sessions/orch.json")" "$(jq -r .session_id "$r/sessions/$(jq -r 'select(.kind == "orchestrator-restart") | .name' "$r/ledger.jsonl").json")"
 
 # ---- H-098 / D23: a dead orchestrator is restarted at most 3 times per hour ----
 r=$("$h" run new)
@@ -100,6 +102,20 @@ assert_eq "H-098: at most 3 restarts in an hour" 3 "$(events "$r" orchestrator-r
 assert_eq "D37-SESSIONS-4: the used-up cap writes one owner-action line" 1 "$(events "$r" owner-action)"
 "$h" watch "$r" restart > /dev/null 2>&1 || true
 assert_eq "D37-SESSIONS-4: the cap stays used up, with no second owner-action line" "3 1" "$(events "$r" orchestrator-restart) $(events "$r" owner-action)"
+
+# ---- D37-SESSIONS-4: a soft stop does not hold back the restart; a refused launch is deferred ----
+r=$("$h" run new)
+orch "$r" lead
+die "$r" lead
+"$h" state "$r" stop "testing a soft stop" > /dev/null
+"$h" watch "$r" restart > /dev/null 2>&1 || true
+assert_eq "D37-SESSIONS-4: during a soft stop the orchestrator is restarted as usual" "0" "$(jq -r 'select(.kind == "orchestrator-restart") | .rc' "$r/ledger.jsonl")"
+r=$("$h" run new)
+orch "$r" lead2
+die "$r" lead2
+printf '{"ts":"x","run":"%s","kind":"outage-begin"}\n' "$(basename "$r")" >> "$r/ledger.jsonl"
+"$h" watch "$r" restart > /dev/null 2>&1 || true
+assert_eq "D22: nothing restarts during an outage" 0 "$(events "$r" orchestrator-restart)"
 
 # ---- D32: the orchestrator and the context watcher check the watch script's process ----
 jq '.watch.cycle_seconds = 1' "$pcfg" > "$base/c.json" && mv "$base/c.json" "$pcfg"

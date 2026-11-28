@@ -165,6 +165,12 @@ ho_loop_verdict_check() {
   why=$(ho_loop_author_ok "$sid" "$worker") || { HO_LOOP_VWHY="the verdict for $sha is not from the independent validator: $why"; return 1; }
   first=$(printf '%s' "$snap" | jq -r '.text | split("\n")[0]')
   [ "$first" = passed ] || { HO_LOOP_VWHY="the verdict for $sha is not \"passed\" (first line: ${first:0:60})"; return 1; }
+  # The remarks path (H-058, D37-VERIFICATION-6, lib/verify.sh): a lane handed to a human never
+  # merges by itself, and after fix rounds only a validator session not used in a round counts.
+  if [ -e "$HO_RUN_DIR/verify/$lane.handed" ]; then HO_LOOP_VWHY="lane $lane was handed to a human ($(head -n 1 "$HO_RUN_DIR/verify/$lane.handed"))"; return 1; fi
+  if [ -f "$HO_RUN_DIR/verify/$lane.rounds.jsonl" ] && jq -e --arg s "$sid" 'select(.validator == $s)' "$HO_RUN_DIR/verify/$lane.rounds.jsonl" >/dev/null 2>&1; then
+    HO_LOOP_VWHY="the verdict for $sha comes from a validator session that judged an earlier remarks round; a fresh validator must check it"; return 1
+  fi
   HO_LOOP_VSNAP=$snap
 }
 

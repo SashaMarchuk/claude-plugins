@@ -134,3 +134,13 @@ assert_eq "H-095: no message is sent while the service is down" "" "$(cat "$base
 assert_eq "D37-LIFECYCLE-6: the stop acts as hard:now at once (record, then force-close)" "d1 d1 yes" \
   "$(kinds "$r4" hard-stop-record) $(jq -r 'select(.kind == "hard-stop-kill") | .name' "$r4/ledger.jsonl") $(gone "$pd1")"
 assert_contains "D37-LIFECYCLE-6: the output says the stop acts as hard:now" "$out" "acts as hard:now"
+
+# ---- the calling session is not closed by its own stop (as at the end of a run) -----------------
+r5=$("$h" run new --workers 20)
+HO_FAKE_CLAUDE_HOLD=ignore start "$r5" c1
+HO_FAKE_CLAUDE_HOLD=ignore start "$r5" me
+pc1=$(pid_of "$r5" c1) pme=$(pid_of "$r5" me)
+out=$(HO_SESSION_NAME=me "$h" state "$r5" stop --type hard:now 2>&1) || true
+assert_eq "H-087: the other session of the run is force-closed" yes "$(gone "$pc1")"
+assert_eq "H-087: the calling session is not closed by its own stop" "yes running" "$(alive "$pme" && echo yes || echo no) $(rec me .status "$r5")"
+assert_contains "H-087: the output names the calling session as self" "$out" "self me"

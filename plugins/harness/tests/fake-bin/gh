@@ -15,7 +15,8 @@
 # HO_FAKE_GH_FAIL_API=<text> makes every api call whose path holds <text> fail with exit 1.
 # Pull requests: pr create (--draft, --head, --base, --title, --body-file, --repo; prints the
 # URL https://github.com/<repo>/pull/<n>), pr view <n> --json <fields> (number, state, isDraft,
-# headRefName, baseRefName, body, mergeCommit, reviews) and pr ready <n>. A test adds reviews
+# headRefName, baseRefName, body, mergeCommit, reviews, comments), pr edit <n> --body-file F,
+# pr merge <n> (see below) and pr ready <n>. A test adds reviews
 # as [{author: {login}, body}] to the PR file. State lives in
 # $HO_FAKE_GH_DIR/prs/<n>.json; a test merges a PR by writing state MERGED and mergeCommit.
 # "issue comment --edit-last" rewrites the account's last comment, as real gh does,
@@ -242,7 +243,7 @@ case "$group $cmd" in
     [ -n "$head" ] && [ -n "$base" ] || fail "pr create needs --head and --base"
     n=$(( $(find "$dir/prs" -name '*.json' | wc -l) + 1 ))
     jq -n --argjson n "$n" --argjson d "$draft" --arg h "$head" --arg b "$base" --arg t "$title" --arg body "$body" --arg r "$repo" \
-      '{number: $n, state: "OPEN", isDraft: $d, headRefName: $h, baseRefName: $b, title: $t, body: $body, repo: $r, mergeCommit: null, reviews: []}' > "$dir/prs/$n.json"
+      '{number: $n, state: "OPEN", isDraft: $d, headRefName: $h, baseRefName: $b, title: $t, body: $body, repo: $r, mergeCommit: null, reviews: [], comments: []}' > "$dir/prs/$n.json"
     printf 'https://github.com/%s/pull/%s\n' "$repo" "$n"
     ;;
   "pr view")
@@ -253,6 +254,35 @@ case "$group $cmd" in
       case $1 in --json) fields=$2; shift 2 ;; --repo) shift 2 ;; *) fail "pr view: unsupported flag $1" ;; esac
     done
     jq -c --arg f "$fields" '. as $p | reduce ($f | split(",")[]) as $k ({}; .[$k] = $p[$k])' "$dir/prs/$n.json"
+    ;;
+  "pr edit")
+    n=${1:-}; shift
+    [ -f "$dir/prs/$n.json" ] || fail "no pull request $n"
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --body-file) tmp=$(mktemp "$dir/.tmp.XXXXXX"); jq --arg b "$(cat "$2")" '.body = $b' "$dir/prs/$n.json" > "$tmp" && mv "$tmp" "$dir/prs/$n.json"; shift 2 ;;
+        --repo) shift 2 ;;
+        *) fail "pr edit: unsupported flag $1" ;;
+      esac
+    done
+    ;;
+  "pr merge")
+    # With HO_FAKE_GH_REMOTE (a bare repository) the merge is real: a no-ff merge of the head
+    # branch into the base, pushed there. Without it, the PR only reads MERGED (a merge that
+    # "reports success" but changed nothing).
+    n=${1:-}
+    [ -f "$dir/prs/$n.json" ] || fail "no pull request $n"
+    oid=""
+    if [ -n "${HO_FAKE_GH_REMOTE:-}" ]; then
+      w=$(mktemp -d "$dir/.merge.XXXXXX")
+      hb=$(jq -r .headRefName "$dir/prs/$n.json") bb=$(jq -r .baseRefName "$dir/prs/$n.json")
+      git clone -q "$HO_FAKE_GH_REMOTE" "$w/c" 2>/dev/null && git -C "$w/c" checkout -q "$bb" \
+        && git -C "$w/c" fetch -q origin "$hb" && git -C "$w/c" merge -q --no-ff -m "Merge pull request #$n" FETCH_HEAD \
+        && git -C "$w/c" push -q origin "$bb" || fail "pr merge: the merge failed"
+      oid=$(git -C "$w/c" rev-parse HEAD)
+      rm -rf "$w"
+    fi
+    tmp=$(mktemp "$dir/.tmp.XXXXXX"); jq --arg o "$oid" '.state = "MERGED" | .mergeCommit = (if $o == "" then null else {oid: $o} end)' "$dir/prs/$n.json" > "$tmp" && mv "$tmp" "$dir/prs/$n.json"
     ;;
   "pr ready")
     n=${1:-}

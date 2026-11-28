@@ -26,6 +26,10 @@ run=$r_prev lane=l2 sha=$(jq -r .sha "$r_prev/ship/l2.json")
 assert_eq "D10: no draft PR before the validator passes (65)" 65 "$(ship_rc pr "$lane")"
 assert_eq "D10: gh was not asked to open a PR" "" "$(grep '^pr' "$HO_FAKE_GH_DIR/calls.log" || true)"
 pass
+assert_eq "H-056: no PR without a test result for the pushed commit (65)" 65 "$(ship_rc pr "$lane")"
+"$h" verify "$run" tests "$lane" --total 2 --passed 1 --failed 1 --skipped 0 >/dev/null || true
+assert_eq "H-056: no PR while the test check failed (65)" 65 "$(ship_rc pr "$lane")"
+"$h" verify "$run" tests "$lane" --total 1 --passed 1 --failed 0 --skipped 0 >/dev/null
 assert_eq "D10: after a passed verdict the PR opens" 0 "$(ship_rc pr "$lane")"
 pr=$(jq -r .pr "$run/ship/$lane.json")
 assert_eq "D10: the PR is a draft on the ticket branch into main" "true harness/$t-fix-the-login main" "$(prf "$pr" '"\(.isDraft) \(.headRefName) \(.baseRefName)"')"
@@ -53,7 +57,7 @@ assert_contains "H-046: the ledger records the confirmed merge" "$(jq -r .kind "
 # ---- H-046 squash merge; D11 close_on_merge false -----------------------------------------------
 mkrun draft-pr '{"close_on_merge": false}'
 t2=$(issue "second")
-ship push "$lane" --ticket "$t2" --title second >/dev/null; pass; ship pr "$lane" >/dev/null
+ship push "$lane" --ticket "$t2" --title second >/dev/null; pass_ok; ship pr "$lane" >/dev/null
 pr2=$(jq -r .pr "$run/ship/$lane.json")
 pr_merged "$pr2" "$(merge_into main squash)"
 assert_eq "H-046: a squash merge whose commit carries the same change is confirmed" 0 "$(ship_rc merged "$lane")"
@@ -63,7 +67,7 @@ assert_eq "D11: with close_on_merge false the ticket is done and left open" "OPE
 user_cfg "{\"smoke\": {\"use\": \"s\", \"list\": {\"s\": {\"command\": \"test ! -e $base/smoke-fail\"}}}}"
 mkrun draft-pr
 t3=$(issue "third")
-ship push "$lane" --ticket "$t3" --title third >/dev/null; pass; ship pr "$lane" >/dev/null
+ship push "$lane" --ticket "$t3" --title third >/dev/null; pass_ok; ship pr "$lane" >/dev/null
 merge_into main merge >/dev/null
 assert_eq "H-045: a confirmed merge with a smoke test the profile does not run waits for a human (76)" 76 "$(ship_rc merged "$lane")"
 assert_eq "H-045: the ticket stays in progress" "OPEN harness:in-progress" "$(istate "$t3")"
@@ -72,7 +76,7 @@ assert_eq "H-045: the ticket stays in progress" "OPEN harness:in-progress" "$(is
 git -C "$proj" push -q origin main:stage
 mkrun full '{"stage": {"allow": true, "branch": "stage"}}'
 t4=$(issue "fourth")
-ship push "$lane" --ticket "$t4" --title fourth >/dev/null; pass; ship pr "$lane" >/dev/null
+ship push "$lane" --ticket "$t4" --title fourth >/dev/null; pass_ok; ship pr "$lane" >/dev/null
 pr4=$(jq -r .pr "$run/ship/$lane.json")
 assert_eq "H-050: with a stage release allowed the PR goes into the stage branch" stage "$(prf "$pr4" .baseRefName)"
 assert_eq "D10: a profile that may merge marks the PR ready" false "$(prf "$pr4" .isDraft)"
@@ -85,14 +89,14 @@ assert_eq "H-045: done only after the smoke test passed" "CLOSED harness:done" "
 : > "$base/smoke-fail"
 mkrun full '{"smoke": {"on_fail": "fix"}}'
 t5=$(issue "fifth")
-ship push "$lane" --ticket "$t5" --title fifth >/dev/null; pass; ship pr "$lane" >/dev/null
+ship push "$lane" --ticket "$t5" --title fifth >/dev/null; pass_ok; ship pr "$lane" >/dev/null
 merge_into main merge >/dev/null
 assert_eq "H-051: a failed smoke test fails the post-merge step (72)" 72 "$(ship_rc merged "$lane")"
 assert_eq "H-051: reaction fix: a fix is due for the ticket" "$t5" "$(jq -r 'select(.kind == "smoke-fix-due") | .ticket' "$run/ledger.jsonl")"
 assert_eq "H-045: after a failed smoke test the ticket is not done" "OPEN harness:in-progress" "$(istate "$t5")"
 mkrun full '{"smoke": {"on_fail": "revert"}}'
 t6=$(issue "sixth")
-ship push "$lane" --ticket "$t6" --title sixth >/dev/null; pass; ship pr "$lane" >/dev/null
+ship push "$lane" --ticket "$t6" --title sixth >/dev/null; pass_ok; ship pr "$lane" >/dev/null
 merge_into main merge >/dev/null
 assert_eq "H-051: reaction revert also fails the step (72)" 72 "$(ship_rc merged "$lane")"
 git -C "$proj" fetch -q origin
@@ -100,3 +104,42 @@ assert_eq "H-051: reaction revert: the change is reverted on the base" "no" \
   "$(git -C "$proj" cat-file -e "origin/main:f$n.txt" 2>/dev/null && echo yes || echo no)"
 assert_eq "H-051: the earlier merged changes stay" yes "$(git -C "$proj" cat-file -e "origin/main:f2.txt" 2>/dev/null && echo yes || echo no)"
 assert_eq "H-051: the reverted ticket is not done" "OPEN harness:in-progress" "$(istate "$t6")"
+
+# ---- a push after a fix keeps the open PR and refreshes its Verification block ----------------
+mkrun draft-pr
+t7=$(issue "seventh")
+ship push "$lane" --ticket "$t7" --title seventh >/dev/null; pass_ok; ship pr "$lane" >/dev/null
+pr7=$(jq -r .pr "$run/ship/$lane.json")
+printf 'fix\n' >> "$wt/f$n.txt"; git -C "$wt" commit -qam fix; git -C "$wt" commit -q --allow-empty -m "finalize($lane): again"
+sha=$(git -C "$wt" rev-parse HEAD); "$h" loop "$run" ready "$lane" --worktree "$wt" >/dev/null
+prs_before=$(ls "$HO_FAKE_GH_DIR/prs" | grep -c json)
+assert_eq "S8-07: a second push after a fix succeeds" 0 "$(ship_rc push "$lane" --ticket "$t7" --title seventh)"
+assert_eq "S8-07: the ship record keeps its PR" "$pr7" "$(jq -r .pr "$run/ship/$lane.json")"
+assert_eq "S8-07: no second PR is opened" "$prs_before" "$(ls "$HO_FAKE_GH_DIR/prs" | grep -c json)"
+assert_contains "H-053: the PR body now shows the new commit" "$(prf "$pr7" .body)" "commit: $sha"
+assert_eq "H-055: the new head has no verdict yet, so it is not merged" 70 "$(ship_rc merged "$lane")"
+
+# ---- H-050: the remote merge, only under a profile that may merge -------------------------------
+printf '{"validator": "passed", "tests": {"total": 1, "failed": 0}, "ci": "green", "open_questions": 0, "paths": ["f.txt"]}\n' > "$base/facts.json"
+rm -f "$base/smoke-fail"
+user_cfg
+pass_ok
+assert_eq "H-050: a profile that never merges does not merge (77)" 77 "$(ship_rc merge "$lane" --facts "$base/facts.json")"
+mkrun full
+t8=$(issue "eighth")
+ship push "$lane" --ticket "$t8" --title eighth >/dev/null; pass_ok; ship pr "$lane" >/dev/null
+assert_eq "H-046: a merge gh reports but git does not show is not done (70)" 70 "$(ship_rc merge "$lane" --facts "$base/facts.json")"
+assert_eq "H-046: the ticket stays open" "OPEN harness:in-progress" "$(istate "$t8")"
+mkrun full
+t9=$(issue "ninth")
+ship push "$lane" --ticket "$t9" --title ninth >/dev/null; pass_ok; ship pr "$lane" >/dev/null
+assert_eq "H-050: under full with every condition the harness merges, and git confirms it" 0 \
+  "$(HO_FAKE_GH_REMOTE="$base/remote.git" ship_rc merge "$lane" --facts "$base/facts.json")"
+assert_eq "H-045: the merged ticket is done and closed" "CLOSED harness:done" "$(istate "$t9")"
+
+# ---- H-085: a stop keeps work from reaching the remote ------------------------------------------
+mkrun draft-pr
+t10=$(issue "tenth")
+"$h" state "$run" stop --type hard:now >/dev/null
+assert_eq "H-085: under a hard stop nothing is pushed (75)" 75 "$(ship_rc push "$lane" --ticket "$t10" --title tenth)"
+assert_eq "H-085: the remote has no branch" none "$(remote_sha "harness/$t10-tenth")"

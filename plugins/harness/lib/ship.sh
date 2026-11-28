@@ -15,9 +15,14 @@
 #                                      "Closes #N" (S8-07). Only a profile that may merge marks it
 #                                      ready. The base is stage.branch when stage.allow is true
 #                                      (H-050), else git.target (default main).
+#   merge <lane> --facts F             the remote merge (H-050): only under a profile that may merge,
+#                                      with every mechanical condition (autonomy check merge), the
+#                                      validator's pass and the tests for the pushed commit; gh
+#                                      merges the PR, then `merged` confirms it by git
 #   merged <lane>                      confirm the merge through git (H-046): the remote base
 #                                      holds the pushed commit, or the PR's merge commit is on
 #                                      the base and carries the same change (a squash merge).
+#                                      A hard stop refuses it; a soft stop lets it finish.
 #                                      Unconfirmed: the ticket is not touched, exit 70. Confirmed:
 #                                      the post-merge smoke test runs at once when one is set
 #                                      (smoke.use, command in smoke.list.<label>.command of the
@@ -29,8 +34,8 @@
 #
 #   <run>/ship/<lane>.json   {lane, ticket, title, branch, remote, sha, worktree, pr, url, base}
 #
-# Exit codes: 64 usage, 65 refused (missing record, bad name), 70 not confirmed by git, 72 the
-# smoke test failed, 76 waits for a human (the profile runs no post-merge steps), 77 the
+# Exit codes: 64 usage, 65 refused (missing record, bad name, no pass or tests), 70 not confirmed by
+# git, 72 the smoke test failed, 75 a stop refuses it, 76 waits for a human (the profile runs no post-merge steps), 77 the
 # autonomy profile does not allow it, 78 config error.
 # Requires lib/run.sh, lib/config.sh, lib/autonomy.sh, lib/loop.sh, lib/tickets.sh, lib/sessions.sh
 # and ho_vf_block from lib/verify.sh.
@@ -41,6 +46,7 @@ ho_ship_usage() {
   cat >&2 <<'USAGE'
 usage: harness ship <run-dir> push <lane> --ticket N --title T
        harness ship <run-dir> pr <lane>
+       harness ship <run-dir> merge <lane> --facts FILE
        harness ship <run-dir> merged <lane>
        harness ship <run-dir> status
 exit: 0 done, 64 usage, 65 refused, 70 not confirmed by git, 72 smoke test failed,
@@ -51,6 +57,18 @@ USAGE
 # ho_ship_slug <title>: a short branch-safe title (a-z 0-9 -, at most 40 characters).
 ho_ship_slug() {
   printf '%s' "$1" | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//' | cut -c1-40 | sed 's/-$//'
+}
+
+# ho_ship_stop <ticket> [soft]: 0 when no stop refuses this remote step (D25, H-085): like loop
+# merge, a stop lets nothing new reach the remote except under a soft:ticket stop that covers the
+# ticket; with "soft", a soft stop lets the step finish and only a hard stop refuses it.
+ho_ship_stop() {
+  local rc=0
+  if [ "${2-}" = soft ]; then ho_stop_gate_soft || rc=$?; else ho_stop_gate "$1" || rc=$?; fi
+  [ "$rc" -eq 0 ] && return 0
+  ho_ledger_append ship-stopped ticket "$1" reason "$([ "$rc" -eq 2 ] && echo "the stop state is unknown" || echo "a stop is in force")"
+  ho_ship_err "the run is stopped (or its stop state is unknown); nothing goes to the remote for ticket $1"
+  return 75
 }
 
 ho_ship_rec() { printf '%s/ship/%s.json\n' "$HO_RUN_DIR" "$1"; }
@@ -102,6 +120,7 @@ ho_ship_push() {
   lj="$HO_RUN_DIR/lanes/$lane.json"
   [ -f "$lj" ] || { ho_ship_err "lane $lane is not ready (no finalize commit recorded)"; return 65; }
   wt=$(ho_loop_field "$lj" worktree) && sha=$(ho_loop_field "$lj" sha) || { ho_ship_err "lane record of $lane is unreadable"; return 65; }
+  ho_ship_stop "$ticket" || return $?
   rc=0; ho_ship_au push "$ticket" || rc=$?
   if [ "$rc" -ne 0 ]; then
     ho_ship_err "the autonomy profile allows no push; nothing leaves this machine until a human pushes"
@@ -123,11 +142,29 @@ ho_ship_push() {
     return 70
   fi
   mkdir -p "$HO_RUN_DIR/ship"
-  jq -n --arg lane "$lane" --arg t "$ticket" --arg title "$title" --arg b "$branch" --arg r "$remote" --arg sha "$sha" --arg wt "$wt" \
-    '{schemaVersion: 2, lane: $lane, ticket: $t, title: $title, branch: $b, remote: $r, sha: $sha, worktree: $wt, pr: null, url: null, base: null, merged: null}' \
-    | ho_atomic_write "$(ho_ship_rec "$lane")" || return 1
+  local f old='{}'
+  f=$(ho_ship_rec "$lane")
+  # A push after a fix keeps the open PR: the same branch moves to the new commit.
+  [ ! -f "$f" ] || old=$(jq -c '{pr, url, base}' "$f" 2>/dev/null) || old='{}'
+  jq -n --arg lane "$lane" --arg t "$ticket" --arg title "$title" --arg b "$branch" --arg r "$remote" --arg sha "$sha" --arg wt "$wt" --argjson old "$old" \
+    '{schemaVersion: 2, lane: $lane, ticket: $t, title: $title, branch: $b, remote: $r, sha: $sha, worktree: $wt, pr: null, url: null, base: null, merged: null} + $old' \
+    | ho_atomic_write "$f" || return 1
   ho_ledger_append ship-pushed lane "$lane" ticket "$ticket" branch "$branch" sha "$sha"
   printf 'pushed %s at %s to %s\n' "$branch" "$sha" "$remote"
+  local pr
+  pr=$(jq -r '.pr // ""' "$f")
+  if [ -n "$pr" ]; then
+    # The PR body follows the new head: its Verification block is built again (H-053).
+    ho_ship_load "$lane" || return $?
+    ho_ship_body "$lane" || return $?
+    if gh pr edit "$pr" --body-file "$HO_RUN_DIR/ship/$lane.body.md" $(ho_ship_gh_repo) >/dev/null 2>&1; then
+      ho_ledger_append ship-pr-body lane "$lane" pr "$pr" sha "$sha"
+      printf 'PR #%s now shows the Verification block for %s\n' "$pr" "$sha"
+    else
+      ho_ship_err "the body of PR #$pr could not be updated; its Verification block is for the old commit"
+      return 70
+    fi
+  fi
 }
 
 # ho_ship_load <lane>: set S_TICKET S_TITLE S_BRANCH S_REMOTE S_SHA S_WT S_PR S_BASE.
@@ -141,6 +178,21 @@ ho_ship_load() {
 }
 
 ho_ship_gh_repo() { [ -z "${HO_TICKETS_REPO:-}" ] || printf -- '--repo\n%s\n' "$HO_TICKETS_REPO"; }
+
+# ho_ship_body <lane>: write the PR body: the ticket link (S8-07) and the Verification block,
+# built from recorded results (H-053). Needs ho_ship_load.
+ho_ship_body() {
+  local body="$HO_RUN_DIR/ship/$1.body.md"
+  {
+    if [ "${HO_TICKETS_SOURCE:-local}" = github ]; then
+      printf 'Ticket: #%s\n\nCloses #%s\n' "$S_TICKET" "$S_TICKET"
+    else
+      printf 'Ticket: local ticket %s\n' "$S_TICKET"
+    fi
+    echo
+  } > "$body"
+  ho_vf_block "$1" >> "$body" || { ho_ship_err "the Verification block cannot be built"; return 65; }
+}
 
 # ---- pr ---------------------------------------------------------------------------------------
 ho_ship_pr() {
@@ -169,20 +221,18 @@ ho_ship_pr() {
         return 65
       fi ;;
   esac
+  # H-056: the test rule gates the PR; the result must be recorded for this exact commit.
+  if ! ho_vf_tests_ok "$lane"; then
+    ho_ledger_append ship-pr-waits lane "$lane" reason "$HO_VF_WHY"
+    ho_ship_err "no PR: $HO_VF_WHY"
+    return 65
+  fi
+  ho_ship_stop "$S_TICKET" || return $?
   rc=0; ho_ship_au pr "$S_TICKET" || rc=$?
   [ "$rc" -eq 0 ] || { ho_ship_err "the autonomy profile opens no PR"; return "$rc"; }
   base=$(ho_ship_base) || return $?
+  ho_ship_body "$lane" || return $?
   body="$HO_RUN_DIR/ship/$lane.body.md"
-  {
-    if [ "${HO_TICKETS_SOURCE:-local}" = github ]; then
-      printf 'Ticket: #%s\n\nCloses #%s\n' "$S_TICKET" "$S_TICKET"
-    else
-      printf 'Ticket: local ticket %s\n' "$S_TICKET"
-    fi
-    echo
-  } > "$body"
-  # H-053: every PR the harness opens holds the Verification block, built from recorded results.
-  ho_vf_block "$lane" >> "$body" || { ho_ship_err "the Verification block cannot be built; no PR is opened"; return 65; }
   url=$(gh pr create --draft --head "$S_BRANCH" --base "$base" --title "$S_TITLE" --body-file "$body" $(ho_ship_gh_repo) 2>"$HO_RUN_DIR/logs/ship-pr.log") \
     || { ho_ledger_append ship-pr-failed lane "$lane"; ho_ship_err "gh pr create failed (see $HO_RUN_DIR/logs/ship-pr.log)"; return 70; }
   url=$(printf '%s\n' "$url" | tail -n 1)
@@ -205,9 +255,14 @@ ho_ship_patch() { git -C "$1" diff "${@:2}" 2>/dev/null | git -C "$1" patch-id -
 # on the base that holds it, or empty for a fast-forward).
 ho_ship_confirm() {
   local tip=$1 mc mb want
-  S_MERGE=""
+  S_MERGE="" S_MERGE_KIND=""
   if git -C "$S_WT" merge-base --is-ancestor "$S_SHA" "$tip" 2>/dev/null; then
     S_MERGE=$(git -C "$S_WT" rev-list --first-parent --ancestry-path --reverse "$S_SHA..$tip" 2>/dev/null | head -n 1)
+    S_MERGE_KIND=fast-forward
+    if [ -n "$S_MERGE" ]; then
+      if git -C "$S_WT" rev-list --parents -n 1 "$S_MERGE" | tr ' ' '\n' | tail -n +2 | grep -qx "$S_SHA"; then S_MERGE_KIND=merge
+      else S_MERGE_KIND=unknown; fi
+    fi
     return 0
   fi
   # A squash or rebase merge: the PR's merge commit must be on the base and carry the same change.
@@ -217,7 +272,7 @@ ho_ship_confirm() {
   mb=$(git -C "$S_WT" merge-base "$S_SHA" "$mc^" 2>/dev/null) || return 1
   want=$(ho_ship_patch "$S_WT" "$mb" "$S_SHA")
   [ -n "$want" ] && [ "$want" = "$(ho_ship_patch "$S_WT" "$mc^" "$mc")" ] || return 1
-  S_MERGE=$mc
+  S_MERGE=$mc S_MERGE_KIND=squash
 }
 
 # ho_ship_smoke_cmd: the smoke command, from the user config only (D37-FLOW-8), or nothing.
@@ -242,6 +297,12 @@ ho_ship_revert() {
   ho_ship_au push "$S_TICKET" || { ho_ship_err "the profile allows no push, so the revert cannot reach $S_BASE"; return 77; }
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/ho-revert.XXXXXX")
   git -C "$S_WT" worktree add -q --detach "$tmp" "$tip" 2>/dev/null || { rm -rf "$tmp"; return 1; }
+  # Only a commit that brought the change in is reverted: a merge commit with the pushed commit
+  # as a parent, or the squash commit the PR names. Anything else is left for a person.
+  if [ -n "$S_MERGE" ] && [ "$S_MERGE_KIND" = unknown ]; then
+    git -C "$S_WT" worktree remove --force "$tmp" >/dev/null 2>&1 || rm -rf "$tmp"
+    return 1
+  fi
   if [ -n "$S_MERGE" ]; then
     if [ "$(git -C "$tmp" rev-list --parents -n 1 "$S_MERGE" | wc -w)" -gt 2 ]; then
       git -C "$tmp" revert --no-edit -m 1 "$S_MERGE" >/dev/null 2>&1 || rc=1
@@ -263,6 +324,7 @@ ho_ship_merged() {
   ho_loop_lane_ok "$lane" || return 65
   ho_ship_load "$lane" || return $?
   [ -n "$S_PR" ] && [ -n "$S_BASE" ] || { ho_ship_err "lane $lane has no PR yet"; return 65; }
+  ho_ship_stop "$S_TICKET" soft || return $?
   if ! git -C "$S_WT" fetch -q "$S_REMOTE" "refs/heads/$S_BASE" 2>/dev/null || ! tip=$(git -C "$S_WT" rev-parse -q --verify FETCH_HEAD); then
     ho_ledger_append ship-merge-unconfirmed lane "$lane" ticket "$S_TICKET" reason "cannot fetch $S_BASE from $S_REMOTE"
     ho_ship_err "cannot fetch $S_BASE from $S_REMOTE; the merge is not confirmed and ticket $S_TICKET stays open"
@@ -321,6 +383,32 @@ ho_ship_merged() {
   printf 'ticket %s done%s\n' "$S_TICKET" "$([ "$close" = false ] && echo ' (left open: close_on_merge false)')"
 }
 
+# ---- merge <lane> --facts F: the remote merge under a profile that may merge -------------------
+# The engine checks the profile and every mechanical merge condition first (S8-08b), and the
+# verdict for the exact pushed commit; then gh merges the PR, and `merged` confirms it by git.
+ho_ship_merge() {
+  local lane=${1-} facts="" rc worker
+  shift || true
+  [ "${1-}" = --facts ] && [ -n "${2-}" ] && [ $# -eq 2 ] || { ho_ship_usage; return 64; }
+  facts=$2
+  ho_loop_lane_ok "$lane" || return 65
+  ho_ship_load "$lane" || return $?
+  [ -n "$S_PR" ] || { ho_ship_err "lane $lane has no PR yet"; return 65; }
+  ho_ship_stop "$S_TICKET" || return $?
+  worker=$(jq -r '.worker_session // ""' "$HO_RUN_DIR/lanes/$lane.json" 2>/dev/null) || worker=""
+  ho_loop_verdict_check "$lane" "$S_SHA" "$worker" || { ho_ship_err "no merge: $HO_LOOP_VWHY"; return 65; }
+  ho_vf_tests_ok "$lane" || { ho_ship_err "no merge: $HO_VF_WHY"; return 65; }
+  rc=0; ho_au_check merge --for "$S_TICKET" --facts "$facts" >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  if ! gh pr merge "$S_PR" --merge $(ho_ship_gh_repo) >"$HO_RUN_DIR/logs/ship-merge.log" 2>&1; then
+    ho_ledger_append ship-merge-failed lane "$lane" pr "$S_PR"
+    ho_ship_err "gh pr merge of PR #$S_PR failed (see $HO_RUN_DIR/logs/ship-merge.log); ticket $S_TICKET stays open"
+    return 70
+  fi
+  ho_ledger_append ship-merge-requested lane "$lane" pr "$S_PR"
+  ho_ship_merged "$lane"
+}
+
 ho_ship_status() {
   local f
   for f in "$HO_RUN_DIR"/ship/*.json; do [ -f "$f" ] && jq -c '{lane, ticket, branch, pr, base, merged}' "$f"; done
@@ -338,6 +426,7 @@ ho_ship_main() {
   case $verb in
     push) ho_ship_push "$@" || rc=$? ;;
     pr) ho_ship_pr "$@" || rc=$? ;;
+    merge) ho_ship_merge "$@" || rc=$? ;;
     merged) ho_ship_merged "$@" || rc=$? ;;
     status) ho_ship_status ;;
     *) ho_ship_usage; rc=64 ;;

@@ -36,6 +36,8 @@ ho_stop_sessions() {
   for f in "$HO_RUN_DIR"/sessions/*.json; do
     [ -f "$f" ] || continue
     jq -e --arg run "$HO_RUN_ID" 'type == "object" and .run == $run and (.status // "") != "closed"' "$f" >/dev/null 2>&1 || continue
+    # The session that runs the stop is never closed by its own stop (as at the end of a run).
+    [ "$(basename "$f" .json)" != "${HO_SESSION_NAME-}" ] || continue
     basename "$f" .json
   done
 }
@@ -75,6 +77,12 @@ ho_stop_force_close() {
       return 1
     fi
   fi
+  # Marked closed only on proof that the session's process is gone (as session close does).
+  if [ "$(ho_live_session_state "$rec" 2>/dev/null || echo unknown)" != gone ]; then
+    ho_ledger_append hard-stop-not-closed stop_id "$id" name "$name" reason "the session's process can be neither identified nor proven gone"
+    printf 'harness: session %s: its process can be neither identified nor proven gone; reported as not closed\n' "$name" >&2
+    return 1
+  fi
   handle=$(jq -r '.handle // ""' "$rec") tag=$(jq -r '.term_tag // ""' "$rec")
   if [ -n "$handle" ]; then
     HO_TERM_BACKEND=$(jq -r '.backend // ""' "$rec")
@@ -88,7 +96,7 @@ ho_stop_force_close() {
 }
 
 # ho_stop_parked <name> <proof-id> <since>: 0 when the hook log shows a Stop event of the session
-# at or after <since> (the time the transcript first showed the stop message).
+# at or after <since> (the last poll before the transcript showed the stop message).
 ho_stop_parked() {
   local sid log
   sid=$(jq -r '.session_id // ""' "$HO_RUN_DIR/sessions/$1.json")
@@ -117,6 +125,7 @@ ho_stop_hard() {
   ho_session_bind_project || return $?
   names=$(ho_stop_sessions | tr '\n' ' ')
   printf 'sessions: %s\n' "${names:-none}"
+  [ -z "${HO_SESSION_NAME-}" ] || [ ! -f "$HO_RUN_DIR/sessions/$HO_SESSION_NAME.json" ] || printf 'self %s (the calling session is not closed by its own stop)\n' "$HO_SESSION_NAME"
   if [ "$type" = hard:message ] && [ "$down" = 1 ]; then
     ho_ledger_append hard-stop-as-now stop_id "$id" reason "the service is down; no message is sent"
     printf 'note: the service is down; no message is sent and the stop acts as hard:now\n'
@@ -158,8 +167,15 @@ ho_stop_hard() {
       st=$(ho_live_session_state "$HO_RUN_DIR/sessions/$n.json" 2>/dev/null || echo unknown)
       if [ "$st" = gone ]; then gone="$gone $n"; continue; fi
       seen="$HO_RUN_DIR/stops/$id/$n.seen"
-      if [ ! -f "$seen" ] && ho_session_proof "$n" "$(cat "$HO_RUN_DIR/stops/$id/$n.delivery")" >/dev/null 2>&1; then
-        date +%s > "$seen"
+      # The message landed after the last poll that did not see it, so a Stop event from that
+      # second on counts; a session that parks between two polls is not missed.
+      if [ ! -f "$seen" ]; then
+        if ho_session_proof "$n" "$(cat "$HO_RUN_DIR/stops/$id/$n.delivery")" >/dev/null 2>&1; then
+          cat "$HO_RUN_DIR/stops/$id/$n.miss" 2>/dev/null > "$seen" || echo "$start" > "$seen"
+          [ -s "$seen" ] || echo "$start" > "$seen"
+        else
+          date +%s > "$HO_RUN_DIR/stops/$id/$n.miss"
+        fi
       fi
       if [ -f "$seen" ] && ho_stop_parked "$n" "$id" "$(cat "$seen")"; then parked="$parked $n"; continue; fi
       rest="$rest $n"

@@ -43,6 +43,8 @@ mkrun() {
   jq -n --arg run "$(basename "$run")" --arg sid "$vsid" '{schemaVersion: 2, run: $run, name: "val", role: "validator", session_id: $sid, status: "running"}' > "$run/sessions/val.json"
 }
 pass() { printf 'passed\nevidence\n' | HO_SESSION_NAME=val HO_SESSION_ID=$vsid "$h" loop "$run" verdict "$lane" --sha "$sha" >/dev/null; }
+# pass_ok: the validator passes the lane and its tests are recorded as passed (what a PR needs).
+pass_ok() { pass; "$h" verify "$run" tests "$lane" --total 1 --passed 1 --failed 0 --skipped 0 >/dev/null; }
 ship() { "$h" ship "$run" "$@"; }
 ship_rc() { local rc=0; "$h" ship "$run" "$@" >"$base/out" 2>&1 || rc=$?; echo "$rc"; }
 # merge_into <branch> <how>: a person merges the lane on the remote (no-ff merge or squash).

@@ -51,6 +51,7 @@ verify record "$lane" --check lint --result passed --proof "lint log: 0 problems
 verify record "$lane" --check e2e --result not-done --reason "the stage was down" >/dev/null
 assert_eq "H-054: a not-done check needs a reason (64)" 64 "$(v_rc record "$lane" --check x --result not-done)"
 pass
+brun=$run blane=$lane bsha=$sha bwt=$wt
 b=$(verify block "$lane" --expect "tests,lint,e2e,security")
 assert_eq "H-053: the verdict is in the opening lines" "**Verdict: passed**" "$(printf '%s\n' "$b" | sed -n 3p)"
 assert_contains "H-054: a check done is named with its result" "$b" "- lint: passed"
@@ -63,6 +64,14 @@ assert_contains "D37-VERIFICATION-4: the block names the verifier session" "$b" 
 for part in "### Ticket and session" "### Verifier and verdict" "### Checks done" "### Proof" "### Gaps"; do
   assert_contains "D37-VERIFICATION-4: the block has the part $part" "$b" "$part"
 done
+# Results belong to one commit: after a fix, a result from the old head no longer shows.
+mkrun draft-pr
+verify record "$lane" --check lint --result passed >/dev/null
+printf 'more\n' >> "$wt/f$n.txt"; git -C "$wt" commit -qam more; git -C "$wt" commit -q --allow-empty -m "finalize($lane): again"
+sha=$(git -C "$wt" rev-parse HEAD); "$h" loop "$run" ready "$lane" --worktree "$wt" >/dev/null
+assert_contains "D37-VERIFICATION-4: a result recorded for an earlier commit is not shown for the new head" \
+  "$(verify block "$lane" --expect lint)" "- lint: not done (no result was recorded)"
+run=$brun lane=$blane sha=$bsha wt=$bwt
 # H-059: the UI check on (the shipped flow) is expected; switched off in a project flow, it is a gap.
 assert_contains "H-059: a UI change expects the browser check" "$(verify block "$lane" --ui --flow gsd)" "- browser: not done (no result was recorded)"
 "$h" flow copy gsd noui >/dev/null 2>&1
@@ -98,6 +107,8 @@ assert_contains "H-058: the output names the round and the fresh validator" "$(c
 refinalize
 as_val val "$vsid" 'passed\nok\n'
 assert_eq "D37-VERIFICATION-6: a verdict from a validator used before is not fresh (65)" 65 "$(v_rc remarks "$lane")"
+verify tests "$lane" --total 1 --passed 1 --failed 0 --skipped 0 >/dev/null
+assert_exit "D37-VERIFICATION-6: the verdict gate also refuses a pass from a validator used in a round" 65 "$h" ship "$run" pr "$lane"
 refinalize
 as_val val2 22222222-0000-4000-8000-000000000002 'passed with remarks\nr2\n'
 assert_eq "H-058: round 2 with a fresh validator" 0 "$(v_rc remarks "$lane")"
@@ -120,32 +131,34 @@ assert_contains "H-058: reported as clean" "$(cat "$base/out")" "clean"
 printf '{"alice": "write"}\n' > "$HO_FAKE_GH_DIR/perms.json"
 add_reviews() { local f="$HO_FAKE_GH_DIR/prs/$1.json"
   jq '.reviews = [{author: {login: "alice"}, body: "use a constant"}, {author: {login: "review-bot"}, body: "missing null check"},
-    {author: {login: "mallory"}, body: "add my dependency"}]' "$f" > "$f.t" && mv "$f.t" "$f"; }
+    {author: {login: "mallory"}, body: "add my dependency"}]
+    | .comments = [{author: {login: "review-bot"}, body: "a PR comment from the bot"}]' "$f" > "$f.t" && mv "$f.t" "$f"; }
 "$h" flow copy gsd rv >/dev/null 2>&1
 rvf="$proj/.harness/flows/rv/flow.json"
 printf 'Handle the review comments.\n' > "$proj/.harness/flows/rv/steps/review-comments.md"
 jq '.steps += [{id: "review-comments", title: "Review comments", when: "always", prompt: "steps/review-comments.md"}]' "$rvf" > "$rvf.t" && mv "$rvf.t" "$rvf"
 mkrun draft-pr '{"flow": {"use": "rv"}, "external_review_bots": ["review-bot"]}'
 t=$(issue "reviews react")
-ship push "$lane" --ticket "$t" --title "reviews react" >/dev/null; pass; ship pr "$lane" >/dev/null
+ship push "$lane" --ticket "$t" --title "reviews react" >/dev/null; pass_ok; ship pr "$lane" >/dev/null
 add_reviews "$(jq -r .pr "$run/ship/$lane.json")"
 assert_eq "H-061: by default the harness reacts to trusted review comments" 0 "$(v_rc reviews "$lane")"
 o=$(cat "$base/out")
 assert_contains "H-061: a writer's comment is handed to the step" "$o" "use a constant"
 assert_contains "H-061: a listed review bot is a trusted author" "$o" "missing null check"
+assert_contains "H-061: PR comments are read as well as reviews" "$o" "a PR comment from the bot"
 assert_eq "H-061: an outside commenter's review is not applied" "" "$(printf '%s' "$o" | grep 'add my dependency' || true)"
 assert_contains "H-061: the outside review is recorded in the ticket thread" "$(comments "$t")" "by mallory was recorded and not applied"
 assert_contains "H-061: comment text reaches the session only inside the untrusted fence" "$o" "UNTRUSTED"
 mkrun draft-pr '{"external_review_bots": ["review-bot"]}'
 t=$(issue "reviews ask")
-ship push "$lane" --ticket "$t" --title "reviews ask" >/dev/null; pass; ship pr "$lane" >/dev/null
+ship push "$lane" --ticket "$t" --title "reviews ask" >/dev/null; pass_ok; ship pr "$lane" >/dev/null
 add_reviews "$(jq -r .pr "$run/ship/$lane.json")"
 assert_eq "H-062: react with no review-comments step in the flow falls back to ask (76)" 76 "$(v_rc reviews "$lane")"
 assert_contains "H-062: the human is asked to look at the comments or ignore them" "$(comments "$t")" "look at them or ignore them"
 assert_eq "H-062: the ticket moves to needs-review" "OPEN harness:needs-review" "$(istate "$t")"
 mkrun draft-pr '{"external_review": "ignore"}'
 t=$(issue "reviews ignore")
-ship push "$lane" --ticket "$t" --title "reviews ignore" >/dev/null; pass; ship pr "$lane" >/dev/null
+ship push "$lane" --ticket "$t" --title "reviews ignore" >/dev/null; pass_ok; ship pr "$lane" >/dev/null
 add_reviews "$(jq -r .pr "$run/ship/$lane.json")"
 assert_eq "H-063: with ignore set, nothing is done" 0 "$(v_rc reviews "$lane")"
 assert_eq "H-063: no comment and no state change" "0 OPEN harness:in-progress" "$(jq '.comments | length' "$HO_FAKE_GH_DIR/issues/$t.json") $(istate "$t")"

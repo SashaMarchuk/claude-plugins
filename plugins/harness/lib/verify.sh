@@ -49,11 +49,17 @@ USAGE
 
 ho_vf_file() { printf '%s/verify/%s.jsonl\n' "$HO_RUN_DIR" "$1"; }
 
+# ho_vf_sha <lane>: the lane's recorded commit; every result belongs to one commit.
+ho_vf_sha() { jq -r '.sha // ""' "$HO_RUN_DIR/lanes/$1.json" 2>/dev/null; }
+
 # ho_vf_add <lane> <check> <result> <reason> <proof> [exception]
 ho_vf_add() {
+  local sha
+  sha=$(ho_vf_sha "$1")
+  [ -n "$sha" ] || { ho_vf_err "lane $1 is not ready (no finalize commit recorded)"; return 65; }
   mkdir -p "$HO_RUN_DIR/verify" || return 1
-  jq -cn --arg c "$2" --arg r "$3" --arg why "$4" --arg p "$5" --arg e "${6-}" --arg ts "$(ho_now)" \
-    '{check: $c, result: $r, reason: $why, proof: $p, exception: $e, ts: $ts}' >> "$(ho_vf_file "$1")" || return 1
+  jq -cn --arg c "$2" --arg r "$3" --arg why "$4" --arg p "$5" --arg e "${6-}" --arg ts "$(ho_now)" --arg sha "$sha" \
+    '{check: $c, result: $r, reason: $why, proof: $p, exception: $e, ts: $ts, sha: $sha}' >> "$(ho_vf_file "$1")" || return 1
   ho_ledger_append verify-check lane "$1" check "$2" result "$3"
 }
 
@@ -74,7 +80,7 @@ ho_vf_record() {
   ho_vf_check_ok "$check" || { ho_vf_err "a check name is a-z 0-9, spaces and -, at most 40 characters"; return 64; }
   case $result in passed | failed | not-done) ;; *) ho_vf_usage; return 64 ;; esac
   [ "$result" != not-done ] || [ -n "$reason" ] || { ho_vf_err "a check that was not done needs --reason"; return 64; }
-  ho_vf_add "$lane" "$check" "$result" "$reason" "$proof" || return 1
+  ho_vf_add "$lane" "$check" "$result" "$reason" "$proof" || return $?
   printf 'recorded %s: %s\n' "$check" "$result"
 }
 
@@ -121,6 +127,20 @@ ho_vf_tests() {
   printf 'tests: passed%s\n' "${exc:+ (exception: $exc)}"
 }
 
+# ho_vf_tests_ok <lane>: 0 when the newest "tests" result for the lane's commit passed; else 1
+# with the reason in HO_VF_WHY (the test rule gates the PR, H-056).
+ho_vf_tests_ok() {
+  local sha r
+  sha=$(ho_vf_sha "$1")
+  r=$(jq -rs --arg sha "$sha" 'map(select(.sha == $sha and .check == "tests")) | last | if . == null then "" else "\(.result)\t\(.reason)" end' "$(ho_vf_file "$1")" 2>/dev/null) || r=""
+  case $r in
+    passed*) return 0 ;;
+    '') HO_VF_WHY="no test result is recorded for $sha (harness verify tests)" ;;
+    *) HO_VF_WHY="the test check failed for $sha: ${r#*	}" ;;
+  esac
+  return 1
+}
+
 # ho_vf_steps <flow>: the flow's switched-on step ids, one per line.
 ho_vf_steps() { [ -z "${1-}" ] || "$HO_ROOT/bin/harness" flow steps "$1" 2>/dev/null | cut -f2; }
 
@@ -158,7 +178,8 @@ ho_vf_block() {
     verdict="no verdict recorded" verifier="none"
   fi
   recs="[]"
-  [ ! -f "$(ho_vf_file "$lane")" ] || recs=$(jq -s 'group_by(.check) | map(max_by(.ts)) ' "$(ho_vf_file "$lane")")
+  # Only results recorded for this exact commit count; a result from before a fix does not.
+  [ ! -f "$(ho_vf_file "$lane")" ] || recs=$(jq -s --arg sha "$sha" 'map(select(.sha == $sha)) | group_by(.check) | map(last)' "$(ho_vf_file "$lane")")
   local browser_off=0
   if [ "$ui" -eq 1 ]; then
     if [ -z "$flow" ] || ho_vf_steps "$flow" | grep -qx ui-check; then expect="${expect:+$expect,}browser"; else browser_off=1; fi
@@ -203,6 +224,7 @@ ho_vf_ticket() { # <lane>: the lane's ticket or nothing
 }
 
 ho_vf_human() { # <lane> <ticket> <why>: needs-review, one owner-action line, exit 76
+  mkdir -p "$HO_RUN_DIR/verify" && printf '%s\n' "$3" > "$HO_RUN_DIR/verify/$1.handed"
   [ -z "$2" ] || ho_tickets review "$2" >/dev/null || true
   ho_ledger_append owner-action title "ticket ${2:-?} (lane $1) needs a human" why "$3" command "read the PR and its verdict" verify "a human decides"
   printf 'handed to a human: %s; ticket %s is needs-review\n' "$3" "${2:-?}"
@@ -267,7 +289,7 @@ ho_vf_reviews() {
   [ -n "$pr" ] || { ho_vf_err "lane $lane has no PR"; return 65; }
   ticket=$(ho_vf_ticket "$lane")
   repo=${HO_TICKETS_REPO:-}
-  reviews=$(gh pr view "$pr" --json reviews $(ho_ship_gh_repo) 2>/dev/null | jq -c '[.reviews // [] | .[] | {login: (.author.login // ""), body: (.body // "")}]' 2>/dev/null) \
+  reviews=$(gh pr view "$pr" --json reviews,comments $(ho_ship_gh_repo) 2>/dev/null | jq -c '[(.reviews // []) + (.comments // []) | .[] | {login: (.author.login // ""), body: (.body // "")}]' 2>/dev/null) \
     || { ho_vf_err "the reviews of PR #$pr cannot be read"; return 65; }
   bots=$(ho_cfg '.external_review_bots | if type == "array" then map(strings) | join(" ") else "" end' '') || return 78
   # react needs a step that can act and a profile that may push; otherwise it is ask.

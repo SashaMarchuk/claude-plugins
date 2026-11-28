@@ -187,8 +187,13 @@ ho_orch_start() {
   ho_orch_h config gate || return $?
   flow=$(ho_orch_flow) || return 78
   ho_orch_h flow preflight "$flow" >/dev/null || return $?
+  local hints
+  hints=$(ho_orch_h flow hints "$flow") || return $?
   run=$(ho_orch_h run new ${newargs[@]+"${newargs[@]}"}) || return $?
   ho_run_open "$run"
+  # H-067, D37-FLOW-2: the hints the run passes to a chosen system's steps are listed at start.
+  ho_ledger_append flow-hints flow "$flow" count "$(printf '%s' "$hints" | grep -c . || true)" \
+    hints "$(printf '%s' "$hints" | tr '\t' ' ' | paste -sd ';' - | sed 's/;/; /g')"
   ho_session_bind_project || return $?
   # D42l: the hooks check names hooks with no time limit; it never stops the start.
   ho_orch_h session "$HO_RUN_DIR" hooks-check >&2 || true

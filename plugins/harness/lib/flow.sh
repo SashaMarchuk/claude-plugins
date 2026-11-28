@@ -62,6 +62,7 @@ usage: harness flow list
        harness flow steps <flow>      one line per step: <n> TAB <id> TAB <when> TAB <title>
        harness flow plan <flow>       steps plus TAB <runtime> TAB <mode> TAB <owner> TAB <note> TAB <launch>
        harness flow preflight <flow>  start check: runtimes logged in, skills installed; installs nothing
+       harness flow hints <flow>      harness settings a chosen system's step gets as a hint: <step> TAB <setting>
        harness flow copy <flow> <new> copy a flow into <project>/.harness/flows/<new> as an own flow
        harness flow render <flow> <role> [--step <id>] [--set NAME VALUE]... [--file NAME PATH]...
 roles: worker (needs --step), validator
@@ -402,18 +403,9 @@ ho_flow_render() {
     [ -s "$tmpd/$name" ] && valargs+=(--rawfile "V_$name" "$tmpd/$name")
   done
   # H-077: the agent language, English by default.
-  local lang reqf=/dev/null fmt use
+  local lang reqf=/dev/null
   lang=$(ho_sel_language) || exit "$HO_EXIT_FLOW"
-  # D41, H-076: the requirements block, only on a grilling step and only when the setting says so.
-  if [ -n "$step" ] && [ "$(jq -r --arg s "$step" '.steps[] | select(.id == $s) | .kind // ""' "$HO_FLOW_JSON")" = grilling ]; then
-    fmt=$(ho_cfg '.requirements.format' 'none') || exit "$HO_EXIT_FLOW"
-    use=$(ho_cfg '.requirements.use_in_grilling' 'true') || exit "$HO_EXIT_FLOW"
-    case $fmt in
-      openspec) [ "$use" = false ] || reqf="$HO_ROOT/prompts/requirements-openspec.md" ;;
-      none) ;;
-      *) printf 'harness: requirements.format must be openspec or none, not %s\n' "$fmt" >&2; exit "$HO_EXIT_FLOW" ;;
-    esac
-  fi
+  [ -z "$step" ] || reqf=$(ho_flow_req_file "$step") || exit "$HO_EXIT_FLOW"
   jq -nj --arg flow "$flow" --arg step "$step" --arg lang "$lang" --arg harness "$HO_ROOT/bin/harness" --rawfile req "$reqf" ${valargs[@]+"${valargs[@]}"} \
     --slurpfile cfg "$HO_FLOW_JSON" --rawfile role "$role_file" --rawfile steptpl "$step_prompt" '
     def render($v):
@@ -440,7 +432,11 @@ ho_flow_render() {
          | ($base + {STEP_ID: $s.id, STEP_TITLE: $s.title}) as $sb
          | ($steptpl | render($sb)) as $st
          | if ($st.missing | length) > 0 then error("missing or empty values: \($st.missing | unique | join(" "))")
-           else $sb + {STEP_TEXT: ($st.out + (if $req == "" then "" else "\n\n" + ($req | rtrimstr("\n")) + "\n" end))} end
+           # H-067, D37-FLOW-2: on a step the chosen system owns, a harness setting is a hint only.
+           else (($c.source // "own") == "system" and (($c.system.steps // []) | index($step)) != null) as $owned
+             | $sb + {STEP_TEXT: ($st.out + (if $req == "" then ""
+                 elif $owned then "\n\n## Hint from the harness\n\nThe chosen flow system \($c.system.name // "of this flow") owns this step. Where its own way differs, follow the system: what follows is a hint only.\n\n" + ($req | rtrimstr("\n")) + "\n"
+                 else "\n\n" + ($req | rtrimstr("\n")) + "\n" end))} end
        end) as $all
     | ($role | render($all)) as $r
     | if ($r.missing | length) > 0 then error("missing or empty values: \($r.missing | unique | join(" "))")
@@ -451,6 +447,34 @@ ho_flow_render() {
       "$(sed -e 's/^jq: error (at <unknown>): //' "$tmpd/.err")" >&2
     exit "$HO_EXIT_DATA"
   fi
+}
+
+# ho_flow_req_file <step>: the requirements block for that step (D41, H-076), or /dev/null: only
+# on a grilling step and only when the setting says so. Needs a loaded flow (HO_FLOW_JSON).
+ho_flow_req_file() {
+  local fmt use
+  if [ "$(jq -r --arg s "$1" '.steps[] | select(.id == $s) | .kind // ""' "$HO_FLOW_JSON")" = grilling ]; then
+    fmt=$(ho_cfg '.requirements.format' 'none') || return 1
+    use=$(ho_cfg '.requirements.use_in_grilling' 'true') || return 1
+    case $fmt in
+      openspec) [ "$use" = false ] || { printf '%s\n' "$HO_ROOT/prompts/requirements-openspec.md"; return 0; } ;;
+      none) ;;
+      *) printf 'harness: requirements.format must be openspec or none, not %s\n' "$fmt" >&2; return 1 ;;
+    esac
+  fi
+  printf '/dev/null\n'
+}
+
+# ho_flow_hints <flow>: the harness settings that reach a step of the chosen system only as a
+# hint (H-067, D37-FLOW-2), one line per hint: <step> TAB <setting>. Nothing for an own flow.
+ho_flow_hints() {
+  local id
+  ho_flow_load "$1"
+  [ "$(jq -r '.source // "own"' "$HO_FLOW_JSON")" = system ] || return 0
+  for id in $(jq -r '.system.steps // [] | .[] as $s | $s' "$HO_FLOW_JSON"); do
+    [ "$(jq -r --arg s "$id" '.steps[] | select(.id == $s) | .enabled != false' "$HO_FLOW_JSON")" = true ] || continue
+    [ "$(ho_flow_req_file "$id")" = /dev/null ] || printf '%s\trequirements.format=openspec\n' "$id"
+  done
 }
 
 ho_flow_main() {
@@ -468,6 +492,7 @@ ho_flow_main() {
     steps) [ $# -eq 1 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; ho_flow_steps "$1" ;;
     plan) [ $# -eq 1 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; ho_flow_plan "$1" ;;
     preflight) [ $# -eq 1 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; ho_flow_preflight "$1" ;;
+    hints) [ $# -eq 1 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; ho_flow_hints "$1" ;;
     copy) [ $# -eq 2 ] || { ho_flow_usage; exit "$HO_EXIT_USAGE"; }; ho_flow_copy "$1" "$2" ;;
     render) ho_flow_render "$@" ;;
     *) ho_flow_usage; exit "$HO_EXIT_USAGE" ;;

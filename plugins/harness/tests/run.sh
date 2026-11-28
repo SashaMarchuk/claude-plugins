@@ -3,6 +3,8 @@
 # Re-runs itself once in a scrubbed environment, then runs every tests/t_*.sh
 # file in its own process and its own temp folder. Last line of output:
 #   harness tests: PASS=<n>  FAIL=<m>
+# HO_TEST_JQ=<absolute path> runs the tests against that jq (issue #117): the scrubbed run
+# finds it first on PATH, through a one-entry folder. A bad value stops the runner.
 set -euo pipefail
 
 HO_TESTS_DIR=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -19,7 +21,18 @@ if [ "${HO_TEST_SCRUBBED:-}" != 1 ]; then
   tmp_base=${TMPDIR:-/tmp}
   tmp_base=${tmp_base%/}
   path="$HO_TESTS_DIR/fake-bin"
-  for tool in jq git bash; do
+  jq_dir=""
+  tools="jq git bash"
+  if [ -n "${HO_TEST_JQ:-}" ]; then
+    case $HO_TEST_JQ in /*) ;; *) ho_summary_fail "HO_TEST_JQ must be an absolute path: $HO_TEST_JQ" ;; esac
+    [ -f "$HO_TEST_JQ" ] && [ -x "$HO_TEST_JQ" ] || ho_summary_fail "HO_TEST_JQ is not an executable file: $HO_TEST_JQ"
+    "$HO_TEST_JQ" --version > /dev/null 2>&1 || ho_summary_fail "HO_TEST_JQ does not answer --version: $HO_TEST_JQ"
+    jq_dir=$(mktemp -d "$tmp_base/ho-test-jq.XXXXXX") || ho_summary_fail "mktemp failed"
+    ln -s "$HO_TEST_JQ" "$jq_dir/jq"
+    path="$path:$jq_dir"
+    tools="git bash"
+  fi
+  for tool in $tools; do
     tool_path=$(command -v "$tool" 2>/dev/null) || ho_summary_fail "$tool not found"
     tool_dir=$(dirname "$tool_path")
     case ":$path:" in *":$tool_dir:"*) ;; *) path="$path:$tool_dir" ;; esac
@@ -31,6 +44,7 @@ if [ "${HO_TEST_SCRUBBED:-}" != 1 ]; then
   env -i HOME="$test_home" TMPDIR="$tmp_base" LANG=C PATH="$path" \
     HO_TEST_SCRUBBED=1 "$bash_bin" "$HO_TESTS_DIR/run.sh" "$@" || rc=$?
   rm -rf "$test_home"
+  [ -z "$jq_dir" ] || rm -rf "$jq_dir"
   if [ "$rc" -ge 126 ]; then
     ho_summary_fail "scrubbed runner did not start (exit $rc)"
   fi
@@ -55,6 +69,8 @@ ho_finish() {
   fi
 }
 trap ho_finish EXIT
+
+echo "jq: $(jq --version 2>&1) ($(command -v jq))"
 
 HO_TEST_RESULTS="$HOME/results.txt"
 : > "$HO_TEST_RESULTS"

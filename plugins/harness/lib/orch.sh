@@ -59,6 +59,9 @@ ho_orch_bind() {
   HO_PROJECT_DIR=${HO_PROJECT_DIR:-$(dirname "$(dirname "$(dirname "$HO_RUN_DIR")")")}
   export HO_PROJECT_DIR
   ho_session_bind_project || return $?
+  # Issue #129: the run's commands run with the user config folder it was started with; a read
+  # only verb (HO_ORCH_READONLY=1) only says so.
+  ho_run_user_dir_check ${HO_ORCH_READONLY:+warn} || return $?
   ho_tk_bind_project_dir
 }
 
@@ -187,8 +190,14 @@ ho_orch_start() {
   ho_orch_h config gate || return $?
   flow=$(ho_orch_flow) || return 78
   ho_orch_h flow preflight "$flow" >/dev/null || return $?
+  ho_orch_gate_check || return $?
+  local hints
+  hints=$(ho_orch_h flow hints "$flow") || return $?
   run=$(ho_orch_h run new ${newargs[@]+"${newargs[@]}"}) || return $?
   ho_run_open "$run"
+  # H-067, D37-FLOW-2: the hints the run passes to a chosen system's steps are listed at start.
+  ho_ledger_append flow-hints flow "$flow" count "$(printf '%s' "$hints" | grep -c . || true)" \
+    hints "$(printf '%s' "$hints" | tr '\t' ' ' | paste -sd ';' - | sed 's/;/; /g')"
   ho_session_bind_project || return $?
   # D42l: the hooks check names hooks with no time limit; it never stops the start.
   ho_orch_h session "$HO_RUN_DIR" hooks-check >&2 || true
@@ -206,6 +215,23 @@ ho_orch_start() {
   [ "$rc" -eq 0 ] || { ho_orch_start_refused "orchestrator launch" "$rc"; return "$rc"; }
   ho_orch_watch_start
   printf 'run %s\n' "$HO_RUN_DIR"
+}
+
+# ho_orch_gate_check: issue #129. A profile that merges into the run's integration branch (the
+# local merge of D12: every profile but safe) runs the gate at every merge, so the gate must be
+# configured before the run starts; otherwise every ticket would run all its steps and block at
+# its merge. The same two functions the merge uses decide it (ho_au_decide, ho_loop_gate_cmd),
+# so a label with no command or a gate command in the project config is refused here as well.
+# Agent decision (D37): refuse (78), not warn, because no ticket could finish.
+ho_orch_gate_check() {
+  local prof
+  prof=$(ho_au_resolve) || return 78
+  ho_au_decide "$prof" merge "" "" "" 1
+  case $HO_AU_RC in 0 | 76) ;; *) return 0 ;; esac
+  ho_loop_gate_cmd >/dev/null || {
+    ho_orch_err "profile $(printf '%s' "$prof" | jq -r .name) merges each ticket into the run's integration branch, and every merge runs the gate; configure the gate (gate.use, with its command in gate.list of the user config $(ho_user_config)) before the run starts"
+    return 78
+  }
 }
 
 # A start refused after the run was created ends that run, so the next start does not resume a
@@ -522,12 +548,39 @@ ho_orch_merge() {
     76) echo "wait $t human-gate merge"; return 0 ;;
     *) ho_orch_end "$t"; return 0 ;;
   esac
+  # Issue #129: a lane whose merge is already confirmed (a pass cut off after the merge and
+  # before this record) is never merged again; the ticket moves on.
+  if ho_orch_merge_confirmed "$t" "$lane"; then
+    ho_ledger_append merge-already-confirmed lane "$lane" ticket "$t" sha "$(ho_orch_get "$t" sha)"
+    ho_orch_set "$t" '.phase = "ship"'; echo "merged $t $lane"; return 0
+  fi
   rc=0; ho_orch_h loop "$HO_RUN_DIR" merge "$lane" >/dev/null 2>"$(ho_orch_dir)/$t/merge.err" || rc=$?
+  # A no-op refusal may be a merge confirmed by another pass meanwhile.
+  if [ "$rc" -eq 69 ] && ho_orch_merge_confirmed "$t" "$lane"; then
+    ho_ledger_append merge-already-confirmed lane "$lane" ticket "$t" sha "$(ho_orch_get "$t" sha)"
+    rc=0
+  fi
   case $rc in
     0) ho_orch_set "$t" '.phase = "ship"'; echo "merged $t $lane" ;;
     75) echo "wait $t stopped merge" ;;
     *) ho_orch_block "$t" blocked "the engine-checked merge refused the lane (exit $rc: $(tail -n 1 "$(ho_orch_dir)/$t/merge.err" | cut -c1-160))" ;;
   esac
+}
+
+# ho_orch_merge_confirmed <ticket> <lane>: the ledger has a merge-confirmed line for the lane's
+# current finalize commit (never a lane name alone: a new finalize commit needs its own merge),
+# and git still shows that commit in the integration branch (H-046).
+ho_orch_merge_confirmed() {
+  local sha lsha branch iwt
+  lsha=$(jq -r '.sha // ""' "$HO_RUN_DIR/lanes/$2.json" 2>/dev/null) || return 1
+  sha=$(ho_orch_get "$1" sha)
+  [ -n "$lsha" ] || return 1
+  [ -z "$sha" ] || [ "$sha" = "$lsha" ] || return 1
+  ho_ledger_events | jq -e --arg l "$2" --arg s "$lsha" 'select(.kind == "merge-confirmed" and .lane == $l and .sha == $s)' >/dev/null 2>&1 || return 1
+  branch=$(jq -r '.branch // ""' "$HO_RUN_DIR/integration.json" 2>/dev/null) || return 1
+  iwt=$(jq -r '.worktree // ""' "$HO_RUN_DIR/integration.json" 2>/dev/null) || return 1
+  [ -n "$branch" ] && [ -n "$iwt" ] || return 1
+  git -C "$iwt" merge-base --is-ancestor "$lsha" "refs/heads/$branch" 2>/dev/null
 }
 
 # The ticket's end when the profile stops before a remote merge (H-042): needs-review.
@@ -820,7 +873,7 @@ ho_orch_main() {
     status)
       HO_PROJECT_DIR=${HO_PROJECT_DIR:-$(ho_project_root 2>/dev/null || true)}
       run=$(ho_orch_run_arg "${1-}" 2>/dev/null || ho_orch_newest) || { ho_orch_err "no run in this project"; exit 66; }
-      ho_orch_bind "$run" || exit $?
+      HO_ORCH_READONLY=1 ho_orch_bind "$run" || exit $?
       ho_orch_status || rc=$? ;;
     stop)
       run=""

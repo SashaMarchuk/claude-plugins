@@ -31,11 +31,12 @@ assert_eq "Rebuild run: two runs started in the same second get different IDs" "
 assert_eq "Rebuild run: the ledger starts with a run-start line" "run-start" "$(head -1 "$run/ledger.jsonl" | jq -r .kind)"
 
 # ---- every marker and every ledger line carries the run ID (S8-27) -------------
-"$h" state "$run" marker set lane-a.pr-ready
-"$h" state "$run" marker set lane-b.blocked
-"$h" state "$run" decision "pick x" "because y"
-"$h" state "$run" owner-action "deploy" "needs a secret" "make deploy" "site is up"
-"$h" state "$run" marker clear lane-b.blocked
+# Setup lines never end the file: a broken marker must fail its named check below (#88).
+"$h" state "$run" marker set lane-a.pr-ready || true
+"$h" state "$run" marker set lane-b.blocked || true
+"$h" state "$run" decision "pick x" "because y" || true
+"$h" state "$run" owner-action "deploy" "needs a secret" "make deploy" "site is up" || true
+"$h" state "$run" marker clear lane-b.blocked || true
 assert_exit "S8-27: a marker set by this run reads as set" 0 "$h" state "$run" marker check lane-a.pr-ready
 assert_exit "S8-27: a cleared marker reads as not set" 1 "$h" state "$run" marker check lane-b.blocked
 n=0; missing=""

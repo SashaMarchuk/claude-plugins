@@ -60,6 +60,8 @@ ho_life_unstated() {
       # in no known state. Pull requests come in the same list and are left out. A failed or
       # unreadable listing fails the call, so the decision is unknown.
       json=$(gh api --paginate "repos/$HO_TK_REPO/issues?state=open&per_page=100") || exit 1
+      # Real gh prints at least []: empty output is a failed listing (#110).
+      [ -n "$json" ] || exit 1
       printf '%s' "$json" |
         jq -s -r --arg p "$HO_TK_PREFIX:" --arg s "$HO_STATES" '($s | split(" ") | map($p + .)) as $known
           | if all(.[]; type == "array") then add // [] else error("not a list of issues") end

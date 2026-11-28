@@ -5,7 +5,7 @@ Short guide for a new user. It takes about five minutes.
 ## 1. Requirements
 
 - Claude Code, logged in.
-- `bash`, `git` and `jq` on your PATH.
+- `bash`, `git` and `jq` on your PATH. jq must be 1.7 or newer (the macOS system jq is 1.7.1); an older jq is refused.
 - A terminal the harness can drive: iTerm2 on macOS, or `tmux`.
 - The GitHub CLI `gh`, logged in, if your tickets are GitHub issues.
 - The flow system you want to run, if any. The `gsd` flow needs GSD installed; the `basic` flow needs nothing more.

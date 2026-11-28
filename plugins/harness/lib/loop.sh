@@ -100,6 +100,18 @@ ho_loop_ready() {
   [ -n "$wt" ] || { ho_loop_usage; return 64; }
   ho_loop_lane_ok "$lane" || return 65
   [ -f "$HO_RUN_DIR/integration.json" ] || { ho_loop_err "run $HO_RUN_ID has no integration branch yet"; return 65; }
+  # The ticket decides whether a soft:ticket stop lets the lane merge (D25a). Called as a worker
+  # session of this run, the ticket must be the one in that worker's own record (#110).
+  local sf srole sticket
+  case ${HO_SESSION_NAME-} in '' | */* | .*) sf="" ;; *) sf="$HO_RUN_DIR/sessions/$HO_SESSION_NAME.json" ;; esac
+  if [ -n "$sf" ] && [ -f "$sf" ] && [ "$(jq -r '.session_id // ""' "$sf" 2>/dev/null)" = "${HO_SESSION_ID-}" ]; then
+    srole=$(jq -r '.role // ""' "$sf" 2>/dev/null) || srole=""
+    sticket=$(jq -r '.ticket // "" | tostring' "$sf" 2>/dev/null) || sticket=""
+    if [ "$srole" = worker ] && [ -n "$ticket" ] && [ "$ticket" != "$sticket" ]; then
+      ho_loop_err "lane $lane: --ticket $ticket is not the ticket of worker $HO_SESSION_NAME (${sticket:-none}); not ready"
+      return 65
+    fi
+  fi
   branch=$(git -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null) || { ho_loop_err "lane $lane: $wt is not on a branch"; return 65; }
   ho_loop_clean "$wt" || rc=$?
   [ "$rc" -eq 0 ] || { ho_loop_err "lane $lane: the worktree $wt is not clean (or cannot be read); not ready"; return 65; }
@@ -309,13 +321,49 @@ ho_loop_undo() {
   esac
 }
 
+# ho_loop_recover: a merge that was cut off between git and its record (issue #129: a crash, a
+# KILL, a failed ledger write). Uses ij, iwt, branch and old of the caller; acts only while the
+# integration branch is checked out and its tip is not the recorded tip. Two cases, each proven:
+#   - the ledger has a merge-confirmed line from the recorded tip to the branch tip: the merge
+#     passed every check and only the tip write was lost. The tip is written (old moves on).
+#   - the branch tip is a merge commit the engine made and never confirmed: exactly two parents,
+#     the first the recorded tip, the subject "merge(<lane>): <second parent> into <branch>". It
+#     is rolled back the safe way (ho_loop_rollback), and this merge then runs every check again,
+#     the gate included. A rollback that cannot run leaves it to the tip check, which refuses.
+# Anything else is left to the tip check. Returns 1 only when a write fails.
+ho_loop_recover() {
+  local cur p2 subj line r=0
+  [ "$(git -C "$iwt" symbolic-ref -q HEAD 2>/dev/null)" = "refs/heads/$branch" ] || return 0
+  cur=$(ho_loop_ref "$iwt" "refs/heads/$branch") || return 0
+  [ "$cur" != "$old" ] || return 0
+  line=$(ho_ledger_events | jq -c --arg b "$old" --arg t "$cur" --arg br "$branch" \
+    'select(.kind == "merge-confirmed" and .base == $b and .tip == $t and .branch == $br)' 2>/dev/null | tail -n 1) || line=""
+  if [ -n "$line" ]; then
+    jq --arg tip "$cur" '.tip = $tip' "$ij" | ho_atomic_write "$ij" || return 1
+    ho_loop_ledger merge-tip-recovered lane "$(printf '%s' "$line" | jq -r '.lane // ""')" branch "$branch" base "$old" tip "$cur" || return 1
+    old=$cur
+    return 0
+  fi
+  [ "$(ho_loop_ref "$iwt" "$cur^1")" = "$old" ] || return 0
+  p2=$(ho_loop_ref "$iwt" "$cur^2") || return 0
+  ! ho_loop_ref "$iwt" "$cur^3" >/dev/null || return 0
+  subj=$(git -C "$iwt" log -1 --format=%s "$cur" 2>/dev/null) || return 0
+  case $subj in "merge("*"): $p2 into $branch") ;; *) return 0 ;; esac
+  ho_loop_rollback "$iwt" "$branch" "$old" "$cur" || r=$?
+  [ "$r" -eq 0 ] || return 0
+  ho_loop_ledger merge-recovered branch "$branch" base "$old" tip "$cur" sha "$p2" \
+    reason "an unconfirmed merge commit of the engine was rolled back; the merge runs again with every check" || return 1
+  return 0
+}
+
 # ---- merge <lane> ------------------------------------------------------------------------
 ho_loop_merge_locked() {
   local lane=$1 ij="$HO_RUN_DIR/integration.json" lj="$HO_RUN_DIR/lanes/$1.json"
-  local iwt branch old lwt lbranch lsha worker why vsnap gate mc stopped=0 rc=0 new gw log grc=0 gpid prof
+  local iwt branch old lwt lbranch lsha worker why vsnap gate mc stopped=0 rc=0 new gw log grc=0 gpid prof lticket
   # A stop refuses the merge, except for the lane of a ticket that a soft:ticket stop lets run to
   # its end (H-086, D25a); a lane with no ticket counts as new work.
-  ho_stop_gate "$(jq -r '.ticket // ""' "$lj" 2>/dev/null || true)" || stopped=$?
+  lticket=$(jq -r '.ticket // ""' "$lj" 2>/dev/null || true)
+  ho_stop_gate "$lticket" || stopped=$?
   [ "$stopped" -eq 0 ] || { ho_loop_err "the run is stopped (or its stop state is unknown); no merge"; return 75; }
   [ "$ho_loop_sig" -eq 0 ] || { ho_loop_err "the merge was stopped by a signal before it started"; return 75; }
   [ -f "$ij" ] || { ho_loop_err "run $HO_RUN_ID has no integration branch"; return 65; }
@@ -346,6 +394,9 @@ ho_loop_merge_locked() {
   rc=0; ho_loop_clean "$lwt" || rc=$?
   [ "$rc" -eq 0 ] || { ho_loop_refuse 65 "$lane" "the lane worktree is not clean (or cannot be read)"; return; }
 
+  # Issue #129: a merge cut off before its record is recovered first (ho_loop_recover).
+  ho_loop_recover || return 1
+
   # Tip check before: the checked-out integration branch is at the last confirmed tip, clean.
   [ "$(git -C "$iwt" symbolic-ref -q HEAD 2>/dev/null)" = "refs/heads/$branch" ] \
     || { ho_loop_refuse 65 "$lane" "$iwt does not have $branch checked out"; return; }
@@ -368,13 +419,20 @@ ho_loop_merge_locked() {
   mkdir -p "$HO_RUN_DIR/gates"
   if ! git -C "$iwt" merge -q --no-ff --no-edit -m "merge($lane): $lsha into $branch" "$lsha" \
       > "$HO_RUN_DIR/gates/$lane-$lsha.merge.log" 2>&1; then
-    ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "git merge failed (conflict or error, log gates/$lane-$lsha.merge.log)" "$old"; return
+    # Issue #102: git can end after its commit (a signal during a slow post-merge hook). A
+    # commit that is provably this merge (parents: the old tip and the lane commit) is undone
+    # too; anything else is left for a person.
+    mc=$old
+    new=$(ho_loop_ref "$iwt" "refs/heads/$branch") || new=""
+    if [ -n "$new" ] && [ "$(ho_loop_ref "$iwt" "$new^1")" = "$old" ] && [ "$(ho_loop_ref "$iwt" "$new^2")" = "$lsha" ]; then mc=$new; fi
+    ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "git merge failed (conflict, error or signal, log gates/$lane-$lsha.merge.log)" "$mc"; return
   fi
 
   # H-046: confirm through git, from the branch ref, not from what the merge printed.
   new=$(ho_loop_ref "$iwt" "refs/heads/$branch") || new=""
   if [ -z "$new" ] || [ "$new" = "$old" ] \
       || [ "$(ho_loop_ref "$iwt" HEAD)" != "$new" ] \
+      || [ "$(git -C "$iwt" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$branch" ] \
       || [ "$(ho_loop_ref "$iwt" "$new^1")" != "$old" ] \
       || [ "$(ho_loop_ref "$iwt" "$new^2")" != "$lsha" ] \
       || ! git -C "$iwt" merge-base --is-ancestor "$lsha" "refs/heads/$branch" 2>/dev/null \
@@ -429,6 +487,10 @@ ho_loop_merge_locked() {
   if ! ho_loop_verdict_check "$lane" "$lsha" "$worker" || [ "$HO_LOOP_VSNAP" != "$vsnap" ]; then
     ho_loop_undo 65 "$lane" "the verdict for $lsha changed while the gate ran${HO_LOOP_VWHY:+ ($HO_LOOP_VWHY)}" "$new"; return
   fi
+  # The stop and the run end again, after the gate (#110): a stop or a run end that came while
+  # the gate ran refuses the merge before it is confirmed, with the same rule as before it.
+  stopped=0; ho_stop_gate "$lticket" 2>/dev/null || stopped=$?
+  [ "$stopped" -eq 0 ] || { ho_loop_undo 75 "$lane" "the run was stopped or ended while the gate ran (or its stop state is unknown)" "$new"; return; }
   [ "$ho_loop_sig" -eq 0 ] || { ho_loop_undo 75 "$lane" "the merge was stopped by a signal" "$new"; return; }
 
   # Confirm and record. Ledger line first: if the tip write then fails, the next merge refuses

@@ -85,3 +85,27 @@ cfg 'del(.preflight)'
 rm -f "$proj/.claude/settings.local.json"
 mv "$base/away/user.json" "$HOME/.claude/settings.json"
 mv "$base/away/local.json" "$proj/.claude/settings.local.json"
+
+# ---- issue #129 item 4: the settings of the account folder the sessions get ----
+# With an account per role, a session's config folder comes from the account command, never
+# from the caller's variable (the launch rule, issue #119). The check reads that folder, for
+# every role, each folder once.
+mkdir -p "$base/caller-cfg" "$base/acct-orch" "$base/acct-work"
+printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "caller-only-hook"}]}]}}\n' > "$base/caller-cfg/settings.json"
+printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "orch-acct-hook"}]}]}}\n' > "$base/acct-orch/settings.json"
+printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "work-acct-hook"}]}]}}\n' > "$base/acct-work/settings.json"
+cp "$user/config.json" "$base/user-config.keep"
+jq -n --arg o "$base/acct-orch" --arg w "$base/acct-work" '{schemaVersion: 2, runtime: {main: "claude-code"},
+  accounts: {roles: {default: "orch", worker: "work"},
+    list: {orch: {env_command: ("echo CLAUDE_CONFIG_DIR=" + $o)}, work: {env_command: ("echo CLAUDE_CONFIG_DIR=" + $w)}}}}' > "$user/config.json"
+out=$(CLAUDE_CONFIG_DIR="$base/caller-cfg" "$h" session "$run" hooks-check 2>&1) || true
+assert_contains "#129 H-089 (D42l): the orchestrator's account folder is read" "$out" "orch-acct-hook"
+assert_contains "#129 H-089 (D42l): the worker's account folder is read" "$out" "work-acct-hook"
+assert_eq "#129 H-089 (D42l): the caller's folder, which no session gets, is not read" "" "$(printf '%s' "$out" | grep caller-only-hook || true)"
+assert_eq "#129 H-089 (D42l): each folder is read once" 1 "$(printf '%s\n' "$out" | grep -c 'orch-acct-hook' || true)"
+jq '.accounts.list.orch.env_command = "exit 3"' "$user/config.json" > "$base/u.t" && mv "$base/u.t" "$user/config.json"
+out=$(CLAUDE_CONFIG_DIR="$base/caller-cfg" "$h" session "$run" hooks-check 2>&1) && rc=0 || rc=$?
+assert_eq "#129 H-089: an account whose folder cannot be worked out is a finding, never hooks OK" "0 no" \
+  "$rc $(printf '%s' "$out" | grep -q 'hooks OK' && echo yes || echo no)"
+assert_contains "#129 H-089: the notice names the role whose settings were not checked" "$out" "role orchestrator"
+mv "$base/user-config.keep" "$user/config.json"

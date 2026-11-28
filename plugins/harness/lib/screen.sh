@@ -72,15 +72,132 @@ ho_screen_profile_data() {
     '' | */* | *[!a-z0-9.-]* | .*) ;;
     *)
       data="$(dirname "$f")/$name"
-      if [ -f "$data" ]; then
-        jq -e -c 'select(type == "object")
-            | select((.shapes | type == "array") and (.shapes | length > 0))' "$data" 2>/dev/null && return 0
+      if [ -f "$data" ] && data=$(jq -e -c 'select(type == "object")
+            | select((.shapes | type == "array") and (.shapes | length > 0))' "$data" 2>/dev/null); then
+        ho_screen_learned_merge "$f" "$data"
+        return 0
       fi
       ;;
   esac
   printf 'harness: the runtime profile %s names no readable screen pattern file; screen text reads as unknown\n' "$f" >&2
   return 78
 }
+
+# ---- the user's own status line (issue #108) ---------------------------------------------------
+# A runtime may let each user set a custom status line, which the shipped status shapes do not
+# know; delivery then types nothing for that user. `harness screen <run> learn <session>` reads
+# that session's idle screen once (read-only, every other check of the delivery screen gate
+# still applies), learns a shape for each line under the input box that no shipped shape reads,
+# shows it, and stores it only after the person's yes (--yes --code). The learned file lives in
+# the user folder only: $HO_USER_DIR/screen/<runtime>.learned.json.
+#
+# The shape (agent decision under D37): the line's fixed marks in order and nothing else. A mark
+# is any non-ASCII character (a symbol, a box or separator character, an emoji) or one of the
+# ASCII characters [ ] ( ) { } < > | $; a run of the same mark counts as one, and a bracket pair
+# counts as one when the line's marks are counted (at least two are needed). Between two marks
+# only other ASCII characters may stand, so the words and numbers may change (branch, model,
+# cost) but a line with another set of marks, a dialog or a notice say, does not read as the
+# status line. A line with fewer than two marks is not learned: it cannot be told from text.
+# A line under the box that has a hold shape's anchor is never the status area, learned or not
+# (ho_screen_status_area, and the status tail of ho_screen_shape_match). Known limit: learned
+# lines after the first are accepted at any place under the box, not only at their own place.
+#
+# The learned shapes are used only while the runtime binary (its real path, size and change
+# time) and the user's status line command are the ones they were learned with; after a runtime
+# update or a change of the status line setting they are set aside (delivery types nothing) until
+# they are learned again.
+
+# ho_screen_learned_file <profile>: where the learned shapes of that runtime are kept.
+ho_screen_learned_file() { printf '%s/screen/%s.learned.json\n' "${HO_USER_DIR:-$HOME/.claude/harness}" "$(basename "$1" .json)"; }
+
+# ho_screen_sha <text>: the first 16 hex digits of its SHA-256.
+ho_screen_sha() {
+  local s
+  if command -v shasum >/dev/null 2>&1; then s=$(printf '%s' "$1" | shasum -a 256)
+  else s=$(printf '%s' "$1" | sha256sum); fi
+  printf '%s\n' "${s:0:16}"
+}
+
+# ho_screen_learn_keys <profile>: {runtime_id, status_sha}: what a learned shape depends on.
+# runtime_id is the runtime binary's real path, size and change time (a cheap stand-in for its
+# version: an update replaces the file); status_sha is the hash of the user's status line
+# command (the runtime's own settings file, status_line.user_settings and .user_command).
+ho_screen_learn_keys() {
+  local f=$1 cmd p t n=0 st="" sf key cdir uc=""
+  cmd=$(jq -r '.command // ""' "$f" 2>/dev/null) || cmd=""
+  p=$(PATH=$(ho_session_clean_path) command -v "$cmd" 2>/dev/null) || p=""
+  case $p in /*)
+    while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+      t=$(readlink "$p") || break
+      case $t in /*) p=$t ;; *) p="$(dirname "$p")/$t" ;; esac
+      n=$((n + 1))
+    done
+    p="$(cd "$(dirname "$p")" 2>/dev/null && pwd -P)/$(basename "$p")"
+    if stat -c %Y / >/dev/null 2>&1; then st=$(stat -c '%s %Y' "$p" 2>/dev/null) || st=""
+    else st=$(stat -f '%z %m' "$p" 2>/dev/null) || st=""; fi
+    ;;
+  *) p="" ;; esac
+  sf=$(jq -r '.status_line.user_settings // ""' "$f" 2>/dev/null) || sf=""
+  key=$(jq -r '.status_line.user_command // ""' "$f" 2>/dev/null) || key=""
+  if [ -n "$sf" ] && [ -n "$key" ]; then
+    cdir=$(ho_rt_config_dir "$f" "" 2>/dev/null) || cdir=""
+    sf=${sf//\{config_dir\}/$cdir}
+    [ -f "$sf" ] && uc=$(jq -r "$key | strings" "$sf" 2>/dev/null) || uc=""
+  fi
+  jq -cn --arg r "$p $st" --arg s "$(ho_screen_sha "$uc")" '{runtime_id: $r, status_sha: $s}'
+}
+
+# ho_screen_learned_merge <profile> <data-json>: print the data with the learned status shapes
+# added when they are valid and current; else the data as it is.
+ho_screen_learned_merge() {
+  local f=$1 data=$2 lf learned keys
+  [ "${HO_SCREEN_SHIPPED_ONLY:-}" != 1 ] || { printf '%s\n' "$data"; return 0; }
+  lf=$(ho_screen_learned_file "$f")
+  if [ ! -f "$lf" ] || [ -L "$lf" ]; then printf '%s\n' "$data"; return 0; fi
+  learned=$(jq -c 'select(type == "object" and .schemaVersion == 1
+      and (.first_line | type == "string") and (.lines | type == "array" and all(type == "string"))
+      and (.runtime_id | type == "string") and (.status_sha | type == "string"))' "$lf" 2>/dev/null) || learned=""
+  keys=$(ho_screen_learn_keys "$f")
+  if [ -z "$learned" ] || ! jq -en --argjson a "$learned" --argjson k "$keys" \
+    '$a.runtime_id == $k.runtime_id and $a.status_sha == $k.status_sha and ($k.runtime_id | test("^/"))' >/dev/null 2>&1; then
+    printf 'harness: the learned status line in %s is from another runtime version or status line setting; it is not used until it is learned again (harness screen <run> learn <session>)\n' "$lf" >&2
+    printf '%s\n' "$data"
+    return 0
+  fi
+  jq -cn --argjson d "$data" --argjson a "$learned" '$d
+    | .status_first_line = ([(.status_first_line // "" | strings | select(length > 0)), ($a.first_line | select(length > 0))]
+        | map("(" + . + ")") | join("|"))
+    | .status_lines = ((.status_lines // []) + $a.lines)'
+}
+
+# ho_screen_learn_shape <line>: print the shape of one status line, or fail when it has fewer
+# than two marks (see above). Bytes are read in the C locale; a UTF-8 character is one mark.
+ho_screen_learn_shape() {
+  printf '%s\n' "$1" | LC_ALL=C awk '
+    function esc(c) { return (c ~ /^[][(){}|$]$/) ? "\\" c : c }
+    {
+      sub(/\r$/, ""); sub(/[ \t]+$/, "")
+      n = length($0); i = 1; k = 0; gap = 0; closers = 0
+      while (i <= n) {
+        c = substr($0, i, 1)
+        if (c >= "\200") {
+          m = c; i++
+          while (i <= n && substr($0, i, 1) >= "\200" && substr($0, i, 1) < "\300") { m = m substr($0, i, 1); i++ }
+        } else if (c ~ /^[][(){}<>|$]$/) { m = c; i++ }
+        else { i++; gap = 1; continue }
+        if (k > 0 && g[k] == m && !gap) { r[k] = 1; continue }
+        k++; g[k] = m; r[k] = 0; gap = 0
+        if (m ~ /^[])}>]$/) closers++
+      }
+      # A bracket pair counts as one mark, so one pair alone is too loose to learn.
+      if (k - closers < 2) exit 1
+      N = "[ -#%-\047*-;=?-Z\\\\^-z~\t]*"
+      out = "^" N
+      for (j = 1; j <= k; j++) out = out (r[j] ? "(" esc(g[j]) ")+" : esc(g[j])) N
+      print out "$"
+    }' 2>/dev/null
+}
+
 
 # ho_screen_trust_data: the runtime profile's trust object, or exit 78.
 ho_screen_trust_data() {
@@ -176,6 +293,9 @@ ho_screen_shape_match() {
           for (j = q + 1; j <= n; j++) {
             if (blank(raw[j])) continue
             t = trim(raw[j])
+            # A line of this shape is never the status area, whatever a status shape (a
+            # learned one too, issue #108) says: the box is then not set aside.
+            if (tolower(core(t)) ~ "^(" anchor ")$") { tail_ok = 0; break }
             if (j == q + 1 && status_first != "" && t ~ status_first) continue
             if (status_lines != "" && t ~ status_lines) continue
             tail_ok = 0
@@ -242,25 +362,29 @@ ho_screen_shape_match() {
 # ho_screen_status_area <data-json>: read the lines under the closing frame of the input box
 # on stdin, the first of them right under the frame. 0 when every non-blank line is the
 # runtime's status area (the shapes above), 1 when one is not, 78 when the data holds no
-# status shapes. Delivery uses it: any other line under the box gets nothing typed.
+# status shapes. Delivery uses it: any other line under the box gets nothing typed. A line
+# that has the anchor of one of the data's hold shapes is never the status area, whatever a
+# status shape (a learned one too, issue #108) says.
 ho_screen_status_area() {
   local rc=0
   HO_SC_STATUS_FIRST=$(printf '%s' "$1" | jq -r '.status_first_line // "" | strings')
   HO_SC_STATUS_LINES=$(printf '%s' "$1" | jq -r '[.status_lines // [] | .[] | strings | "(" + . + ")"] | join("|")')
-  export HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
+  HO_SC_HOLDS=$(printf '%s' "$1" | jq -r '[.shapes // [] | .[] | .anchor? | strings | select(length > 0) | "(" + . + ")"] | join("|")')
+  export HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_HOLDS
   if [ -z "$HO_SC_STATUS_FIRST$HO_SC_STATUS_LINES" ]; then
-    unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
+    unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_HOLDS
     return 78
   fi
   LC_ALL=C awk '
-    BEGIN { first = ENVIRON["HO_SC_STATUS_FIRST"]; lines = ENVIRON["HO_SC_STATUS_LINES"] }
+    BEGIN { first = ENVIRON["HO_SC_STATUS_FIRST"]; lines = ENVIRON["HO_SC_STATUS_LINES"]; holds = ENVIRON["HO_SC_HOLDS"] }
     { t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t) }
     t == "" { next }
+    holds != "" && tolower(t) ~ "^(" holds ")$" { bad = 1; exit }
     NR == 1 && first != "" && t ~ first { next }
     lines != "" && t ~ lines { next }
     { bad = 1; exit }
     END { exit bad ? 1 : 0 }' 2>/dev/null || rc=$?
-  unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
+  unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_HOLDS
   case $rc in 0 | 1) return "$rc" ;; esac
   return 70
 }
@@ -395,6 +519,93 @@ ho_screen_classify() {
     i=$((i + 1))
   done
   echo none
+}
+
+# ho_screen_learn <session> [--yes --code <code>]: learn the session's own status line (#108).
+# Without --yes it prints what it learned and a code, and stores nothing. With --yes and the
+# code of that preview it reads the screen again and stores the shapes only when they are the
+# same. Exit 0 learned or nothing to learn, 64 usage, 65 refused (a line that cannot be
+# learned, a wrong code, an unsafe place), 75 the screen is not an idle screen of the runtime.
+ho_screen_learn() {
+  local name="" yes=0 code="" rec profile out first width lines j=0 line shape src first_shape="" rest="[]"
+  local data lf learned keys want ver cmd
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --yes) yes=1; shift ;;
+      --code) [ $# -ge 2 ] || { ho_screen_usage >&2; return 64; }; code=$2; shift 2 ;;
+      -*) printf 'harness screen learn: unknown argument %s\n' "$1" >&2; return 64 ;;
+      *) [ -z "$name" ] || { ho_screen_usage >&2; return 64; }; name=$1; shift ;;
+    esac
+  done
+  [ -n "$name" ] || { ho_screen_usage >&2; return 64; }
+  [ "$yes" -eq 0 ] || [ -n "$code" ] || { echo "harness: --yes needs the --code of the preview" >&2; return 64; }
+  rec=$(ho_deliver_record "$name") || return $?
+  profile=$(ho_deliver_profile "$rec") || return $?
+  out=$(ho_deliver_screen "$rec" "$profile" learn)
+  first=$(printf '%s\n' "$out" | head -n 1)
+  case $first in
+    learned) echo "nothing to learn: every line under the input box already reads as the runtime's status area"; return 0 ;;
+    'learn '[0-9]*) width=${first#learn } ;;
+    *) printf 'harness: the screen of session %s is not an idle screen of the runtime (%s); nothing was learned\n' "$name" "$first" >&2; return 75 ;;
+  esac
+  lines=$(printf '%s\n' "$out" | sed 1d)
+  data=$(HO_SCREEN_SHIPPED_ONLY=1 ho_screen_profile_data "$profile" 2>/dev/null) || data='{"shapes":[{}]}'
+  local -a show=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    j=$((j + 1))
+    line=$(printf '%s' "$line" | sed 's/[[:space:]]*$//')
+    [ -n "$line" ] || continue
+    # A line a shipped shape reads stays the runtime's; only the others are learned.
+    src=0
+    if [ "$j" -eq 1 ]; then printf '%s\n' "$line" | ho_screen_status_area "$data" || src=$?
+    else printf '\n%s\n' "$line" | ho_screen_status_area "$data" || src=$?; fi
+    [ "$src" -eq 0 ] && continue
+    # A hold line is never learned as the status line.
+    if printf '%s\n' "$line" | HO_SC_HOLDS=$(printf '%s' "$data" | jq -r '[.shapes // [] | .[] | .anchor? | strings | select(length > 0) | "(" + . + ")"] | join("|")') \
+      LC_ALL=C awk 'BEGIN { h = ENVIRON["HO_SC_HOLDS"] } { exit (h != "" && tolower($0) ~ "^(" h ")$") ? 0 : 1 }'; then
+      printf 'harness: line %s under the input box is a dialog or a notice of the runtime, not a status line; nothing was learned\n' "$j" >&2
+      return 75
+    fi
+    shape=$(ho_screen_learn_shape "$line") || {
+      printf 'harness: line %s under the input box has fewer than two fixed symbols, so it cannot be told from other text; it is not learned and delivery types nothing while it shows\n' "$j" >&2
+      return 65
+    }
+    printf '%s\n' "$line" | HO_SC_SHAPE=$shape LC_ALL=C awk 'BEGIN { r = ENVIRON["HO_SC_SHAPE"] } { exit ($0 ~ r) ? 0 : 1 }' || {
+      printf 'harness: the shape learned for line %s does not read that line; nothing was learned\n' "$j" >&2; return 65; }
+    if [ "$j" -eq 1 ]; then first_shape=$shape; else rest=$(jq -cn --argjson a "$rest" --arg s "$shape" '$a + [$s]'); fi
+    show+=("$j" "$line" "$shape")
+  done <<EOF_LEARN
+$lines
+EOF_LEARN
+  [ "${#show[@]}" -gt 0 ] || { echo "nothing to learn: every line under the input box already reads as the runtime's status area"; return 0; }
+  want=$(ho_screen_sha "$(jq -cn --arg f "$first_shape" --argjson l "$rest" '{first_line: $f, lines: $l}')")
+  if [ "$yes" -eq 0 ]; then
+    cmd=$(jq -r '.runtime_path // ""' "$rec"); ver=""
+    case $cmd in /*) [ -x "$cmd" ] && ho_session_runtime_path_ok "$cmd" 2>/dev/null && ver=$(ho_deliver_version_of "$cmd") ;; esac
+    printf 'Learned from the idle screen of session %s (runtime %s, version %s, frame width %s):\n' \
+      "$name" "$(basename "$profile" .json)" "${ver:-unknown}" "$width"
+    j=0
+    while [ "$j" -lt "${#show[@]}" ]; do
+      printf '  line %s under the input box: %s\n    shape: %s\n' "${show[j]}" "${show[j + 1]}" "${show[j + 2]}"
+      j=$((j + 3))
+    done
+    printf 'The words and numbers between the symbols may change; another set of symbols does not read as your status line.\n'
+    printf 'Nothing is stored until you confirm: harness screen <run> learn %s --yes --code %s\n' "$name" "$want"
+    printf 'CODE %s\n' "$want"
+    return 0
+  fi
+  [ "$code" = "$want" ] || { echo "harness: nothing stored: the status line's symbols changed since the preview (code mismatch); preview again" >&2; return 65; }
+  lf=$(ho_screen_learned_file "$profile")
+  if [ -L "$(dirname "$lf")" ] || [ -L "$lf" ]; then printf 'harness: nothing stored: %s is a link\n' "$lf" >&2; return 65; fi
+  (umask 077 && mkdir -p "$(dirname "$lf")") || return 1
+  keys=$(ho_screen_learn_keys "$profile")
+  learned=$(jq -n --argjson k "$keys" --arg rt "$(basename "$profile" .json)" --arg f "$first_shape" --argjson l "$rest" \
+    --argjson w "$width" --arg ts "$(ho_now)" \
+    '{schemaVersion: 1, runtime: $rt, runtime_id: $k.runtime_id, status_sha: $k.status_sha, frame_width: $w,
+      first_line: $f, lines: $l, learned: $ts}') || return 1
+  printf '%s\n' "$learned" | (umask 077 && ho_atomic_write "$lf") || return 1
+  printf 'OK learned the status line of runtime %s; stored in %s (learn again after a runtime update or a status line change)\n' \
+    "$(basename "$profile" .json)" "$lf"
 }
 
 # ho_screen_git <args>: git with every variable that can point it at another repository
@@ -740,6 +951,8 @@ verbs:
   permission <session>                 a permission prompt on that screen: owner action, or one
                                        accept under session.permission_prompts analyse
   pretrust <dir>                       trust a folder inside the project before a launch
+  learn <session> [--yes --code C]     learn your own status line from that idle session; shows
+                                       it first and stores it only with --yes and the shown code
   wait <epoch|unknown>                 the STOP-aware wait for a limit reset
 USAGE
 }
@@ -757,6 +970,7 @@ ho_screen_main() {
     pretrust) ho_screen_pretrust "${1-}" ;;
     permission) ho_perm_main "$@" ;;
     wait)     ho_screen_wait "${1-}" ;;
+    learn)    ho_screen_learn "$@" ;;
     *) printf 'harness screen: unknown verb %s\n' "$verb" >&2; ho_screen_usage >&2; return 64 ;;
   esac
 }

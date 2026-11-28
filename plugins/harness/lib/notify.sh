@@ -462,6 +462,48 @@ ho_nt_check() {
   [ "$fail" -eq 0 ] || return 69
 }
 
+# ---- flow verify (H-124) -------------------------------------------------------------------------
+
+# notify <run> verify: read-only. One line per flow and active channel, from this run's ledger
+# and message records; a flow with no evidence reads "not working". Evidence of a delivery: a
+# notify-sent line for a command channel, a notify-delivered line (the session's sent report) for
+# an mcp channel; the message record says whether it was a question or an event.
+#   question-mirror <label>   a question reached the channel
+#   reply-read <label>        a reply to a question was read (notify-answer or notify-late)
+#   answer-written <label>    a read answer was recorded on the ticket (notify-answer)
+#   event-announced <label>   an event reached the channel
+#   fallback                  a failed send was delivered by another channel (one line per run)
+# Exit 0 when every flow is confirmed, 69 otherwise (no channel: 69).
+ho_nt_verify() {
+  local chans kinds='{}' out
+  chans=$(ho_nt_channels) || return 78
+  if [ "$(jq length <<<"$chans")" -eq 0 ]; then
+    echo "no channel: no notification flow can be confirmed"
+    return 69
+  fi
+  if ls "$HO_RUN_DIR"/notify/msg/*.json >/dev/null 2>&1; then
+    kinds=$(jq -n '[inputs | {key: (input_filename | split("/") | last | rtrimstr(".json")), value: ((.kind // "") | tostring)}] | from_entries' \
+      "$HO_RUN_DIR"/notify/msg/*.json 2>/dev/null) || kinds='{}'
+  fi
+  out=$(ho_ledger_events | jq -rn --argjson ch "$chans" --argjson k "$kinds" '
+    [inputs] as $l
+    | ($ch | map({key: .label, value: .via}) | from_entries) as $via
+    | def got: (($via[.channel // ""] // "") as $v
+        | ($v == "command" and .kind == "notify-sent") or ($v == "mcp" and .kind == "notify-delivered"));
+      def has($c; $mk): any($l[]; .channel == $c and got and ($k[(.message // "") | tostring] // "") == $mk);
+      def say($name; $ok): "\($name): \(if $ok then "confirmed" else "not working (not confirmed in this run)" end)";
+    ($ch[] | .label as $c
+      | say("question-mirror \($c)"; has($c; "question")),
+        say("reply-read \($c)"; any($l[]; .channel == $c and (.kind == "notify-answer" or .kind == "notify-late"))),
+        say("answer-written \($c)"; any($l[]; .channel == $c and .kind == "notify-answer")),
+        say("event-announced \($c)"; has($c; "event"))),
+    say("fallback"; any($l[] | select(.kind == "notify-failed"); .message as $m | .channel as $f
+        | any($l[]; .message == $m and .channel != $f and got)))') || { ho_nt_err "cannot read the run ledger"; return 1; }
+  printf '%s\n' "$out"
+  case $out in *"not working"*) return 69 ;; esac
+  return 0
+}
+
 # ---- mcp route reports --------------------------------------------------------------------------
 
 ho_nt_mcp_report() { # sent|failed <msg-id> [ref]
@@ -476,6 +518,9 @@ ho_nt_mcp_report() { # sent|failed <msg-id> [ref]
       jq -cn --arg l "$label" --arg ref "$ref" --slurpfile r "$rec" '{label: $l, ref: $ref, qid: $r[0].qid, ticket: $r[0].ticket}' \
         >> "$HO_RUN_DIR/notify/refs.jsonl"
     fi
+    # The queue line (notify-sent) only says the message waits for the session; this one says
+    # the channel took it (H-124).
+    ho_ledger_append notify-delivered channel "$label" message "$id" route mcp ticket "$(jq -r .ticket "$rec")"
     echo "OK sent $id"
   else
     ho_ledger_append notify-failed channel "$label" message "$id" route mcp
@@ -500,6 +545,7 @@ usage: harness notify check                         read-only connections check 
        harness notify <run-dir> poll                read replies once; record first answers
        harness notify <run-dir> sent <id> <ref> | failed <id>     mcp route: the session reports a send
        harness notify <run-dir> inbox <label> <file>              mcp route: replies the session read
+       harness notify <run-dir> verify              read-only: each flow per channel, confirmed or not working (H-124)
 events: question blocked taken done run-ended limit-pause orchestrator-down
 USAGE
 }
@@ -523,6 +569,7 @@ ho_notify_main() {
         sent) [ $# -eq 3 ] || { ho_nt_usage; return 64; }; ho_nt_mcp_report sent "$2" "$3" ;;
         failed) [ $# -eq 2 ] || { ho_nt_usage; return 64; }; ho_nt_mcp_report failed "$2" ;;
         inbox) [ $# -eq 3 ] || { ho_nt_usage; return 64; }; ho_nt_inbox "$2" "$3" ;;
+        verify) [ $# -eq 1 ] || { ho_nt_usage; return 64; }; ho_nt_verify ;;
         *) ho_nt_usage; return 64 ;;
       esac ;;
   esac

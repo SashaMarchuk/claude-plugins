@@ -199,6 +199,16 @@ ho_live_transcript_prefix() {
   printf '%s\n' "$out"
 }
 
+# ho_live_transcript_root_ok <folder>: issue #103. One absolute path with no line break or tab.
+# A folder inside the project stays allowed for liveness, because an account command may build
+# it from $PWD (H-090); delivery refuses such a folder itself (lib/deliver.sh). Agent decision
+# (D37): the guard against a session pointing at another session's transcript is on the file
+# (ho_live_transcript), not a project rule on the folder.
+ho_live_transcript_root_ok() {
+  case $1 in /*) ;; *) return 1 ;; esac
+  case $1 in *$'\n'* | *$'\t'*) return 1 ;; esac
+}
+
 # ho_live_transcript <record>: the transcript path of the session, or nothing. A file
 # must match the session ID (a UUID), so a match is that session's own transcript.
 ho_live_transcript() {
@@ -216,11 +226,21 @@ ho_live_transcript() {
   glob=$(jq -r '.transcript.glob // ""' "$profile" 2>/dev/null) || glob=""
   [ -n "$root" ] && [ -n "$glob" ] && [ -d "$root" ] || return 0
   case $glob in *..* | /*) return 0 ;; esac
+  # Issue #103: the folder is checked as at launch, and a file counts only when it is no link
+  # and its real folder lies under the real root (or the data folder the launch recorded), so
+  # a session cannot point its transcript at another session's file.
+  ho_live_transcript_root_ok "$root" || return 0
+  local rroot treal fd
+  rroot=$(cd -P "$root" 2>/dev/null && pwd -P) || return 0
+  treal=$(jq -r '.transcript_prefix_real // ""' "$rec" 2>/dev/null) || treal=""
+  case $treal in /*) ;; *) treal="" ;; esac
   glob=${glob//\{session_id\}/$sid}
   # A session resumed in another folder has a file in each; the newest one is the live one.
   local t best=-1
   for f in "$root"/$glob; do
-    [ -f "$f" ] || continue
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    fd=$(cd -P "$(dirname "$f")" 2>/dev/null && pwd -P) || continue
+    case $fd/ in "$rroot"/* | "${treal:-/nonexistent}"/*) ;; *) continue ;; esac
     t=$(ho_live_mtime "$f")
     [ -n "$t" ] || t=0
     if [ "$t" -gt "$best" ]; then best=$t; found=$f; fi
@@ -312,7 +332,10 @@ ho_live_hooks() {
   if [ ! -e "$log" ]; then state=missing
   elif [ ! -r "$log" ] || [ ! -f "$log" ]; then state=unreadable
   else state=present; fi
-  events=$(ho_live_hook_events 2>/dev/null) || events=$HO_LIVE_HOOK_EVENTS_ALL
+  # The events the session was launched with (its record), else today's config: a config
+  # change during the run never changes what a running session tracks (#110).
+  events=$(jq -r '.hook_events | if type == "string" and test("^[A-Za-z ]*$") then . else error("none") end' "$rec" 2>/dev/null) \
+    || events=$(ho_live_hook_events 2>/dev/null) || events=$HO_LIVE_HOOK_EVENTS_ALL
   case " $events " in *" PreToolUse "*) case " $events " in *" PostToolUse "*) case " $events " in
     *" PostToolUseFailure "*) tracked=true ;; esac ;; esac ;; esac
   maxs=$(ho_cfg_int '.liveness.tool_running_max_minutes' 60 2>/dev/null) || maxs=60
@@ -329,20 +352,24 @@ ho_live_hooks() {
   { grep -F -- "\"$sid\"" "$log" 2>/dev/null || true; } | jq -R -s -c --arg sid "$sid" --argjson now "$(date +%s)" --argjson max "$maxs" --argjson tr "$tracked" \
     --argjson quiet "$HO_LIVE_QUIET_SECONDS" --arg v "$verdict" '
     [split("\n")[] | select(length > 0) | (try fromjson catch null)
-      | select(type == "object" and .session_id == $sid and (.t | type) == "number" and (.event | type) == "string")] as $r
-    # The reduce is parenthesized before "as": jq 1.7 (the macOS default) requires it.
-    | (reduce $r[] as $e ({open: {}, order: [], stop_error: null};
+      | select(type == "object" and .session_id == $sid and (.t | type) == "number" and (.event | type) == "string")
+      # A line timed in the future (beyond a minute of clock skew) is ignored: it could hold the
+      # quiet flag off for ever (#110).
+      | select(.t <= $now + 60)] as $r
+    # The reduce is parenthesized before "as": jq 1.7 (the macOS default) requires it. Open
+    # calls live in one object keyed by call ID, so the pass stays linear with no Stop (#110).
+    | (reduce $r[] as $e ({open: {}, stop_error: null};
         if $e.event == "PreToolUse" and (($e.tool_use_id // "") | type) == "string" and ($e.tool_use_id // "") != "" then
-          .open[$e.tool_use_id] = {tool: $e.tool, tool_use_id: $e.tool_use_id, t: $e.t} | .order += [$e.tool_use_id]
+          .open[$e.tool_use_id] = {tool: $e.tool, tool_use_id: $e.tool_use_id, t: $e.t}
         elif $e.event == "PostToolUse" or $e.event == "PostToolUseFailure" then
           (($e.tool_use_id // "") | tostring) as $id | del(.open[$id])
         elif $e.event == "Stop" or $e.event == "StopFailure" or $e.event == "SessionEnd" then
-          .open = {} | .order = []
+          .open = {}
           | if $e.event == "StopFailure" then .stop_error = ($e.error // "unknown")
             elif $e.event == "Stop" then .stop_error = null else . end
         else . end)) as $s
     | ($r | last) as $last
-    | (if $tr then [$s.order | unique[] as $id | $s.open[$id] | select(. != null)] | sort_by(.t)
+    | (if $tr then [$s.open[]] | sort_by(.t)
          | map({tool, tool_use_id, age_seconds: ([$now - .t, 0] | max)}) else [] end) as $open
     | ($open | map(select(.age_seconds < $max)) | length > 0) as $running
     | (if $last == null then null else ([$now - $last.t, 0] | max) end) as $age
@@ -354,6 +381,38 @@ ho_live_hooks() {
       last_event_at: null, last_event_age_seconds: null, open_tools: [], tool_running: false, stop_error: null}, quiet: null}'
 }
 
+# ho_live_hooks_config_dirs <profile>: the config folder each session role gets, each once, in
+# HO_LIVE_HOOKS_DIRS (one per line; issue #129). A role whose account cannot be worked out is
+# noted in HO_LIVE_HOOKS_UNREAD, so the check never says "hooks OK" for settings it did not read.
+ho_live_hooks_config_dirs() {
+  local profile=$1 role acct pairs dir out="" done_accts="" name tmp
+  HO_LIVE_HOOKS_UNREAD=""
+  HO_LIVE_HOOKS_DIRS=""
+  tmp=$(mktemp "${TMPDIR:-/tmp}/ho-hooks.XXXXXX") || return 1
+  for role in $HO_SESSION_ROLES; do
+    name=$(ho_session_account_name "$role" 2>/dev/null) || name="?"
+    case " $done_accts " in *" =$name "*) continue ;; esac
+    done_accts="$done_accts =$name"
+    HO_SESSION_ACCOUNT_ENV=""
+    # Not in a command substitution: ho_session_account keeps what the command printed in
+    # HO_SESSION_ACCOUNT_ENV, so the account command runs once.
+    if ! ho_session_account "$role" "" "$profile" > "$tmp" 2>/dev/null; then
+      HO_LIVE_HOOKS_UNREAD="$HO_LIVE_HOOKS_UNREAD  role $role: its account (${name:-none}) could not be worked out; the settings in its config folder were not checked"$'\n'
+      continue
+    fi
+    acct=$(cat "$tmp")
+    pairs=""
+    if [ -n "$acct" ]; then
+      pairs=$(printf '%s\n' "$HO_SESSION_ACCOUNT_ENV" | ho_account_env_parse 2>/dev/null) || pairs=""
+    fi
+    dir=$(ho_rt_config_dir "$profile" "$pairs" 2>/dev/null) || dir=""
+    case $dir in /*) ;; *) continue ;; esac
+    case $'\n'"$out" in *$'\n'"$dir"$'\n'*) ;; *) out="$out$dir"$'\n' ;; esac
+  done
+  rm -f "$tmp"
+  HO_LIVE_HOOKS_DIRS=$out
+}
+
 # harness session <run-dir> hooks-check: the start check of D42l (H-089). It reads the settings
 # files the sessions will load (the runtime profile's hooks_settings) and names every hook with
 # no time limit, or one above preflight.hook_timeout_max_seconds (default 10), in one attention
@@ -362,42 +421,54 @@ ho_live_hooks() {
 # command text goes to the notice only, never to the ledger. A file that cannot be read as a
 # JSON object, or whose hooks is not an object, is a finding too (field note I1): never "hooks OK". The harness's own hook is declared in the plugin, not in these.
 ho_live_hooks_check() {
-  local mode max profile cdir_env cdir_def cdir pat f found="" n=0 unread="" lines
+  local mode max profile cdirs cdir pat pats f found="" n=0 unread="" lines seen=""
   mode=$(ho_cfg '.preflight.hooks' warn) || exit $?
   case $mode in warn | stop) ;; *) printf 'harness: config preflight.hooks must be warn or stop, not %s\n' "$mode" >&2; exit "$HO_EXIT_CONFIG" ;; esac
   max=$(ho_cfg_int '.preflight.hook_timeout_max_seconds' 10) || exit $?
   profile=$(ho_runtime_profile) || exit $?
-  cdir_env=$(jq -r '.config_dir.env // ""' "$profile")
-  cdir_def=$(jq -r '.config_dir.default // ""' "$profile")
-  case $cdir_env in '' | *[!A-Z0-9_]*) cdir="" ;; *) cdir=$(printenv "$cdir_env" 2>/dev/null || true) ;; esac
-  [ -n "$cdir" ] || cdir=${cdir_def//\{home\}/$HOME}
+  # Issue #129: the config folder of each role, by the launch rule (ho_rt_config_dir): from the
+  # role's account command when it has one, else from the caller's environment, else the
+  # profile default under the session's HOME. Each folder is read once.
+  ho_live_hooks_config_dirs "$profile" || HO_LIVE_HOOKS_DIRS=""
+  cdirs=$HO_LIVE_HOOKS_DIRS
+  unread=$HO_LIVE_HOOKS_UNREAD
   while IFS= read -r pat; do
     [ -n "$pat" ] || continue
-    f=${pat//\{config_dir\}/$cdir}
-    f=${f//\{project\}/$HO_PROJECT_DIR}
-    case $f in /*) ;; *) continue ;; esac
-    [ -e "$f" ] || continue
-    if ! jq -e 'type == "object" and ((.hooks // {}) | type == "object")' "$f" >/dev/null 2>&1; then
-      if jq -e 'type == "object"' "$f" >/dev/null 2>&1; then
-        unread="$unread  $f: hooks is not an object; its hooks were not checked"$'\n'
-      else
-        unread="$unread  $f: cannot be read as a JSON object; its hooks were not checked"$'\n'
+    case $pat in
+      *'{config_dir}'*) pats=$(printf '%s\n' "$cdirs" | while IFS= read -r cdir; do [ -z "$cdir" ] || printf '%s\n' "${pat//\{config_dir\}/$cdir}"; done) ;;
+      *) pats=$pat ;;
+    esac
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      f=${f//\{project\}/$HO_PROJECT_DIR}
+      case $f in /*) ;; *) continue ;; esac
+      case $'\n'"$seen" in *$'\n'"$f"$'\n'*) continue ;; esac
+      seen="$seen$f"$'\n'
+      [ -e "$f" ] || continue
+      if ! jq -e 'type == "object" and ((.hooks // {}) | type == "object")' "$f" >/dev/null 2>&1; then
+        if jq -e 'type == "object"' "$f" >/dev/null 2>&1; then
+          unread="$unread  $f: hooks is not an object; its hooks were not checked"$'\n'
+        else
+          unread="$unread  $f: cannot be read as a JSON object; its hooks were not checked"$'\n'
+        fi
+        continue
       fi
-      continue
-    fi
-    if ! lines=$(jq -r --argjson max "$max" '(.hooks // {}) | to_entries[] | .key as $e | (.value // [])[] | (.hooks // [])[]
-        | select((.timeout | type) != "number" or .timeout > $max)
-        | "\($e) \((.command // .url // .type // "?") | tostring | gsub("[[:cntrl:]]"; " ") | .[0:80]) (timeout \(.timeout // "none"))"' "$f" 2>/dev/null); then
-      unread="$unread  $f: cannot be read as JSON; its hooks were not checked"$'\n'
-      continue
-    fi
-    while IFS= read -r l; do
-      [ -n "$l" ] || continue
-      found="$found  $f: $l"$'\n'
-      n=$((n + 1))
-    done <<EOF_L
+      if ! lines=$(jq -r --argjson max "$max" '(.hooks // {}) | to_entries[] | .key as $e | (.value // [])[] | (.hooks // [])[]
+          | select((.timeout | type) != "number" or .timeout > $max)
+          | "\($e) \((.command // .url // .type // "?") | tostring | gsub("[[:cntrl:]]"; " ") | .[0:80]) (timeout \(.timeout // "none"))"' "$f" 2>/dev/null); then
+        unread="$unread  $f: cannot be read as JSON; its hooks were not checked"$'\n'
+        continue
+      fi
+      while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        found="$found  $f: $l"$'\n'
+        n=$((n + 1))
+      done <<EOF_L
 $lines
 EOF_L
+    done <<EOF_F
+$pats
+EOF_F
   done <<EOF_P
 $(jq -r '.hooks_settings // [] | .[] | strings' "$profile")
 EOF_P

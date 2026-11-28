@@ -136,3 +136,28 @@ out=$(st w7)
 assert_eq "H-090: the transcript under the account's HOME is found" present "$(printf '%s' "$out" | jq -r .transcript_state)"
 assert_contains "H-090: it is the session's own transcript" "$(printf '%s' "$out" | jq -r .transcript)" "$base/acct-home/.claude/projects/"
 cp "$base/user.keep.json" "$user/config.json"
+
+# ---- issue #103: the recorded transcript folder and file are checked ----
+# Items 3 and 5: the launcher's notes use a unique temp name and are gone once the record holds
+# the value; the record (mode 600) is the one place it lives.
+assert_eq "#103 H-090: no fixed temp note is left behind" "" "$(ls "$run/sessions" | grep '\.tmp$' || true)"
+assert_eq "#103 H-090: the transcript notes are removed once the record holds the folder" "" \
+  "$(ls "$run/sessions" | grep -E '^w1\.transcript_(root|prefix_real)' || true)"
+# Item 1: the note is read only until the record holds the folder; a rewrite after that is ignored.
+printf '/elsewhere\n' > "$run/sessions/w1.transcript_root"
+assert_eq "#103 H-090: a note written after the launch does not change the transcript" present "$(st w1 | jq -r .transcript_state)"
+rm -f "$run/sessions/w1.transcript_root"
+# Item 2: a link to another session's transcript is never read as this session's.
+HO_FAKE_CLAUDE_TRANSCRIPT=0 launch w9 >/dev/null
+sid9=$(rec w9 .session_id)
+tr1=$(st w1 | jq -r .transcript)
+mkdir -p "$(rec w9 .transcript_root)/projects/linked"
+ln -s "$tr1" "$(rec w9 .transcript_root)/projects/linked/$sid9.jsonl"
+assert_eq "#103 H-090: a transcript that is a link is not read" missing "$(st w9 | jq -r .transcript_state)"
+assert_exit "#103 H-090: read transcript does not show the linked file" 66 "$h" session "$run" read w9 transcript
+# Item 4: a launch with no transcript folder says so in the launcher log.
+mkdir -p "$user/runtimes"
+jq 'del(.transcript.root_env, .transcript.root_default)' "$HO_PLUGIN_ROOT/runtimes/claude-code.json" > "$user/runtimes/claude-code.json"
+launch w10 >/dev/null || true
+assert_contains "#103 H-090: a null transcript folder is named in the launcher log" "$(cat "$run/logs/launcher.log")" "no transcript folder"
+rm -rf "$user/runtimes"

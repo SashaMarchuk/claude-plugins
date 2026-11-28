@@ -7,6 +7,25 @@ ho_die() {
   exit 1
 }
 
+# ho_jq_check: the lowest supported jq is 1.7 (issue #117; the macOS system jq is 1.7.1). A jq
+# that reports an older version is refused (exit 78, one line); a missing jq too. A version line
+# that cannot be read (a development build) is let through.
+ho_jq_check() {
+  local v maj min
+  v=$(jq --version 2>/dev/null) || { printf 'harness: jq was not found on PATH; the harness needs jq 1.7 or newer\n' >&2; exit 78; }
+  case $v in
+    jq-[0-9]*.[0-9]*) ;;
+    *) return 0 ;;
+  esac
+  maj=${v#jq-}; maj=${maj%%.*}
+  min=${v#jq-*.}; min=${min%%[!0-9]*}
+  case $maj$min in '' | *[!0-9]*) return 0 ;; esac
+  if [ "$((10#$maj))" -lt 1 ] || { [ "$((10#$maj))" -eq 1 ] && [ "$((10#${min:-0}))" -lt 7 ]; }; then
+    printf 'harness: found %s (%s); the harness needs jq 1.7 or newer\n' "$v" "$(command -v jq)" >&2
+    exit 78
+  fi
+}
+
 # Print the version from the plugin manifest.
 ho_version() {
   local manifest="$HO_ROOT/.claude-plugin/plugin.json"

@@ -240,7 +240,29 @@ rc=$(merge_rc g)
 assert_eq "H-046: a merge whose confirmed line cannot be written is not exit 0" "yes" "$([ "$rc" -ne 0 ] && echo yes || echo no)"
 assert_eq "H-046: without its ledger line the recorded tip does not move" "$g_before" "$(jq -r .tip "$run/integration.json")"
 chmod u+w "$run/ledger.jsonl"
-assert_eq "H-046: the unconfirmed merge refuses the next merge" 65 "$(merge_rc g)"
+# Issue #129 item 3: a merge commit the engine made and never confirmed (a crash or a failed
+# ledger write between the merge and its record) is rolled back by the next merge, which then
+# merges again through the gate. It never blocks the lane for good.
+g_unrec=$(tip)
+assert_eq "#129 H-046: the next merge of the lane recovers the unconfirmed merge and merges again" 0 "$(merge_rc g)"
+assert_eq "#129 H-046: the recovery is recorded" 1 "$(ledger_has merge-recovered)"
+assert_eq "#129 H-046: the new merge starts from the last confirmed tip" "$g_before" "$(git -C "$proj" rev-parse "$(tip)^1")"
+assert_eq "#129 H-046: the new merge holds the lane's finalize commit" "$(lsha g)" "$(git -C "$proj" rev-parse "$(tip)^2")"
+assert_eq "#129 H-046: the recovered merge is confirmed in the ledger" "$(tip)" \
+  "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "g") | .tip' "$run/ledger.jsonl")"
+assert_eq "#129 H-046: the unconfirmed commit is no longer on the branch" 1 \
+  "$(git -C "$proj" merge-base --is-ancestor "$g_unrec" "$(tip)" && echo 0 || echo 1)"
+# A crash after the merge-confirmed line and before the tip write: the next merge writes the tip.
+g_tip=$(tip)
+jq --arg t "$g_before" '.tip = $t' "$run/integration.json" > "$PWD/ij.t" && mv "$PWD/ij.t" "$run/integration.json"
+lane g2 g2.txt "from g2"; verdict g2 passed
+assert_eq "#129 H-046: a confirmed merge whose tip was not written does not refuse the next merge" 0 "$(merge_rc g2)"
+assert_eq "#129 H-046: the missing tip write is recorded" 1 "$(ledger_has merge-tip-recovered)"
+assert_eq "#129 H-046: the next merge starts from the confirmed tip" "$g_tip" "$(git -C "$proj" rev-parse "$(tip)^1")"
+assert_eq "#129 H-046: the recorded tip follows the branch again" "$(tip)" "$(jq -r .tip "$run/integration.json")"
+# The tests below start from the tip before lane g.
+git -C "$int" reset -q --hard "$g_before"
+jq --arg t "$g_before" '.tip = $t' "$run/integration.json" > "$PWD/ij.t" && mv "$PWD/ij.t" "$run/integration.json"
 
 # ---- status ----------------------------------------------------------------------------------
 st=$("$h" loop "$run" status)
@@ -330,7 +352,11 @@ n=0; while [ ! -s "$PWD/gsleep.pid" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n 
 kill -TERM "$hp"
 rc=0; wait "$hp" || rc=$?
 assert_eq "H-046 signal: a merge stopped by TERM exits 75" 75 "$rc"
-sleep 0.5
+# The gate's processes end after the merge returned; wait for that end (a generous cap, issue #109).
+for f in gate.pid gsleep.pid; do
+  p=$(cat "$PWD/$f" 2>/dev/null || echo 0)
+  n=0; while [ "$p" != 0 ] && ps -o pid= -p "$p" >/dev/null 2>&1 && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done
+done
 assert_eq "H-046 signal: no merge is confirmed after TERM" "$confirmed_before" "$(ledger_has merge-confirmed)"
 assert_eq "H-046 signal: the branch is back at its tip" "$cur" "$(tip)"
 assert_eq "H-046 signal: the merge lock is released" "no" "$([ -e "$run/merge.lock" ] && echo yes || echo no)"
@@ -347,8 +373,11 @@ cur=$(tip)
 lane q q.txt "from q"; verdict q passed
 sh -c 'exit 0' & dead=$!; wait "$dead" || true
 mkdir "$run/merge.lock"; echo "$dead" > "$run/merge.lock/pid"; mkdir "$run/merge.lock/takeover"
-"$h" loop "$run" merge q >/dev/null 2>"$PWD/err" & hp=$!
-sleep 1.5
+# The merge marks each pass of its lock wait (sleep 0.1); three passes prove it saw the lock
+# under takeover three times and left it (issue #109).
+sleep_marks "$PWD/marks"
+PATH="$PWD/marks:$PATH" T_SLEEP_MARK="$PWD/wait-q" "$h" loop "$run" merge q >/dev/null 2>"$PWD/err" & hp=$!
+wait_mark "$PWD/wait-q" 0.1 3 || bad "test setup: the merge does not wait for the lock" ""
 assert_eq "Rebuild loop lock: a lock under takeover by another waiter is not removed" "$dead" "$(cat "$run/merge.lock/pid" 2>/dev/null || echo gone)"
 rmdir "$run/merge.lock/takeover" 2>/dev/null || true
 rc=0; wait "$hp" || rc=$?
@@ -390,7 +419,8 @@ user_gate
 mkdir -p "$PWD/tshim"
 cat > "$PWD/tshim/tail" <<EOS
 #!/bin/bash
-if [ -e "$PWD/stall-armed" ]; then rm -f "$PWD/stall-armed"; touch "$PWD/stalling"
+# Only the ledger append's "tail -c 1" stalls: the stop re-read after the gate uses tail too.
+if [ -e "$PWD/stall-armed" ] && [ "\$1 \$2" = "-c 1" ]; then rm -f "$PWD/stall-armed"; touch "$PWD/stalling"
   i=0; while [ -e "$PWD/stall-hold" ] && [ \$i -lt 600 ]; do sleep 0.1; i=\$((i + 1)); done; fi
 exec "$(command -v tail)" "\$@"
 EOS
@@ -512,6 +542,65 @@ assert_eq "H-046 confirmation: the commit made by the hook is kept" "made by a h
 assert_eq "H-046 confirmation: no merge-confirmed line for that lane" "" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "y1") | .lane' "$run/ledger.jsonl")"
 git -C "$proj" config --unset core.hooksPath
 git -C "$int" reset -q --hard "$cur"
+
+# ---- issue #102: run-loop follow-ups of wave 3 ------------------------------------------------
+user_gate
+cur=$(tip)
+# Item 1: a signal that ends git merge after its commit (here a post-merge hook stops its git)
+# leaves a commit that is provably this merge; it is rolled back, never left for a person.
+mkdir -p "$PWD/hooks3"
+printf '#!/bin/sh
+kill -TERM "$PPID"
+sleep 1
+' > "$PWD/hooks3/post-merge"; chmod +x "$PWD/hooks3/post-merge"
+git -C "$proj" config core.hooksPath "$PWD/hooks3"
+lane z1 z1.txt "from z1"; verdict z1 passed
+assert_eq "#102 H-046: a git merge stopped after its commit is not confirmed (exit 70)" 70 "$(merge_rc z1)"
+assert_eq "#102 H-046: its merge commit is rolled back to the last confirmed tip" "$cur" "$(tip)"
+assert_contains "#102 H-046: the message says rolled back" "$(cat "$PWD/err")" "rolled back"
+git -C "$proj" config --unset core.hooksPath
+assert_eq "#102 H-046: the next merge of the lane goes through" 0 "$(merge_rc z1)"
+cur=$(tip)
+# Item 9: a post-merge hook that detaches HEAD does not get a confirmed merge.
+printf '#!/bin/sh
+git checkout -q --detach
+' > "$PWD/hooks3/post-merge"
+git -C "$proj" config core.hooksPath "$PWD/hooks3"
+lane z2 z2.txt "from z2"; verdict z2 passed
+assert_eq "#102 H-046: a merge after which HEAD is detached is not confirmed (exit 70)" 70 "$(merge_rc z2)"
+assert_eq "#102 H-046: no merge-confirmed line for that lane" "" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "z2") | .lane' "$run/ledger.jsonl")"
+git -C "$proj" config --unset core.hooksPath
+git -C "$int" checkout -q "$(jq -r .branch "$run/integration.json")"; git -C "$int" reset -q --hard "$cur"
+# Item 6 (a): the roll back is reset --keep, so a local edit that appears just before it is kept.
+cat > "$PWD/shim/git" <<EOS
+#!/bin/bash
+case " \$* " in *" reset "*) [ -z "\${HO_T_DIRTY:-}" ] || printf 'local edit\n' > "\$HO_T_DIRTY" ;; esac
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$PWD/shim/git"
+lane z3 z3.txt "from z3"; verdict z3 passed
+setgate "exit 1"
+assert_eq "#102 H-046: a roll back that meets a local edit is left for a person (exit 70)" 70 \
+  "$(HO_T_DIRTY="$int/z3.txt" PATH="$PWD/shim:$PATH" merge_rc z3)"
+assert_eq "#102 H-046: the local edit is never overwritten by the roll back" "local edit" "$(cat "$int/z3.txt" 2>/dev/null)"
+git -C "$int" reset -q --hard "$cur"; rm -f "$int/z3.txt"
+user_gate
+# Item 6 (b) and item 4: an ignored file in the integration worktree refuses the merge before
+# git merge runs (65); nothing is merged. A global excludes entry such as .DS_Store counts too.
+printf '*.ign\n' >> "$proj/.git/info/exclude"
+: > "$int/before.ign"
+lane z4 z4.txt "from z4"; verdict z4 passed
+assert_eq "#102 H-046: an ignored file in the integration worktree refuses the merge (65)" 65 "$(merge_rc z4)"
+assert_contains "#102 H-046: the refusal names ignored files" "$(cat "$PWD/err")" "ignored files included"
+assert_eq "#102 H-046: nothing was merged" "$cur" "$(tip)"
+rm -f "$int/before.ign"
+# Item 6 (c) and item 5: a gate that writes an ignored file into the integration worktree by
+# absolute path gets no confirmed merge; the branch is left for a person (70).
+setgate "touch '$int/after.ign'"
+assert_eq "#102 H-046: an ignored file written by the gate leaves the merge unconfirmed (70)" 70 "$(merge_rc z4)"
+assert_eq "#102 H-046: no merge-confirmed line for that lane" "" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "z4") | .lane' "$run/ledger.jsonl")"
+rm -f "$int/after.ign"; git -C "$int" reset -q --hard "$cur"
+user_gate
 
 # ---- H-086, D25a: soft stops and the merge ------------------------------------------------
 # soft:step and soft:task refuse the merge; soft:ticket merges the lane of a ticket that began

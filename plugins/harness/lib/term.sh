@@ -178,11 +178,45 @@ ho_term_close() {
   "ho_term_${backend}_close" "$h" "$owner" "$sid"
 }
 
+# ho_osa [osascript args...]: osascript with a hard time limit (H-132, D42a). macOS ships no
+# timeout command, so the engine brings its own: the call runs in the background, is stopped by
+# its exact process ID after terminal.call_timeout_seconds (default 10), and then returns 124
+# with one "terminal-not-answering" ledger line. Standard input (the script) is passed on.
+ho_osa() {
+  local lim out in pid rc=0 i=0
+  lim=$(ho_cfg_int '.terminal.call_timeout_seconds' 10 2>/dev/null) || lim=10
+  { [ "${#lim}" -le 4 ] && [ "$lim" -ge 1 ]; } 2>/dev/null || lim=10
+  out=$(mktemp "${TMPDIR:-/tmp}/ho-osa-out.XXXXXX") || return 1
+  in=$(mktemp "${TMPDIR:-/tmp}/ho-osa-in.XXXXXX") || { rm -f "$out"; return 1; }
+  if [ "${1-}" != -e ]; then cat > "$in"; fi
+  osascript "$@" < "$in" > "$out" 2>/dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt $((lim * 10)) ]; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -f "$out" "$in"
+    [ -z "${HO_RUN_DIR-}" ] || ho_ledger_append terminal-not-answering app iterm2 limit_seconds "$lim" 2>/dev/null || true
+    return 124
+  fi
+  wait "$pid" || rc=$?
+  cat "$out"
+  rm -f "$out" "$in"
+  return "$rc"
+}
+
 ho_term_probe() {
   local backend
   backend=$(ho_term_backend) || return $?
   case $backend in
-    iterm2) osascript -e 'tell application "iTerm2" to count windows' >/dev/null 2>&1 || { echo "harness: iTerm2 cannot be driven (check the Automation permission)" >&2; return 70; } ;;
+    iterm2)
+      local prc=0
+      ho_osa -e 'tell application "iTerm2" to count windows' >/dev/null 2>&1 || prc=$?
+      case $prc in
+        0) ;;
+        124) echo "harness: iTerm2 did not answer in time (terminal app not answering)" >&2; return 70 ;;
+        *) echo "harness: iTerm2 cannot be driven (check the Automation permission)" >&2; return 70 ;;
+      esac ;;
     tmux) ho_tmux -V >/dev/null 2>&1 || { echo "harness: tmux cannot be run" >&2; return 70; } ;;
   esac
   printf 'terminal OK backend=%s\n' "$backend"
@@ -218,7 +252,7 @@ ho_term_iterm2_open() {
   # The stored window is used only while it holds a session tagged with this run. The new
   # session is tagged through its unique ID, only while it carries no tag yet; if the tags
   # cannot be set, it is closed the same way.
-  out=$(osascript <<OSA
+  out=$(ho_osa <<OSA
 -- No "contents of" and no "repeat with x in" inside the iTerm2 tell: there "contents"
 -- compiles to the session property of iTerm2 and fails with -1728 on the real app.
 -- Loops inside the tell walk by index with "item i of".
@@ -354,7 +388,7 @@ OSA
 # tell, so every event of check and body reaches the session with that unique ID or fails.
 ho_term_iterm2_do() {
   local h=$1 owner=$2 sid=$3 body=$4 r
-  r=$(osascript <<OSA
+  r=$(ho_osa <<OSA
 tell application "iTerm2"
   set wids to (id of every window)
   repeat with i from 1 to (count of wids)

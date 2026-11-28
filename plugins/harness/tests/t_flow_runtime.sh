@@ -293,6 +293,17 @@ jq -n '{schemaVersion: 2, accounts: {roles: {worker: "work"},
 rc=0; out=$(HO_FAKE_CLAUDE_LOG="$base/pf119b.log" HO_FAKE_CLAUDE_SHOW_ENV=CLAUDE_CONFIG_DIR "$h" flow preflight sys 2>&1) || rc=$?
 assert_contains "#119: the account command in the start check does not see the caller's folder" "$out" "not installed in $HOME/.claude-work"
 assert_eq "#119: the login check gets the account command's own fallback folder" "env CLAUDE_CONFIG_DIR=$HOME/.claude-work" "$(grep -m1 '^env CLAUDE_CONFIG_DIR=' "$base/pf119b.log" 2>/dev/null || true)"
+# Issue #119, PR #118 re-check 3: in a flow that mixes runtimes, the account command runs
+# without the account variables of every runtime, so a command that reads CODEX_HOME sees the
+# same in the start check as in any launcher.
+jq -n '{schemaVersion: 2, accounts: {roles: {worker: "work"},
+  list: {work: {env_command: "echo \"CLAUDE_CONFIG_DIR=${CODEX_HOME:-$HOME/.claude-mix}\""} } } }' > "$user/config.json"
+rc=0; out=$(CODEX_HOME="$base/codex-caller" "$h" flow preflight sys 2>&1) || rc=$?
+assert_contains "#119: the start check's account command does not see another runtime's account variable" "$out" "not installed in $HOME/.claude-mix"
+# Credential variables: the launcher removes them, so the login check runs without them too.
+printf '{"schemaVersion": 2}\n' > "$user/config.json"
+rc=0; out=$(ANTHROPIC_API_KEY=k-caller HO_FAKE_CLAUDE_LOG="$base/pf119c.log" HO_FAKE_CLAUDE_SHOW_ENV=ANTHROPIC_API_KEY "$h" flow preflight sys 2>&1) || rc=$?
+assert_eq "#119: the login check runs without the caller's credential variable" "env ANTHROPIC_API_KEY=" "$(grep -m1 '^env ANTHROPIC_API_KEY=' "$base/pf119c.log" 2>/dev/null || true)"
 printf '{"schemaVersion": 2}\n' > "$user/config.json"
 
 # ---- the start check runs the account's env_command once (review round 2, minor 4) ------------

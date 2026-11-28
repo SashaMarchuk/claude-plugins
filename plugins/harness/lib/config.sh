@@ -49,6 +49,39 @@ ho_project_root() {
 
 ho_user_config() { printf '%s/config.json\n' "${HO_USER_DIR:-$HOME/.claude/harness}"; }
 
+# ho_user_dir: the user config folder this command runs with (HO_USER_DIR, else the default
+# under HOME), resolved once: one absolute path, no line break or tab, no trailing slash.
+# Issue #129: a run records it, every session it launches gets it, and a command of the run
+# that runs with another folder is refused (ho_run_user_dir_check).
+ho_user_dir() {
+  local d=${HO_USER_DIR:-$HOME/.claude/harness}
+  case $d in
+    *$'\n'* | *$'\t'*) echo "harness: HO_USER_DIR has a line break or a tab" >&2; return 65 ;;
+    /*) ;;
+    *) printf 'harness: HO_USER_DIR must be an absolute folder path, not %s\n' "$d" >&2; return 65 ;;
+  esac
+  while [ "$d" != / ] && [ "${d%/}" != "$d" ]; do d=${d%/}; done
+  printf '%s\n' "$d"
+}
+
+# ho_run_user_dir_check [warn]: 0 when the open run recorded no user config folder (a run of an
+# older engine) or the one this command runs with. Else 65 with the run's folder named: the
+# gate, accounts, limits and channels of a run come from one user config. With "warn" (a read
+# only verb) the mismatch is printed and 0 returned. The recorded folder is never adopted: run
+# state is writable by sessions, and the user config holds commands (agent decision, D37).
+ho_run_user_dir_check() {
+  local recd cur
+  recd=$(jq -r '.userDir // "" | strings' "$HO_RUN_DIR/run.json" 2>/dev/null) || recd=""
+  [ -n "$recd" ] || return 0
+  cur=$(ho_user_dir) || return 65
+  [ "$recd" = "$cur" ] && return 0
+  if [ -d "$recd" ] && [ -d "$cur" ] && [ "$(cd -P "$recd" && pwd -P)" = "$(cd -P "$cur" && pwd -P)" ]; then return 0; fi
+  printf 'harness: run %s was started with the user config folder %s, and this command runs with %s. Run it with HO_USER_DIR=%s; nothing was changed.\n' \
+    "$HO_RUN_ID" "$recd" "$cur" "$recd" >&2
+  [ "${1-}" = warn ] && return 0
+  return 65
+}
+
 # ho_config_file_check <file>: 0 if absent or valid schema 2; else print why and exit 78.
 ho_config_file_check() {
   local f=$1 v
@@ -105,7 +138,8 @@ ho_cfg() {
       printf 'harness: cannot read %s from config %s\n' "$path" "$f" >&2
       exit "$HO_EXIT_CONFIG"
     }
-    [ "$v" = null ] && continue
+    # Only a real null falls through; a value that is the text "null" is a value (#88).
+    [ "$v" = null ] && [ "$(jq -r "($path) | type" "$f" 2>/dev/null)" = null ] && continue
     printf '%s\n' "$v"
     return 0
   done <<EOF_FILES
@@ -125,6 +159,8 @@ EOF_FILES
 ho_cfg_int() {
   local path=${1:?jq path required} def=${2:?integer default required} v
   v=$(ho_cfg "$path" "$def") || exit $?
+  # More than 18 digits would wrap in 64-bit shell arithmetic (#88).
+  [ "${#v}" -le 18 ] || v="$v (too long)"
   case $v in
     '' | *[!0-9]*)
       printf 'harness: config %s=%s is not a non-negative integer; using %s\n' "$path" "$v" "$def" >&2
@@ -154,6 +190,13 @@ ho_config_main() {
   case ${1-} in
     get)
       shift
+      # A key from the command line is a plain path (.a.b), never a jq program: only engine
+      # code may pass a filter to the lookup (#88).
+      local key=${1-}
+      [ "$key" != --int ] || key=${2-}
+      if [ -n "$key" ] && ! printf '%s' "$key" | grep -Eqx '(\.[A-Za-z_][A-Za-z0-9_]*)+'; then
+        printf 'harness: config get takes a plain key such as .flow.use, not %s\n' "$key" >&2; exit 64
+      fi
       if [ "${1-}" = --int ]; then
         shift
         [ -n "${1-}" ] && [ -n "${2-}" ] || { ho_config_usage; exit 64; }

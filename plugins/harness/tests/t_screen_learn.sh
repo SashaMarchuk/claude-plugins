@@ -8,7 +8,10 @@ plug="$base/plugin"
 mkdir -p "$plug"
 cp -R "$HO_PLUGIN_ROOT/bin" "$HO_PLUGIN_ROOT/lib" "$HO_PLUGIN_ROOT/runtimes" "$HO_PLUGIN_ROOT/.claude-plugin" "$plug/"
 jq '.screen_file = "zzsyn.screen.json"' "$plug/runtimes/claude-code.json" > "$plug/runtimes/zzsyn.json"
-jq -n '{shapes: [{id: "limit", anchor: "zz synthetic hold line", companion: ""}],
+# The second hold shape has the same marks as the learned status line: learning must never let
+# it pass as the status area (it reads as a hold or as unknown; nothing is typed).
+jq -n '{shapes: [{id: "limit", anchor: "zz synthetic hold line", companion: ""},
+    {id: "trust", anchor: "◆ zz hold ▸ choose ◆ [0-9]+", companion: ""}, {id: "password", anchor: "⟦ zz pass ⟧ ⚙ now", companion: ""}],
   frame_start: "^[─│]", frame_end: "[─│]$", frame_only: "^─+$", input_box: "^(>|❯)( .*)?$",
   status_first_line: "^zz shipped first line$", status_lines: ["^zz shipped mode line$"]}' > "$plug/runtimes/zzsyn.screen.json"
 h="$plug/bin/harness"
@@ -28,6 +31,7 @@ IC=$(printf '\033[39m')
 # idle <status lines...>: an idle screen of the test runtime with these lines under the box.
 idle() { printf 'earlier output\n\n%s\n%s> \n%s\n' "$R" "$IC" "$R"; for l in "$@"; do printf '%s\n' "$l"; done; }
 learned="$user/screen/zzsyn.learned.json"
+perm() { if stat -c %a / >/dev/null 2>&1; then stat -c %a "$1"; else stat -f %Lp "$1"; fi; }
 learn() { "$h" screen "$run" learn "$@"; }
 
 start s1
@@ -53,7 +57,7 @@ assert_exit "#108: --yes needs the code (exit 64)" 64 learn s1 --yes
 rc=0; out=$(learn s1 --yes --code "$code") || rc=$?
 assert_eq "#108: the confirmed learn exits 0" 0 "$rc"
 assert_eq "#108: the shape is stored in the user folder" yes "$([ -f "$learned" ] && echo yes || echo no)"
-assert_eq "#108: the stored file is private (mode 600)" 600 "$(stat -f %Lp "$learned" 2>/dev/null || stat -c %a "$learned")"
+assert_eq "#108: the stored file is private (mode 600)" 600 "$(perm "$learned")"
 assert_eq "#108: the stored file keeps no screen text" "" "$(grep -F 'zz-proj' "$learned" || true)"
 assert_eq "#108: nothing is written into the project" "" "$(find "$proj" -name '*learned*' 2>/dev/null)"
 # The same status line with other words and numbers now reads; the instruction is typed.
@@ -72,6 +76,28 @@ start s4
 printf '\nzz synthetic hold line\n\n%s\n%s> \n%s\n◆ zz-proj ▸ main ◆ 12%%\n' "$R" "$IC" "$R" > "$(fout s4)"
 out=$("$h" session "$run" deliver s4 --text "run the tests" 2>&1) && rc=0 || rc=$?
 assert_eq "#108 H-099: a hold above the box is still a hold with a learned status line" "1 0" "$rc $(inbytes s4)"
+
+# A hold line with the same marks as the learned status line, right under the closing frame.
+start s4b
+idle '◆ zz hold ▸ choose ◆ 2' > "$(fout s4b)"
+out=$("$h" session "$run" deliver s4b --text "run the tests" 2>&1) && rc=0 || rc=$?
+assert_eq "#108 H-099: a hold with the learned marks right under the box gets nothing typed" "1 0" "$rc $(inbytes s4b)"
+assert_exit "#108: a hold line under the box is never learned as the status line (exit 75)" 75 learn s4b
+# A two-line custom status line, and below it a hold with the marks of its second line.
+start s4c
+idle '◆ zz-proj ▸ main ◆ 12%' '⟦ ctx ⟧ ⚙ 3' > "$(fout s4c)"
+out=$(learn s4c); learn s4c --yes --code "$(printf '%s\n' "$out" | sed -n 's/^CODE //p')" >/dev/null
+idle '◆ zz-proj ▸ main ◆ 12%' '⟦ ctx ⟧ ⚙ 4' > "$(fout s4c)"
+out=$("$h" session "$run" deliver s4c --text "run the tests" 2>&1) && rc=0 || rc=$?
+assert_eq "#108: a learned two-line status line reads (exit 0)" 0 "$rc"
+start s4d
+idle '◆ zz-proj ▸ main ◆ 12%' '⟦ ctx ⟧ ⚙ 3' '⟦ zz pass ⟧ ⚙ now' > "$(fout s4d)"
+out=$("$h" session "$run" deliver s4d --text "run the tests" 2>&1) && rc=0 || rc=$?
+assert_eq "#108 H-099: a hold with the marks of a learned second line, below it, gets nothing typed" "1 0" "$rc $(inbytes s4d)"
+# A line whose only marks are one ASCII bracket pair is too loose to learn.
+start s4e
+idle '[model] branch' > "$(fout s4e)"
+assert_exit "#108: a line whose only marks are one bracket pair is not learned (exit 65)" 65 learn s4e
 
 # ---- stale: a changed status line setting sets the learned shape aside ---------------------------
 mkdir -p "$HOME/.claude"

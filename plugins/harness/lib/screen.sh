@@ -93,10 +93,14 @@ ho_screen_profile_data() {
 #
 # The shape (agent decision under D37): the line's fixed marks in order and nothing else. A mark
 # is any non-ASCII character (a symbol, a box or separator character, an emoji) or one of the
-# ASCII characters [ ] ( ) { } < > | $; a run of the same mark counts as one. Between two marks
+# ASCII characters [ ] ( ) { } < > | $; a run of the same mark counts as one, and a bracket pair
+# counts as one when the line's marks are counted (at least two are needed). Between two marks
 # only other ASCII characters may stand, so the words and numbers may change (branch, model,
 # cost) but a line with another set of marks, a dialog or a notice say, does not read as the
 # status line. A line with fewer than two marks is not learned: it cannot be told from text.
+# A line under the box that has a hold shape's anchor is never the status area, learned or not
+# (ho_screen_status_area, and the status tail of ho_screen_shape_match). Known limit: learned
+# lines after the first are accepted at any place under the box, not only at their own place.
 #
 # The learned shapes are used only while the runtime binary (its real path, size and change
 # time) and the user's status line command are the ones they were learned with; after a runtime
@@ -129,7 +133,8 @@ ho_screen_learn_keys() {
       n=$((n + 1))
     done
     p="$(cd "$(dirname "$p")" 2>/dev/null && pwd -P)/$(basename "$p")"
-    st=$(stat -f '%z %m' "$p" 2>/dev/null || stat -c '%s %Y' "$p" 2>/dev/null) || st=""
+    if stat -c %Y / >/dev/null 2>&1; then st=$(stat -c '%s %Y' "$p" 2>/dev/null) || st=""
+    else st=$(stat -f '%z %m' "$p" 2>/dev/null) || st=""; fi
     ;;
   *) p="" ;; esac
   sf=$(jq -r '.status_line.user_settings // ""' "$f" 2>/dev/null) || sf=""
@@ -172,7 +177,7 @@ ho_screen_learn_shape() {
     function esc(c) { return (c ~ /^[][(){}|$]$/) ? "\\" c : c }
     {
       sub(/\r$/, ""); sub(/[ \t]+$/, "")
-      n = length($0); i = 1; k = 0; gap = 0
+      n = length($0); i = 1; k = 0; gap = 0; closers = 0
       while (i <= n) {
         c = substr($0, i, 1)
         if (c >= "\200") {
@@ -182,8 +187,10 @@ ho_screen_learn_shape() {
         else { i++; gap = 1; continue }
         if (k > 0 && g[k] == m && !gap) { r[k] = 1; continue }
         k++; g[k] = m; r[k] = 0; gap = 0
+        if (m ~ /^[])}>]$/) closers++
       }
-      if (k < 2) exit 1
+      # A bracket pair counts as one mark, so one pair alone is too loose to learn.
+      if (k - closers < 2) exit 1
       N = "[ -#%-\047*-;=?-Z\\\\^-z~\t]*"
       out = "^" N
       for (j = 1; j <= k; j++) out = out (r[j] ? "(" esc(g[j]) ")+" : esc(g[j])) N
@@ -286,6 +293,9 @@ ho_screen_shape_match() {
           for (j = q + 1; j <= n; j++) {
             if (blank(raw[j])) continue
             t = trim(raw[j])
+            # A line of this shape is never the status area, whatever a status shape (a
+            # learned one too, issue #108) says: the box is then not set aside.
+            if (tolower(core(t)) ~ "^(" anchor ")$") { tail_ok = 0; break }
             if (j == q + 1 && status_first != "" && t ~ status_first) continue
             if (status_lines != "" && t ~ status_lines) continue
             tail_ok = 0
@@ -352,25 +362,29 @@ ho_screen_shape_match() {
 # ho_screen_status_area <data-json>: read the lines under the closing frame of the input box
 # on stdin, the first of them right under the frame. 0 when every non-blank line is the
 # runtime's status area (the shapes above), 1 when one is not, 78 when the data holds no
-# status shapes. Delivery uses it: any other line under the box gets nothing typed.
+# status shapes. Delivery uses it: any other line under the box gets nothing typed. A line
+# that has the anchor of one of the data's hold shapes is never the status area, whatever a
+# status shape (a learned one too, issue #108) says.
 ho_screen_status_area() {
   local rc=0
   HO_SC_STATUS_FIRST=$(printf '%s' "$1" | jq -r '.status_first_line // "" | strings')
   HO_SC_STATUS_LINES=$(printf '%s' "$1" | jq -r '[.status_lines // [] | .[] | strings | "(" + . + ")"] | join("|")')
-  export HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
+  HO_SC_HOLDS=$(printf '%s' "$1" | jq -r '[.shapes // [] | .[] | .anchor? | strings | select(length > 0) | "(" + . + ")"] | join("|")')
+  export HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_HOLDS
   if [ -z "$HO_SC_STATUS_FIRST$HO_SC_STATUS_LINES" ]; then
-    unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
+    unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_HOLDS
     return 78
   fi
   LC_ALL=C awk '
-    BEGIN { first = ENVIRON["HO_SC_STATUS_FIRST"]; lines = ENVIRON["HO_SC_STATUS_LINES"] }
+    BEGIN { first = ENVIRON["HO_SC_STATUS_FIRST"]; lines = ENVIRON["HO_SC_STATUS_LINES"]; holds = ENVIRON["HO_SC_HOLDS"] }
     { t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t) }
     t == "" { next }
+    holds != "" && tolower(t) ~ "^(" holds ")$" { bad = 1; exit }
     NR == 1 && first != "" && t ~ first { next }
     lines != "" && t ~ lines { next }
     { bad = 1; exit }
     END { exit bad ? 1 : 0 }' 2>/dev/null || rc=$?
-  unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES
+  unset HO_SC_STATUS_FIRST HO_SC_STATUS_LINES HO_SC_HOLDS
   case $rc in 0 | 1) return "$rc" ;; esac
   return 70
 }
@@ -546,6 +560,12 @@ ho_screen_learn() {
     if [ "$j" -eq 1 ]; then printf '%s\n' "$line" | ho_screen_status_area "$data" || src=$?
     else printf '\n%s\n' "$line" | ho_screen_status_area "$data" || src=$?; fi
     [ "$src" -eq 0 ] && continue
+    # A hold line is never learned as the status line.
+    if printf '%s\n' "$line" | HO_SC_HOLDS=$(printf '%s' "$data" | jq -r '[.shapes // [] | .[] | .anchor? | strings | select(length > 0) | "(" + . + ")"] | join("|")') \
+      LC_ALL=C awk 'BEGIN { h = ENVIRON["HO_SC_HOLDS"] } { exit (h != "" && tolower($0) ~ "^(" h ")$") ? 0 : 1 }'; then
+      printf 'harness: line %s under the input box is a dialog or a notice of the runtime, not a status line; nothing was learned\n' "$j" >&2
+      return 75
+    fi
     shape=$(ho_screen_learn_shape "$line") || {
       printf 'harness: line %s under the input box has fewer than two fixed symbols, so it cannot be told from other text; it is not learned and delivery types nothing while it shows\n' "$j" >&2
       return 65

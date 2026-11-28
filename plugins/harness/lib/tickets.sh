@@ -211,9 +211,17 @@ done C2E0C6 Completed by the harness
 EOF
   echo "OK labels ensured on $HO_TK_REPO"
 }
+HO_TK_GH_LIMIT=200
 ho_tk_gh_rows() { # <state> -> number<TAB>title, oldest first
-  gh issue list --repo "$HO_TK_REPO" --label "$HO_TK_PREFIX:$1" --state open --limit 200 --json number,title |
-    jq -r 'sort_by(.number) | .[] | "\(.number)\t\(.title | gsub("[\r\n\t]"; " "))"'
+  local json n
+  json=$(gh issue list --repo "$HO_TK_REPO" --label "$HO_TK_PREFIX:$1" --state open --limit "$HO_TK_GH_LIMIT" --json number,title) || return 1
+  # Real gh prints at least []: empty output is a failed listing, never "no tickets" (#110).
+  [ -n "$json" ] || { ho_tk_err "the issue listing of $HO_TK_REPO printed nothing; read as a failed listing"; return 1; }
+  n=$(printf '%s' "$json" | jq -e 'if type == "array" then length else error("not a list") end' 2>/dev/null) \
+    || { ho_tk_err "the issue listing of $HO_TK_REPO is not a list of issues"; return 1; }
+  [ "$n" -lt "$HO_TK_GH_LIMIT" ] \
+    || ho_tk_err "warning: the listing of $HO_TK_PREFIX:$1 tickets reached its limit of $HO_TK_GH_LIMIT; tickets past it are not listed this time (#110, #88)"
+  printf '%s' "$json" | jq -r 'sort_by(.number) | .[] | "\(.number)\t\(.title | gsub("[\r\n\t]"; " "))"'
 }
 ho_tk_gh_show() {
   local id=$1 json state

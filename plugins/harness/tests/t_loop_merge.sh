@@ -390,7 +390,8 @@ user_gate
 mkdir -p "$PWD/tshim"
 cat > "$PWD/tshim/tail" <<EOS
 #!/bin/bash
-if [ -e "$PWD/stall-armed" ]; then rm -f "$PWD/stall-armed"; touch "$PWD/stalling"
+# Only the ledger append's "tail -c 1" stalls: the stop re-read after the gate uses tail too.
+if [ -e "$PWD/stall-armed" ] && [ "\$1 \$2" = "-c 1" ]; then rm -f "$PWD/stall-armed"; touch "$PWD/stalling"
   i=0; while [ -e "$PWD/stall-hold" ] && [ \$i -lt 600 ]; do sleep 0.1; i=\$((i + 1)); done; fi
 exec "$(command -v tail)" "\$@"
 EOS

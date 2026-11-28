@@ -555,6 +555,9 @@ ho_session_launch_one() {
   # D22: no new session while the service is down.
   if ho_watch_outage_open; then echo "harness: the service is down (an outage is open in the run ledger); no session is launched" >&2; return "$HO_EXIT_OUTAGE"; fi
   local stopped=0
+  # An ended run launches nothing (H-079); a recorded resume ("state <run> resume") opens it again.
+  # Checked first, so an ended run gets this one line only (#110).
+  ! ho_run_ended || { echo "harness: the run has ended; no session is launched (record a resume to open it again)" >&2; return 75; }
   # D37-SESSIONS-4: during a soft stop the orchestrator still has work, so it and the context
   # watcher may be (re)started under a soft stop; an unknown stop state still refuses.
   case $role in
@@ -562,8 +565,6 @@ ho_session_launch_one() {
     *) ho_stop_gate "$ticket" || stopped=$? ;;
   esac
   [ "$stopped" -eq 0 ] || { echo "harness: the run is stopped (or its stop state is unknown); no session is launched" >&2; return 75; }
-  # An ended run launches nothing (H-079); a recorded resume ("state <run> resume") opens it again.
-  ! ho_run_ended || { echo "harness: the run has ended; no session is launched (record a resume to open it again)" >&2; return 75; }
   ho_assert_safe_cwd "$cwd" "$HO_PROJECT_DIR" || return 65
   cwd=$(cd "$cwd" && pwd -P) || return 65
   case $cwd in *$'\n'*) echo "harness: working folder name has a line break" >&2; return 65 ;; esac
@@ -757,12 +758,12 @@ ho_session_launch_one() {
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
     --arg rpath "$cmdpath" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg aenv "$aenv" \
-    --arg ticket "$ticket" \
+    --arg ticket "$ticket" --arg hev "$(ho_live_hook_events 2>/dev/null || printf '%s' "$HO_LIVE_HOOK_EVENTS_ALL")" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
       account_env: (if $account != "" then null else ($aenv | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) end),
       runtime: $runtime, runtime_path: $rpath, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
-      transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end)}' \
+      transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end), hook_events: $hev}' \
     | ho_atomic_write "$rec" || { rm -f "$rec"; return 1; }
   ho_ledger_append session-launch name "$name" role "$role" session_id "$sid" account "$acct_name" ticket "$ticket"
 

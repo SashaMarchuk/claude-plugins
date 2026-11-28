@@ -139,10 +139,12 @@ assert_eq "D37-SESSIONS-2: a later clean Stop clears the error type" null "$(hk 
 # ---- a reduced event list must not make every call look open forever ----
 : > "$hlog"
 line 30 "$sid" PreToolUse toolu_x
-cfg '.liveness.hook_events = ["SessionStart", "PreToolUse", "Stop"]'
+# A session launched with that reduced list (its record keeps the list it was launched with).
+srec() { jq "$1" "$run/sessions/w1.json" > "$base/rec.json" && mv "$base/rec.json" "$run/sessions/w1.json"; }
+srec '.hook_events = "SessionStart PreToolUse Stop"'
 assert_eq "D37-SESSIONS-2: without both closing events, open calls are not tracked" "false [] false" \
   "$(hk w1 '"\(.hooks.tools_tracked) \(.hooks.open_tools | map(.tool_use_id)) \(.hooks.tool_running)"' | tr -d '"')"
-cfg 'del(.liveness)'
+srec 'del(.hook_events)'
 assert_eq "D37-SESSIONS-2: with all seven events, open calls are tracked" "true" "$(hk w1 .hooks.tools_tracked)"
 
 # ---- a dead process ID always wins over the hook log ----

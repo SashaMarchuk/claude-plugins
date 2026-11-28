@@ -204,6 +204,11 @@ ho_au_gate_point() {
   [ -n "$2" ] || return "$HO_EXIT_HUMAN"
   f=$(ho_au_approval_file "$2" "$3")
   [ -f "$f" ] && [ ! -L "$f" ] && [ ! -L "$HO_RUN_DIR/approvals" ] || return "$HO_EXIT_HUMAN"
+  # Only the record "approve" writes counts: a readable object for exactly this id and point
+  # (#110). Engine files in the run folder are trusted against mistakes, not against a party
+  # that can rewrite them (the registry scope decision of #89).
+  jq -e --arg for "$2" --arg p "$3" 'type == "object" and .for == $for and .point == $p and (.approved | type) == "string"' "$f" >/dev/null 2>&1 \
+    || return "$HO_EXIT_HUMAN"
 }
 
 # ho_au_decide <profile> <action> <for> <step> <facts> <local 0|1>: sets HO_AU_RC and HO_AU_WHY.
@@ -218,7 +223,8 @@ ho_au_decide() {
     start | step)
       [ "$action" = start ] && step=start
       ho_au_gate_point "$prof" "$for" "$step" || { HO_AU_RC=$?; HO_AU_WHY="$step is a human gate: a human approves it with harness autonomy approve"; return; }
-      HO_AU_WHY="$step is not gated" ;;
+      if [ "$(printf '%s' "$prof" | jq -r --arg p "$step" '.gates[$p] // "auto"')" = human ]; then HO_AU_WHY="$step was approved by a human"
+      else HO_AU_WHY="$step is not gated"; fi ;;
     push)
       [ "$push" = true ] || { HO_AU_RC=$HO_EXIT_DENIED; HO_AU_WHY="the profile allows no push; nothing leaves this machine"; return; }
       HO_AU_WHY="push is allowed" ;;

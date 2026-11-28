@@ -360,6 +360,8 @@ ho_state_begin() {
       "$(jq -r '.for // "?"' "$HO_RUN_DIR/pauses/$t.json" 2>/dev/null)" "$s" >&2
     return 75
   fi
+  # An ended run gets this one line only (#110), not the gate's line plus "stopped".
+  ! ho_run_ended || { printf 'harness: the run has ended; ticket %s step %s does not begin (record a resume to open it again)\n' "$t" "$s" >&2; return 75; }
   ho_stop_gate "$t" || rc=$?
   case $rc in
     0)

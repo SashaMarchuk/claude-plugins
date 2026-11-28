@@ -13,6 +13,10 @@
 # the endpoint answers {permission, role_name} as GitHub does (maintain reads "write",
 # triage reads "read"). A login not in the map gets HTTP 404 and exit 1.
 # HO_FAKE_GH_FAIL_API=<text> makes every api call whose path holds <text> fail with exit 1.
+# Pull requests: pr create (--draft, --head, --base, --title, --body-file, --repo; prints the
+# URL https://github.com/<repo>/pull/<n>), pr view <n> --json <fields> (number, state, isDraft,
+# headRefName, baseRefName, body, mergeCommit) and pr ready <n>. State lives in
+# $HO_FAKE_GH_DIR/prs/<n>.json; a test merges a PR by writing state MERGED and mergeCommit.
 # "issue comment --edit-last" rewrites the account's last comment, as real gh does,
 # so a regression to it is visible in the stored comments. Any other call exits 2.
 # HO_FAKE_GH_FAIL="<group> <command>" (for example "issue comment") makes that one call
@@ -219,6 +223,40 @@ case "$group $cmd" in
       esac
     done
     save "$f" '.state = "CLOSED"'
+    ;;
+  "pr create")
+    mkdir -p "$dir/prs"
+    draft=false head="" base="" title="" body="" repo="owner/repo"
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --draft) draft=true; shift ;;
+        --head) head=$2; shift 2 ;;
+        --base) base=$2; shift 2 ;;
+        --title) title=$2; shift 2 ;;
+        --body-file) body=$(cat "$2"); shift 2 ;;
+        --repo) repo=$2; shift 2 ;;
+        *) fail "pr create: unsupported flag $1" ;;
+      esac
+    done
+    [ -n "$head" ] && [ -n "$base" ] || fail "pr create needs --head and --base"
+    n=$(( $(find "$dir/prs" -name '*.json' | wc -l) + 1 ))
+    jq -n --argjson n "$n" --argjson d "$draft" --arg h "$head" --arg b "$base" --arg t "$title" --arg body "$body" --arg r "$repo" \
+      '{number: $n, state: "OPEN", isDraft: $d, headRefName: $h, baseRefName: $b, title: $t, body: $body, repo: $r, mergeCommit: null}' > "$dir/prs/$n.json"
+    printf 'https://github.com/%s/pull/%s\n' "$repo" "$n"
+    ;;
+  "pr view")
+    n=${1:-}; shift
+    [ -f "$dir/prs/$n.json" ] || fail "no pull request $n"
+    fields=""
+    while [ $# -gt 0 ]; do
+      case $1 in --json) fields=$2; shift 2 ;; --repo) shift 2 ;; *) fail "pr view: unsupported flag $1" ;; esac
+    done
+    jq -c --arg f "$fields" '. as $p | reduce ($f | split(",")[]) as $k ({}; .[$k] = $p[$k])' "$dir/prs/$n.json"
+    ;;
+  "pr ready")
+    n=${1:-}
+    [ -f "$dir/prs/$n.json" ] || fail "no pull request $n"
+    tmp=$(mktemp "$dir/.tmp.XXXXXX"); jq '.isDraft = false' "$dir/prs/$n.json" > "$tmp" && mv "$tmp" "$dir/prs/$n.json"
     ;;
   *) fail "unsupported call: $line" ;;
 esac

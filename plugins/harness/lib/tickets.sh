@@ -54,7 +54,7 @@ verbs:
   template                           the ticket body headings the plugin writes (D6)
   review <id>                        -> needs-review
   release <id>                       in-progress -> ready (body must pass the ready floor)
-  done <id>                          -> done (github: also closes the issue)
+  done <id> [--keep-open]            -> done (github: also closes the issue, unless --keep-open)
 USAGE
 }
 
@@ -786,7 +786,8 @@ ho_tickets() {
     done)
       if ho_tk_gh; then
         ho_tk_gh_set_state "$1" "done" || return
-        gh issue close "$1" --repo "$HO_TK_REPO" >/dev/null || return
+        # D11: close_on_merge false sets done and leaves the issue open.
+        [ "${2-}" = --keep-open ] || gh issue close "$1" --repo "$HO_TK_REPO" >/dev/null || return
       else
         ho_tk_locked ho_tk_l_set_state_locked "$1" "done" || return
       fi

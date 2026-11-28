@@ -16,7 +16,7 @@ printf '%s\n' '{"schemaVersion":2}' > "$PWD/user/config.json"
 pcfg() { printf '%s\n' "$1" > "$proj/.harness/config.json"; }
 profile() { pcfg "{\"schemaVersion\":2,\"autonomy\":{\"profile\":\"$1\"}}"; }
 check_rc() { local rc=0; "$h" autonomy "$run" check "$@" >/dev/null 2>"$PWD/err" || rc=$?; echo "$rc"; }
-newrun() { run=$("$h" run new); }
+newrun() { select_config "$proj"; run=$("$h" run new); }
 dir="$HO_PLUGIN_ROOT/autonomy"
 
 # ---- the ready-made profile files ------------------------------------------------------------
@@ -215,7 +215,7 @@ assert_eq "D12 migration: autonomy.profile wins over never_push" safe "$("$h" au
 # The run's profile is read once, from the project the run belongs to. A caller standing in a
 # project set to full must not lift a safe run to full, nor cache full into the run.
 profile safe
-runA=$("$h" run new)
+select_config "$proj"; runA=$("$h" run new)
 projB="$PWD/projB"
 mkdir -p "$projB/.harness"
 printf '%s\n' '{"schemaVersion":2,"autonomy":{"profile":"full"} }' > "$projB/.harness/config.json"
@@ -227,7 +227,7 @@ rc=0; (cd "$projB" && HO_PROJECT_DIR="$projB" "$h" autonomy "$runA" check push >
 assert_eq "H-036: HO_PROJECT_DIR naming another project is refused for a run-specific check (65)" 65 "$rc"
 # The engine's own merge reads the profile too: from another project it still reads the run's.
 profile safe
-runM=$("$h" run new)
+select_config "$proj"; runM=$("$h" run new)
 "$h" loop "$runM" integration --repo "$proj" --base main --worktree "$PWD/int-m" >/dev/null
 git -C "$proj" worktree add -q -b lane-m "$PWD/w-m" main
 printf 'from m\n' > "$PWD/w-m/m.txt"; git -C "$PWD/w-m" add m.txt; git -C "$PWD/w-m" commit -qm "work m"

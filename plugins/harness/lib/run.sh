@@ -79,6 +79,7 @@ ho_ledger_append() {
   local -a args
   args=(--arg ts "$(ho_now)" --arg run "$HO_RUN_ID" --arg kind "$kind")
   shift
+  local -a fields=("$@")
   while [ $# -ge 2 ]; do
     args+=(--arg "$1" "$2")
     shift 2
@@ -111,6 +112,11 @@ ho_ledger_append() {
     exit 1
   fi
   ho_ledger_unlock
+  # Run events for the notification channels (S8-28a); silent, and never fails this append.
+  case $kind in
+    pickup | run-end | stop | limits-over | orchestrator-down)
+      ! declare -F ho_nt_ledger_event >/dev/null || ho_nt_ledger_event "$kind" "${fields[@]}" || true ;;
+  esac
 }
 
 ho_ledger_unlock() {
@@ -348,15 +354,36 @@ ho_state_begin() {
   done
   [ -n "$t" ] && [ -n "$s" ] || { ho_state_usage; return 64; }
   printf '%s' "$s" | grep -Eqx '[a-z0-9][a-z0-9-]{0,39}' || { printf 'harness: a step id uses a-z 0-9 - (at most 40), not %s\n' "$s" >&2; return 64; }
+  # A lane paused for an urgent ticket begins no next step until intake lets it go (H-084, D3).
+  if [ -f "$HO_RUN_DIR/pauses/$t.json" ]; then
+    printf 'harness: ticket %s is paused for urgent ticket %s; step %s does not begin\n' "$t" \
+      "$(jq -r '.for // "?"' "$HO_RUN_DIR/pauses/$t.json" 2>/dev/null)" "$s" >&2
+    return 75
+  fi
   ho_stop_gate "$t" || rc=$?
   case $rc in
     0)
       ho_ledger_append step-begin ticket "$t" step "$s"
       printf 'OK ticket %s step %s may begin\n' "$t" "$s"
+      ho_state_notes "$t"
       ;;
     2) printf 'harness: the stop state is unknown; ticket %s step %s does not begin\n' "$t" "$s" >&2; return 75 ;;
     *) printf 'harness: the run is stopped (%s); ticket %s step %s does not begin\n' "${HO_STOP_TYPE:-stop}" "$t" "$s" >&2; return 75 ;;
   esac
+}
+
+# ho_state_notes <ticket>: hand each accepted ticket change (intake, H-023, D37-INTAKE-3) to the
+# step that begins, once: one "change <note-file>" line each, oldest first, and one
+# change-delivered ledger line. The orchestrator gives the note to the worker and returns the
+# ticket to its execution step (D37-INTAKE-6).
+ho_state_notes() {
+  local d="$HO_RUN_DIR/notes/$1" f
+  [ -d "$d" ] || return 0
+  for f in $(cd "$d" && ls | grep -E '^[0-9]+\.md$' | sort -n); do
+    ho_ledger_events | jq -e --arg n "$d/$f" 'select(.kind == "change-delivered" and .note == $n)' >/dev/null 2>&1 && continue
+    ho_ledger_append change-delivered ticket "$1" note "$d/$f"
+    printf 'change %s\n' "$d/$f"
+  done
 }
 
 ho_marker_name_ok() {
@@ -491,12 +518,18 @@ ho_run_new() {
   done
   [ -z "$workers" ] || ho_workers_arg "$workers" || exit 64
   [ -z "$workers" ] || workers=$((10#$workers))
+  # H-072, D37-FLOW-8 (b): no run starts without a confirmed config and an unraised record.
+  ho_sel_gate || exit $?
   ho_config_files >/dev/null || exit $?
-  proj=$(ho_project_root) || { echo "harness: no project here (no .harness/config.json); run setup first" >&2; exit "$HO_EXIT_CONFIG"; }
+  proj=$(ho_project_root) || { echo "harness: no project here; run /harness:config first" >&2; exit "$HO_EXIT_CONFIG"; }
   if [ -e "$proj/.harness/STOP" ]; then
     printf 'harness: %s/.harness/STOP exists; remove it to start a run\n' "$proj" >&2
     exit "$HO_EXIT_STOPPED"
   fi
+  # D37-FLOW-8: a project config that holds an out-of-memory check command is refused at start.
+  ho_res_project_cmd_check || exit 78
+  # D37-FLOW-8, D36: so is one that wires a notification channel by command.
+  ho_nt_project_cmd_check || exit 78
   runs="$proj/.harness/runs"
   mkdir -p "$runs"
   while :; do
@@ -511,6 +544,8 @@ ho_run_new() {
   ho_limits_stamp "$dir" "$workers" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
   # Standby and on_only_human_blocked (H-079, S8-20a, OPEN-9) are fixed for the run as well.
   ho_life_stamp "$dir" "$standby" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
+  # The permission prompt setting (H-052, D37-FLOW-8) is fixed for the run as well.
+  ho_perm_stamp "$dir" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
   jq -n --argjson schema "$HO_RUN_SCHEMA" --arg engine "$HO_ENGINE" --arg id "$id" --arg ts "$(ho_now)" \
     '{schemaVersion: $schema, engine: $engine, runId: $id, created: $ts}' | ho_atomic_write "$dir/run.json" || exit 1
   HO_RUN_DIR=$dir

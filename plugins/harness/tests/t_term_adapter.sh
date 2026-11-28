@@ -13,7 +13,8 @@ mkdir -p "$proj/.harness"
 export HO_PROJECT_DIR="$proj" HO_USER_DIR="$base/user"
 set_app() { printf '{"schemaVersion":2,"terminal":{"app":"%s","enter_delay_seconds":0}}\n' "$1" > "$proj/.harness/config.json"; }
 set_app tmux
-HO_RUN_DIR=$(ho_run_new) HO_RUN_ID=$(basename "$HO_RUN_DIR")
+select_config "$proj"
+HO_RUN_DIR=$("$HO_PLUGIN_ROOT/bin/harness" run new) HO_RUN_ID=$(basename "$HO_RUN_DIR")
 launcher="$base/l.sh"
 printf '#!/bin/bash\necho ready\nsleep 20\n' > "$launcher"
 o1=11111111-1111-4111-8111-111111111111 o2=22222222-2222-4222-8222-222222222222

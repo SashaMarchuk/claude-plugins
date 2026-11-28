@@ -105,6 +105,7 @@ rm -rf "$d"
 # Canaries in every free-text place: ledger values, a marker, a ticket title and body, the
 # project path, HOME, the account names, the ticket repository and the tracker login.
 export USER=canaryacct LOGNAME=canaryacct HO_FAKE_GH_USER=canary-gh-login HO_TICKETS_REPO=canary-org/canary-repo
+select_config "$proj"
 run=$("$h" run new)
 "$h" state "$run" decision "CANARY-DECISION-TITLE" "reason with $proj/src/a.ts and $t_gh"
 "$h" state "$run" owner-action "CANARY-OWNER" "why $t_aws" "deploy --token $t_sk" "verify at $HOME/x"
@@ -286,6 +287,7 @@ cp "$base/config.keep2" "$proj/.harness/config.json"
 # ---- A linked runs folder still has a last run ---------------------------------------------
 proj3="$base/proj3"; mkdir -p "$proj3/.harness" "$base/far/runs"
 cp "$proj/.harness/config.json" "$proj3/.harness/config.json"
+select_config "$proj3"
 ln -s "$base/far/runs" "$proj3/.harness/runs"
 (cd "$proj3" && HO_PROJECT_DIR="$proj3" "$h" run new >/dev/null)
 rc=0; out=$(cd "$proj3" && HO_PROJECT_DIR="$proj3" "$h" feedback preview "$base/d1.txt") || rc=$?

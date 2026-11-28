@@ -9,7 +9,7 @@
 # in the plugin's runtimes/ folder). Engine code is the same files.
 plug="$base/plugin"
 mkdir -p "$plug"
-cp -R "$HO_PLUGIN_ROOT/bin" "$HO_PLUGIN_ROOT/lib" "$HO_PLUGIN_ROOT/runtimes" "$HO_PLUGIN_ROOT/.claude-plugin" "$plug/"
+cp -R "$HO_PLUGIN_ROOT/bin" "$HO_PLUGIN_ROOT/lib" "$HO_PLUGIN_ROOT/runtimes" "$HO_PLUGIN_ROOT/autonomy" "$HO_PLUGIN_ROOT/templates" "$HO_PLUGIN_ROOT/.claude-plugin" "$plug/"
 jq --arg m "$HO_TESTS_DIR/fake-bin/fake-msg" '.message.argv = [$m, "{session_id}", "{instruction_id}", "{text_file}"]' \
   "$plug/runtimes/claude-code.json" > "$plug/runtimes/claude-msg.json"
 h="$plug/bin/harness"

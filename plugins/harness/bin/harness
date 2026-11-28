@@ -22,6 +22,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/files.sh"
 # shellcheck source=../lib/config.sh
 . "$HO_ROOT/lib/config.sh"
+# shellcheck source=../lib/select.sh
+. "$HO_ROOT/lib/select.sh"
 # shellcheck source=../lib/run.sh
 . "$HO_ROOT/lib/run.sh"
 # shellcheck source=../lib/term.sh
@@ -44,6 +46,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/runtime.sh"
 # shellcheck source=../lib/screen.sh
 . "$HO_ROOT/lib/screen.sh"
+# shellcheck source=../lib/permission.sh
+. "$HO_ROOT/lib/permission.sh"
 # shellcheck source=../lib/intake.sh
 . "$HO_ROOT/lib/intake.sh"
 # shellcheck source=../lib/ship.sh
@@ -56,6 +60,18 @@ export HO_ROOT
 . "$HO_ROOT/lib/lifecycle.sh"
 # shellcheck source=../lib/feedback.sh
 . "$HO_ROOT/lib/feedback.sh"
+# shellcheck source=../lib/limits.sh
+. "$HO_ROOT/lib/limits.sh"
+# shellcheck source=../lib/recover.sh
+. "$HO_ROOT/lib/recover.sh"
+# shellcheck source=../lib/resources.sh
+. "$HO_ROOT/lib/resources.sh"
+# shellcheck source=../lib/watch.sh
+. "$HO_ROOT/lib/watch.sh"
+# shellcheck source=../lib/notify.sh
+. "$HO_ROOT/lib/notify.sh"
+# shellcheck source=../lib/orch.sh
+. "$HO_ROOT/lib/orch.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -66,8 +82,8 @@ verbs:
   help       print this help
   selftest   check that no 0.6.0 variable or script can leak into this engine
   tickets    the ticket queue (run "harness tickets help")
-  config     config get <jq-path> [default] | config get --int <jq-path> <default> | config check
-  run        run new [--workers N] [--standby on|off]: create a stamped run in this project
+  config     config get|check|list|select|save-default|format|status|gate|language (config help)
+  run        run new|start|tick|wait|status|stop|resume: a run and its loop (run help)
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
   session    session <run-dir> launch|close|list|status|read|deliver|proof: sessions, their liveness and instructions
   slot       slot <run-dir> acquire|release|list|limits|heavy-ops|heavy-add: engine-enforced limits
@@ -79,6 +95,11 @@ verbs:
   screen     screen text: classify a capture, watch a session, pre-trust a folder, wait
   intake     intake <run-dir> interval|tick|poll: take labelled tickets, check access and readiness
   lifecycle  lifecycle <run-dir> check|done <name>: end of run, standby, closing finished sessions
+  limits     limits record | limits <run-dir> check|status|gate|wait: subscription limits per account
+  resources  resources <run-dir> oom|sample | resources recommend: out-of-memory cap, usage history
+  watch      watch <run-dir> loop|cycle|outage-check|back-check|restart|pid-check: the watch script
+  recover    recover last | recover <run-dir> tick|reopen|state: recovery of stopped sessions
+  notify     notify check|channels | notify <run-dir> event|question|poll|sent|failed|inbox: channels
   feedback   feedback preview <file> | send --draft <dir> --code <code> --yes: report a harness problem
 USAGE
 }
@@ -92,7 +113,7 @@ case $verb in
   selftest) ho_isolation_check ;;
   tickets)  ho_tickets "$@" ;;
   config)   ho_config_main "$@" ;;
-  run)      [ "${1-}" = new ] || { ho_usage >&2; exit 64; }; shift; ho_run_new "$@" ;;
+  run)      ho_orch_main "$@" ;;
   state)    ho_state_main "$@" ;;
   session)  ho_session_main "$@" ;;
   slot)     ho_slot_main "$@" ;;
@@ -105,6 +126,11 @@ case $verb in
   intake)   ho_intake_main "$@" ;;
   lifecycle) ho_life_main "$@" ;;
   feedback) ho_feedback_main "$@" ;;
+  limits)   ho_limits_main "$@" ;;
+  recover)  ho_rec_main "$@" ;;
+  resources) ho_res_main "$@" ;;
+  watch)    ho_watch_main "$@" ;;
+  notify)   ho_notify_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

@@ -38,7 +38,7 @@ nums() { "$h" flow steps "$1" 2>&1 | cut -f1 | tr '\n' ' ' | sed 's/ $//'; }
 printf 't\n' | "$h" tickets fence 7 > "$base/ticket.txt"
 vrender() { # the validator prompt of flow $1: it carries the rendered step list
   "$h" flow render "$1" validator --set RUN_ID r --set TICKET_ID 7 --set BRANCH b --set BASE m \
-    --set WORKDIR /w --set VERDICT_FILE /v --file TICKET_TEXT "$base/ticket.txt" 2>&1
+    --set WORKDIR /w --set VERDICT_FILE /v --set LANE t1 --set SHA 0123abc --file TICKET_TEXT "$base/ticket.txt" 2>&1
 }
 wrender() { # wrender <flow> <step>: the worker prompt of one step
   "$h" flow render "$1" worker --step "$2" --set RUN_ID r --set TICKET_ID 7 --set BRANCH b \

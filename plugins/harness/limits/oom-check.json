@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 2,
+  "_comment": "Out-of-memory check commands (H-106, design D37-LIMITS-1). The shipped default reads the container runtime's own record of one container. {container} becomes the exact container ID. jq is a filter on the command's output that must give true to confirm the stop. A user may add an entry under limits.oom_check.list.<label> in the user config; a project config may only select a label with limits.oom_check.label (D37-FLOW-8).",
+  "checks": {
+    "default": {
+      "argv": ["docker", "inspect", "{container}"],
+      "jq": "if type == \"array\" and length == 1 then (.[0].State.OOMKilled == true) else \"unclear\" end"
+    }
+  }
+}

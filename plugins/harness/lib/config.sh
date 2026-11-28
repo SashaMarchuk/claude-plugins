@@ -10,22 +10,36 @@
 HO_CONFIG_SCHEMA=2
 HO_EXIT_CONFIG=78
 
+# ho_project_root needs ho_is_project from lib/select.sh (committed configs and the local
+# selection). Load it here, so this file is safe to source alone.
+if ! declare -F ho_is_project >/dev/null 2>&1; then
+  # shellcheck source=select.sh
+  . "$(dirname "${BASH_SOURCE[0]}")/select.sh"
+fi
+
 # ho_project_root: print the project folder (the one holding .harness/config.json).
 # Order: $HO_PROJECT_DIR, then walk up from $PWD to .harness/config.json or to a
 # .harness-project pointer file (a worktree outside the project carries one).
 ho_project_root() {
   local d p
   if [ -n "${HO_PROJECT_DIR:-}" ]; then
-    [ -f "$HO_PROJECT_DIR/.harness/config.json" ] && { printf '%s\n' "$HO_PROJECT_DIR"; return 0; }
-    printf 'harness: HO_PROJECT_DIR=%s has no .harness/config.json\n' "$HO_PROJECT_DIR" >&2
+    ho_is_project "$HO_PROJECT_DIR" && { printf '%s\n' "$HO_PROJECT_DIR"; return 0; }
+    printf 'harness: HO_PROJECT_DIR=%s has no .harness/config.json, named config or local selection\n' "$HO_PROJECT_DIR" >&2
     return 1
   fi
   d=$PWD
   while :; do
-    [ -f "$d/.harness/config.json" ] && { printf '%s\n' "$d"; return 0; }
+    if ho_is_project "$d"; then
+      # A linked git worktree reads the main checkout's selection (D37-FLOW-5).
+      if [ -f "$d/.git" ] && p=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        case $p in */.git) p=${p%/.git}; ho_is_project "$p" && { printf '%s\n' "$p"; return 0; } ;; esac
+      fi
+      printf '%s\n' "$d"
+      return 0
+    fi
     if [ -f "$d/.harness-project" ]; then
       p=$(head -n 1 "$d/.harness-project")
-      [ -n "$p" ] && [ -f "$p/.harness/config.json" ] && { printf '%s\n' "$p"; return 0; }
+      [ -n "$p" ] && ho_is_project "$p" && { printf '%s\n' "$p"; return 0; }
     fi
     [ "$d" = / ] && break
     d=$(dirname "$d")
@@ -50,12 +64,17 @@ ho_config_file_check() {
 }
 
 # ho_config_files: print the config files in lookup order (project first), each checked.
+# The project file is the selected committed config (lib/select.sh), none on the confirmed
+# default, or .harness/config.json while nothing is selected yet.
 ho_config_files() {
-  local proj user
+  local proj user pf
   user=$(ho_user_config)
   if proj=$(ho_project_root 2>/dev/null); then
-    ho_config_file_check "$proj/.harness/config.json"
-    printf '%s\n' "$proj/.harness/config.json"
+    pf=$(ho_sel_project_config "$proj") || exit "$HO_EXIT_CONFIG"
+    if [ -n "$pf" ]; then
+      ho_config_file_check "$pf"
+      printf '%s\n' "$pf"
+    fi
   elif [ -n "${HO_PROJECT_DIR:-}" ]; then
     ho_project_root >/dev/null || true
     exit "$HO_EXIT_CONFIG"
@@ -65,10 +84,21 @@ ho_config_files() {
   return 0
 }
 
-# ho_cfg <jq-path> [default]: project value, else user value, else default.
+# ho_project_config_file <project>: the project config file the lookup reads, or /dev/null.
+ho_project_config_file() {
+  local pf
+  pf=$(ho_sel_project_config "$1" 2>/dev/null) || pf=""
+  printf '%s\n' "${pf:-/dev/null}"
+}
+
+# ho_cfg <jq-path> [default]: project value, else user value, else default. With a local
+# selection, a declined OpenSpec setup comes first for .requirements.format, and the confirmed
+# default and then the shipped default config come after the user value (D37-FLOW-7).
 ho_cfg() {
-  local path=${1:?jq path required} def=${2-} files f v
+  local path=${1:?jq path required} def=${2-} files f v proj
   files=$(ho_config_files) || exit $?
+  v=$(ho_sel_local_value override "$path")
+  [ -z "$v" ] || { printf '%s\n' "$v"; return 0; }
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     v=$(jq -r "$path" "$f" 2>/dev/null) || {
@@ -81,6 +111,12 @@ ho_cfg() {
   done <<EOF_FILES
 $files
 EOF_FILES
+  v=$(ho_sel_local_value default "$path")
+  [ -z "$v" ] || { printf '%s\n' "$v"; return 0; }
+  if proj=$(ho_project_root 2>/dev/null) && [ -f "$(ho_sel_file "$proj")" ]; then
+    v=$(ho_sel_local_value shipped "$path")
+    [ -z "$v" ] || { printf '%s\n' "$v"; return 0; }
+  fi
   printf '%s\n' "$def"
 }
 
@@ -99,7 +135,18 @@ ho_cfg_int() {
 }
 
 ho_config_usage() {
-  printf 'usage: harness config get <jq-path> [default] | harness config get --int <jq-path> <default> | harness config check\n' >&2
+  cat >&2 <<'USAGE'
+usage: harness config get <jq-path> [default] | config get --int <jq-path> <default> | config check
+       harness config list                       the committed configs: <name> TAB <path>
+       harness config select <name>              use a committed config on this machine (and record
+                                                 the approved profile, D37-FLOW-8)
+       harness config select --default [--flow F] [--format openspec|none]
+       harness config save-default [--flow F] [--format openspec|none]   for projects with no config
+       harness config format openspec|none       the requirements format on this machine
+       harness config status                     the local selection, as JSON
+       harness config gate [--unattended]        the start check: 0 may start, 73 stops and asks
+       harness config language                   the agent language (English by default)
+USAGE
 }
 
 # harness config get <jq-path> [default] | config get --int <jq-path> <default> | config check
@@ -120,6 +167,22 @@ ho_config_main() {
       ho_config_files >/dev/null
       echo "config OK"
       ;;
+    list)
+      local proj
+      proj=$(ho_project_root 2>/dev/null) || exit 0
+      ho_sel_list "$proj"
+      ;;
+    select) shift; ho_sel_select "$@" || exit $? ;;
+    save-default) shift; ho_sel_save_default "$@" || exit $? ;;
+    format) shift; [ $# -eq 1 ] || { ho_config_usage; exit 64; }; ho_sel_format "$1" || exit $? ;;
+    status)
+      local proj s
+      proj=$(ho_project_root 2>/dev/null) || { echo '{"selected": false}'; exit 0; }
+      s=$(ho_sel_read "$proj") || exit 78
+      if [ -n "$s" ]; then printf '%s\n' "$s"; else echo '{"selected": false}'; fi
+      ;;
+    gate) shift; ho_sel_gate "$@" || exit $? ;;
+    language) ho_sel_language || exit $? ;;
     *) ho_config_usage; exit 64 ;;
   esac
 }

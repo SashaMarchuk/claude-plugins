@@ -210,7 +210,7 @@ ho_cfg_user() {
 # account is configured. Refuses (65) a mismatch, an unknown account, or a command that fails.
 ho_session_account() {
   local role=$1 want=$2 profile=${3-} proj mapped cmd out
-  proj="$HO_PROJECT_DIR/.harness/config.json"
+  proj=$(ho_project_config_file "$HO_PROJECT_DIR")
   if jq -e '.accounts != null' "$proj" >/dev/null 2>&1; then
     printf 'harness: accounts are set in the project config %s; accounts belong in the user config only\n' "$proj" >&2
     return 65
@@ -263,7 +263,7 @@ ho_session_clean_path() {
 ho_session_project_roots() {
   local proj cfg d r
   proj=$(cd "$HO_PROJECT_DIR" && pwd -P) || return 1
-  cfg="$HO_PROJECT_DIR/.harness/config.json"
+  cfg=$(ho_project_config_file "$HO_PROJECT_DIR")
   printf '%s\n' "$proj"
   {
     jq -r '.repos[]? | objects | .worktrees_dir | strings' "$cfg" 2>/dev/null || true
@@ -404,6 +404,8 @@ ho_session_launcher_text() {
   printf 'export PATH=%s\n' "$(ho_q "$path")"
   printf 'export HO_PROJECT_DIR=%s HO_RUN_DIR=%s HO_RUN_ID=%s\n' "$(ho_q "$HO_PROJECT_DIR")" "$(ho_q "$HO_RUN_DIR")" "$(ho_q "$HO_RUN_ID")"
   printf 'export HO_SESSION_NAME=%s HO_SESSION_ROLE=%s HO_SESSION_ID=%s\n' "$(ho_q "$name")" "$(ho_q "$role")" "$(ho_q "$sid")"
+  # D28: the account label the status line records its limits under (lib/limits.sh).
+  printf 'export HO_ACCOUNT=%s\n' "$(ho_q "${account:-default}")"
   # H-089 (D37-SESSIONS-2): the mark the liveness hook needs; without it the hook does nothing.
   # A config read that fails keeps every event on, never silently none.
   local hook_events
@@ -481,11 +483,12 @@ ho_session_attempts() {
         *) line="$line $(ho_q "$el")" ;;
       esac
     done <<EOF_ARGV
-$(jq -r --arg sid "$sid" --arg model "$m" --arg title "$title" --arg perm "$perm" --arg resume "$resume" '
-    def fill: gsub("\\{session_id\\}"; $sid) | gsub("\\{model\\}"; $model) | gsub("\\{title\\}"; $title);
+$(jq -r --arg sid "$sid" --arg model "$m" --arg title "$title" --arg perm "$perm" --arg resume "$resume" --arg sl "${HO_SL_FILE-}" '
+    def fill: gsub("\\{session_id\\}"; $sid) | gsub("\\{model\\}"; $model) | gsub("\\{title\\}"; $title) | gsub("\\{status_settings\\}"; $sl);
     (if $resume == "1" then .argv.resume else .argv.new end)
     + (if $model != "" then .argv.model else [] end)
     + .argv.title
+    + (if $sl != "" then (.status_line.argv // []) else [] end)
     + .permissions[$perm]
     + (if $resume == "1" then [] else .argv.prompt end)
     | map(fill) | .[]' "$profile")
@@ -544,8 +547,20 @@ ho_session_launch_one() {
   ho_session_name_ok "$name" || return 65
   # A stopped run launches nothing new (H-086, D25a). Only a soft:ticket stop lets a session of a
   # ticket that began before the stop start, so that ticket can run to its end.
+  # H-110 (D28): a limit threshold whose action pauses spawns refuses a worker start (74). An
+  # unreadable limit never refuses (H-111). It runs first, so a soft stop it records is seen below.
+  local lrc=0
+  ho_limits_gate "$role" || lrc=$?
+  [ "$lrc" -eq 0 ] || return "$lrc"
+  # D22: no new session while the service is down.
+  if ho_watch_outage_open; then echo "harness: the service is down (an outage is open in the run ledger); no session is launched" >&2; return "$HO_EXIT_OUTAGE"; fi
   local stopped=0
-  ho_stop_gate "$ticket" || stopped=$?
+  # D37-SESSIONS-4: during a soft stop the orchestrator still has work, so it and the context
+  # watcher may be (re)started under a soft stop; an unknown stop state still refuses.
+  case $role in
+    orchestrator | watcher) ho_stop_gate_soft || stopped=$? ;;
+    *) ho_stop_gate "$ticket" || stopped=$? ;;
+  esac
   [ "$stopped" -eq 0 ] || { echo "harness: the run is stopped (or its stop state is unknown); no session is launched" >&2; return 75; }
   # An ended run launches nothing (H-079); a recorded resume ("state <run> resume") opens it again.
   ! ho_run_ended || { echo "harness: the run has ended; no session is launched (record a resume to open it again)" >&2; return 75; }
@@ -564,10 +579,10 @@ ho_session_launch_one() {
   # D37-FLOW-8: the permission mode is never read from the project config (interim, fail
   # closed, until the local approval record of D37-FLOW-8 (b) exists).
   perm=$(jq -r 'if (.session.permissions // null) == null or .session.permissions == "" then "" else "set" end' \
-    "$HO_PROJECT_DIR/.harness/config.json" 2>/dev/null) || perm=set
+    "$(ho_project_config_file "$HO_PROJECT_DIR")" 2>/dev/null) || perm=set
   if [ -n "$perm" ]; then
     printf 'harness: the project config %s sets session.permissions. A project config may not set the permission mode until the local approval record exists; move session.permissions to the user config %s\n' \
-      "$HO_PROJECT_DIR/.harness/config.json" "$(ho_user_config)" >&2
+      "$(ho_project_config_file "$HO_PROJECT_DIR")" "$(ho_user_config)" >&2
     return 65
   fi
   perm=$(ho_cfg_user '.session.permissions' | jq -r 'if . == null then "" elif type == "string" then . else tojson end') || return 78
@@ -709,7 +724,16 @@ ho_session_launch_one() {
     return 77
   fi
   [ "$trust_rc" -eq 0 ] || ho_ledger_append pretrust-skipped name "$name" cwd "$cwd" reason "$trust_why"
-  attempts=$(ho_session_attempts "$profile" "$sid" "$title" "$perm" "$([ -n "$resume" ] && echo 1 || echo 0)" "$models") || { rm -f "$rec"; return 78; }
+  # D28: the status line of each session records its account's limits (lib/limits.sh). The
+  # settings file comes from runtime data (status_line.settings); a runtime without it gets none.
+  local sl_file=""
+  if jq -e '(.status_line.settings | type) == "object" and (.status_line.argv | type) == "array"' "$profile" >/dev/null 2>&1; then
+    sl_file="$HO_RUN_DIR/status-line-settings.json"
+    jq --arg cmd "$(ho_q "$HO_ROOT/bin/harness") limits record" \
+      '.status_line.settings | walk(if type == "string" then gsub("\\{record_command\\}"; $cmd) else . end)' "$profile" \
+      | ho_atomic_write "$sl_file" || { rm -f "$rec"; return 1; }
+  fi
+  attempts=$(HO_SL_FILE=$sl_file ho_session_attempts "$profile" "$sid" "$title" "$perm" "$([ -n "$resume" ] && echo 1 || echo 0)" "$models") || { rm -f "$rec"; return 78; }
 
   ho_session_launcher_text "$name" "$role" "$acct_name" "$acct_cmd" "$sid" "$cwd" "$prompt" "$pidfile" "$closing" \
     "$HO_RUN_DIR/logs/launcher.log" "$path" "$(ho_cfg_int '.session.boot_grace_seconds' 45)" \
@@ -957,7 +981,7 @@ ho_session_capture() {
 ho_session_bind_project() {
   local proj
   proj=$(cd "$HO_RUN_DIR/../../.." && pwd -P)
-  [ -f "$proj/.harness/config.json" ] || { printf 'harness: run %s is not inside a project with .harness/config.json\n' "$HO_RUN_DIR" >&2; return 78; }
+  ho_is_project "$proj" || { printf 'harness: run %s is not inside a harness project\n' "$HO_RUN_DIR" >&2; return 78; }
   if [ -n "${HO_PROJECT_DIR:-}" ] && [ "$(cd "$HO_PROJECT_DIR" 2>/dev/null && pwd -P)" != "$proj" ]; then
     printf 'harness: run %s belongs to project %s, not HO_PROJECT_DIR=%s\n' "$HO_RUN_DIR" "$proj" "$HO_PROJECT_DIR" >&2
     return 65

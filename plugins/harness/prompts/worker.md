@@ -33,6 +33,7 @@ A step that does not pass stops the ticket. It never moves on to shipping.
 5. Commit your work on @BRANCH@ before you report. Never rewrite history that is already committed.
 6. Never print a secret. Never write one to a file, a commit or a comment.
 7. Stop a process only by its exact process ID, never by a name pattern.
+8. Communicate in @AGENT_LANGUAGE@: your step result and any comment. Code, commands and quotes stay exact.
 
 ## Report
 

@@ -36,3 +36,10 @@ assert_exit() {
   "$@" >/dev/null 2>&1 || rc=$?
   if [ "$rc" -eq "$want" ]; then ok "$name"; else bad "$name" "expected exit $want, got $rc"; fi
 }
+
+# select_config <project-dir> [name]: the person's confirmation on this machine (H-072,
+# D37-FLOW-8 (b)): select a committed config (default .harness/config.json) and record its
+# approved profile, so a run may start there. Select again after a test raises a recorded field.
+select_config() {
+  HO_PROJECT_DIR="$1" "$HO_PLUGIN_ROOT/bin/harness" config select "${2:-config}" >/dev/null
+}

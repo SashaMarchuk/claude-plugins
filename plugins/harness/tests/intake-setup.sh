@@ -15,6 +15,7 @@ export HO_FAKE_CLAUDE_LOG="$base/claude.log"
 mkdir -p "$HO_FAKE_GH_DIR"
 # Who has which access on fake/repo. harness-bot is the harness's own account.
 printf '{"harness-bot": "write", "alice": "write", "maya": "maintain", "olga": "admin", "tom": "triage", "rita": "read", "ci-bot[bot]": "write"}\n' > "$HO_FAKE_GH_DIR/perms.json"
+select_config "$proj"
 run=$(cd "$proj" && "$h" run new)
 # A ready verdict from the readiness judge unless a test says otherwise.
 export HO_FAKE_CLAUDE_STDOUT='{"ready": true, "questions": []}'

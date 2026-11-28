@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "_comment": "The ranking of recorded fields (design D37-FLOW-8 (b)). The local selector records, for the selected committed config, the value of each field below. At every run start the engine compares the committed config with that record. A change this file ranks as a raise, or cannot place, stops the run; a lowering is accepted and updates the record. kinds: order (a later value in 'order' is a raise), gates (a human gate that becomes auto is a raise), add (a new list entry is a raise), remove (a dropped list entry is a raise), lower (a smaller number is a raise), from (any change away from 'safe' is a raise). A field the committed config stops setting is no raise: the person's own config or the shipped default applies then. The order of permission modes is data (D37-AUTONOMY-2).",
+  "fields": {
+    "autonomy.gates": {"kind": "gates"},
+    "autonomy.push": {"kind": "order", "order": [false, true]},
+    "autonomy.pr": {"kind": "order", "order": ["none", "draft", "ready"]},
+    "autonomy.pr_open": {"kind": "from", "safe": "none"},
+    "autonomy.merge": {"kind": "order", "order": ["never", "classifier", "always"]},
+    "autonomy.post_merge": {"kind": "order", "order": [false, true]},
+    "autonomy.deploy_production": {"kind": "order", "order": [false, true]},
+    "autonomy.remarks": {"kind": "order", "order": ["human", "fix"]},
+    "autonomy.allow_zero_tests": {"kind": "order", "order": [false, true]},
+    "autonomy.always_human_paths": {"kind": "remove"},
+    "session.permissions": {"kind": "order", "order": ["dontAsk", "acceptEdits", "auto", "bypass"]},
+    "tickets.readiness.on_not_ready": {"kind": "order", "order": ["ask", "assume"]},
+    "external_review_bots": {"kind": "add"},
+    "external_review.mode": {"kind": "order", "order": ["ask", "react", "ignore"]},
+    "external_review.reviewer": {"kind": "from", "safe": "auto"},
+    "external_review.wait.first_signal_seconds": {"kind": "lower"},
+    "external_review.wait.no_reviewer_seconds": {"kind": "lower"},
+    "external_review.wait.security_minutes": {"kind": "lower"},
+    "external_review.wait.total_minutes": {"kind": "lower"}
+  }
+}

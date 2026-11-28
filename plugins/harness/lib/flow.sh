@@ -44,8 +44,8 @@ HO_EXIT_DATA=65
 HO_EXIT_FLOW=78
 HO_FLOW_SCHEMA=2
 HO_FLOW_ROLES="worker validator"
-# Every placeholder a template may use. The engine fills the first five itself.
-HO_FLOW_ENGINE_TOKENS="FLOW_NAME FLOW_STEP_LIST STEP_ID STEP_TITLE STEP_TEXT"
+# Every placeholder a template may use. The engine fills the first six itself.
+HO_FLOW_ENGINE_TOKENS="FLOW_NAME FLOW_STEP_LIST STEP_ID STEP_TITLE STEP_TEXT AGENT_LANGUAGE"
 HO_FLOW_CALLER_TOKENS="RUN_ID TICKET_ID TICKET_TEXT BRANCH BASE WORKDIR STEP_RESULT_FILE VERDICT_FILE"
 # The caller values that may span lines. Every other caller value is one line of text.
 HO_FLOW_MULTILINE_TOKENS="TICKET_TEXT"
@@ -393,7 +393,10 @@ ho_flow_render() {
   for name in $HO_FLOW_CALLER_TOKENS; do
     [ -s "$tmpd/$name" ] && valargs+=(--rawfile "V_$name" "$tmpd/$name")
   done
-  jq -nj --arg flow "$flow" --arg step "$step" ${valargs[@]+"${valargs[@]}"} \
+  # H-077: the agent language, English by default.
+  local lang
+  lang=$(ho_sel_language) || exit "$HO_EXIT_FLOW"
+  jq -nj --arg flow "$flow" --arg step "$step" --arg lang "$lang" ${valargs[@]+"${valargs[@]}"} \
     --slurpfile cfg "$HO_FLOW_JSON" --rawfile role "$role_file" --rawfile steptpl "$step_prompt" '
     def render($v):
       . as $t
@@ -407,6 +410,7 @@ ho_flow_render() {
     | ($ARGS.named | with_entries(select(.key | startswith("V_")) | .key |= .[2:])) as $vals
     | ($vals + {
         FLOW_NAME: $flow,
+        AGENT_LANGUAGE: $lang,
         FLOW_STEP_LIST: ([[$c.steps[] | select(.enabled != false)] | to_entries[]
           | "\(.key + 1). \(.value.title) (\(.value.id))"
             + (if .value.when == "questions" then ", only when classification finds open questions" else "" end)]

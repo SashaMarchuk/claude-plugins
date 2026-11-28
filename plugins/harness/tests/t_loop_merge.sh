@@ -19,6 +19,7 @@ user_gate() {
   printf '%s\n' '{"schemaVersion":2,"gate":{"use":"t","list":{"t":{"command":"test ! -e BROKEN && test -f shared.txt"}}}}' > "$PWD/user/config.json"
 }
 user_gate
+select_config "$proj"
 run=$("$h" run new)
 int="$PWD/int"
 tip() { git -C "$proj" rev-parse "refs/heads/$(jq -r .branch "$run/integration.json")"; }

@@ -477,8 +477,10 @@ ho_run_new() {
   done
   [ -z "$workers" ] || ho_workers_arg "$workers" || exit 64
   [ -z "$workers" ] || workers=$((10#$workers))
+  # H-072, D37-FLOW-8 (b): no run starts without a confirmed config and an unraised record.
+  ho_sel_gate || exit $?
   ho_config_files >/dev/null || exit $?
-  proj=$(ho_project_root) || { echo "harness: no project here (no .harness/config.json); run setup first" >&2; exit "$HO_EXIT_CONFIG"; }
+  proj=$(ho_project_root) || { echo "harness: no project here; run /harness:config first" >&2; exit "$HO_EXIT_CONFIG"; }
   if [ -e "$proj/.harness/STOP" ]; then
     printf 'harness: %s/.harness/STOP exists; remove it to start a run\n' "$proj" >&2
     exit "$HO_EXIT_STOPPED"

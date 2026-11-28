@@ -213,7 +213,7 @@ ho_loop_verdict() {
 ho_loop_gate_cmd() {
   local proj label cmd has
   proj=$(ho_project_root) || { ho_loop_err "no project here (no .harness/config.json)"; return 78; }
-  proj="$proj/.harness/config.json"
+  proj=$(ho_project_config_file "$proj")
   has=$(jq -r '[(.gate.command? // empty), ((.gate.list? // {}) | to_entries[]? | .value.command? // empty)]
       | map(select(. != "" and . != null)) | length' "$proj" 2>/dev/null) || has=1
   if [ "$has" != 0 ]; then

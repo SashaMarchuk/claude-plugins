@@ -210,7 +210,7 @@ ho_cfg_user() {
 # account is configured. Refuses (65) a mismatch, an unknown account, or a command that fails.
 ho_session_account() {
   local role=$1 want=$2 profile=${3-} proj mapped cmd out
-  proj="$HO_PROJECT_DIR/.harness/config.json"
+  proj=$(ho_project_config_file "$HO_PROJECT_DIR")
   if jq -e '.accounts != null' "$proj" >/dev/null 2>&1; then
     printf 'harness: accounts are set in the project config %s; accounts belong in the user config only\n' "$proj" >&2
     return 65
@@ -263,7 +263,7 @@ ho_session_clean_path() {
 ho_session_project_roots() {
   local proj cfg d r
   proj=$(cd "$HO_PROJECT_DIR" && pwd -P) || return 1
-  cfg="$HO_PROJECT_DIR/.harness/config.json"
+  cfg=$(ho_project_config_file "$HO_PROJECT_DIR")
   printf '%s\n' "$proj"
   {
     jq -r '.repos[]? | objects | .worktrees_dir | strings' "$cfg" 2>/dev/null || true
@@ -564,10 +564,10 @@ ho_session_launch_one() {
   # D37-FLOW-8: the permission mode is never read from the project config (interim, fail
   # closed, until the local approval record of D37-FLOW-8 (b) exists).
   perm=$(jq -r 'if (.session.permissions // null) == null or .session.permissions == "" then "" else "set" end' \
-    "$HO_PROJECT_DIR/.harness/config.json" 2>/dev/null) || perm=set
+    "$(ho_project_config_file "$HO_PROJECT_DIR")" 2>/dev/null) || perm=set
   if [ -n "$perm" ]; then
     printf 'harness: the project config %s sets session.permissions. A project config may not set the permission mode until the local approval record exists; move session.permissions to the user config %s\n' \
-      "$HO_PROJECT_DIR/.harness/config.json" "$(ho_user_config)" >&2
+      "$(ho_project_config_file "$HO_PROJECT_DIR")" "$(ho_user_config)" >&2
     return 65
   fi
   perm=$(ho_cfg_user '.session.permissions' | jq -r 'if . == null then "" elif type == "string" then . else tojson end') || return 78
@@ -957,7 +957,7 @@ ho_session_capture() {
 ho_session_bind_project() {
   local proj
   proj=$(cd "$HO_RUN_DIR/../../.." && pwd -P)
-  [ -f "$proj/.harness/config.json" ] || { printf 'harness: run %s is not inside a project with .harness/config.json\n' "$HO_RUN_DIR" >&2; return 78; }
+  ho_is_project "$proj" || { printf 'harness: run %s is not inside a harness project\n' "$HO_RUN_DIR" >&2; return 78; }
   if [ -n "${HO_PROJECT_DIR:-}" ] && [ "$(cd "$HO_PROJECT_DIR" 2>/dev/null && pwd -P)" != "$proj" ]; then
     printf 'harness: run %s belongs to project %s, not HO_PROJECT_DIR=%s\n' "$HO_RUN_DIR" "$proj" "$HO_PROJECT_DIR" >&2
     return 65

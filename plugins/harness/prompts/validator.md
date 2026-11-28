@@ -29,6 +29,7 @@ Flow `@FLOW_NAME@`:
 4. Check that every step of the flow above that had to run did run and passed. A step that
    the worker checked for itself does not count as an independent check.
 5. Never ask a question and never wait for an answer. Never push, open a pull request or merge.
+6. Communicate in @AGENT_LANGUAGE@: your verdict text and any comment. Code, commands and quotes stay exact.
 
 ## Verdict
 

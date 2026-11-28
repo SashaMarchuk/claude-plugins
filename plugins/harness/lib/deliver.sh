@@ -780,6 +780,11 @@ ho_session_deliver() {
     text=$(cat -- "$file") || return 65
   fi
   [ -n "$text" ] || { echo "harness: the instruction text is empty" >&2; return 64; }
+  # H-095 (D22): while the service is down nothing is sent; the watch script says when it is back.
+  if ho_watch_outage_open; then
+    printf 'harness: the service is down (an outage is open in the run ledger); nothing was sent to %s\n' "$name" >&2
+    return "$HO_EXIT_OUTAGE"
+  fi
   [ "$(ho_deliver_bytes "$text")" -le "$HO_DELIVER_MAX_TEXT" ] || { printf 'harness: the instruction is longer than %s bytes\n' "$HO_DELIVER_MAX_TEXT" >&2; return 65; }
   if [ -n "$id" ]; then ho_deliver_id_ok "$id" || return 65; else id=$(ho_deliver_new_id); fi
   local delay

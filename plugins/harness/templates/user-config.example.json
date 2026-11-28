@@ -4,5 +4,9 @@
   "accounts": {
     "roles": {},
     "list": {}
+  },
+  "limits": {
+    "thresholds": {},
+    "endpoint_read": false
   }
 }

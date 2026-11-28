@@ -88,6 +88,29 @@
   ],
   "session_log": "{config_dir}/projects/<project folder>/<session id>.jsonl",
   "limits": "The subscription usage endpoint gives five_hour and seven_day utilization with their reset times.",
+  "_comment_status_line": "Limits per account (D28, H-109): each session's status line command records its account's limits. argv adds the settings file the engine writes from settings ({status_settings}; {record_command} becomes the harness record command). windows is the path to the object that holds one entry per limit window in the status line JSON; used and resets name each entry's used percent and reset time (epoch seconds or ISO time). user_settings and user_command say where the user's own status line command is; the record command runs it with the same input and prints its output unchanged, so a session keeps the user's line. Every window present is read under its own name. Not yet exercised by a real run.",
+  "status_line": {
+    "argv": [
+      "--settings",
+      "{status_settings}"
+    ],
+    "settings": {
+      "statusLine": {
+        "type": "command",
+        "command": "{record_command}"
+      }
+    },
+    "windows": ".rate_limits",
+    "used": "used_percentage",
+    "resets": "resets_at",
+    "user_settings": "{config_dir}/settings.json",
+    "user_command": ".statusLine.command"
+  },
+  "_comment_outage": "Outage monitor (D22, H-096): the two plain HTTP checks of the watch script. The service is up when it answers below 500; the internet is up when it answers at all. The user or project config may set watch.service_url and watch.internet_url instead.",
+  "outage": {
+    "service_url": "https://api.anthropic.com/",
+    "internet_url": "https://www.gstatic.com/generate_204"
+  },
   "capabilities": {
     "hooks": true,
     "session_messages": true

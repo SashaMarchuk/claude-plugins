@@ -518,6 +518,8 @@ ho_run_new() {
     printf 'harness: %s/.harness/STOP exists; remove it to start a run\n' "$proj" >&2
     exit "$HO_EXIT_STOPPED"
   fi
+  # D37-FLOW-8: a project config that holds an out-of-memory check command is refused at start.
+  ho_res_project_cmd_check || exit 78
   runs="$proj/.harness/runs"
   mkdir -p "$runs"
   while :; do

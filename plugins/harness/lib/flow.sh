@@ -382,6 +382,11 @@ ho_flow_render() {
     printf 'harness: the worker role needs --step <id>\n' >&2
     exit "$HO_EXIT_USAGE"
   fi
+  # The validator prompt uses no step: a --step would be dropped without a word (#89).
+  if [ "$role" = validator ] && [ -n "$step" ]; then
+    printf 'harness: the validator role takes no --step; it checks the whole lane\n' >&2
+    exit "$HO_EXIT_USAGE"
+  fi
   if [ -n "$step" ]; then
     step_prompt=$(jq -r --arg s "$step" '.steps[] | select(.id == $s) | .prompt' "$HO_FLOW_JSON")
     [ -n "$step_prompt" ] || { printf 'harness: flow %s has no step %s\n' "$flow" "$step" >&2; exit "$HO_EXIT_USAGE"; }

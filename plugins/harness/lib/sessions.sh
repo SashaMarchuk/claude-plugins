@@ -206,42 +206,102 @@ ho_cfg_user() {
   jq -c "$1" "$f"
 }
 
-# ho_session_account <role> <requested> [profile]: print "<account>\t<env-command>", or nothing when no
-# account is configured. Refuses (65) a mismatch, an unknown account, or a command that fails.
+# ho_session_account <role> <requested> [profile]: print "<label>\t<env-command>", or nothing when no
+# account is configured (D37-SESSIONS-5, issue #89). The project config may name a label per role
+# (accounts.roles.<role>: "<label>"); the command for a label lives in the user config only
+# (accounts.list.<label>.env_command), or the entry says normal_login: true (no command, the
+# label is still recorded). Role lookup, first non-empty value wins: project roles.<role>, user
+# roles.<role>, project roles.default, user roles.default. A label is only a lookup key: a-z 0-9 -,
+# never put into a shell string. Refuses (65): a command or a list in the project config, a bad
+# label, an unknown label, an entry with both or neither, a mismatch with --account, a command
+# that fails or prints anything but KEY=VALUE lines.
 ho_session_account() {
-  local role=$1 want=$2 profile=${3-} proj mapped cmd out
-  proj=$(ho_project_config_file "$HO_PROJECT_DIR")
-  if jq -e '.accounts != null' "$proj" >/dev/null 2>&1; then
-    printf 'harness: accounts are set in the project config %s; accounts belong in the user config only\n' "$proj" >&2
-    return 65
-  fi
-  mapped=$(ho_cfg_user ".accounts.roles[\"$role\"] // .accounts.roles.default" | jq -r '. // ""')
-  if [ -z "$mapped" ]; then
+  local role=$1 want=$2 profile=${3-} pf uf label="" src="" v spec where key entry cmd nl out rc
+  pf=$(ho_project_config_file "$HO_PROJECT_DIR")
+  uf=$(ho_user_config)
+  [ -f "$uf" ] || uf=/dev/null
+  rc=0
+  jq -e '(.accounts // {}) as $a
+    | ([$a | .. | objects | .env_command? | select(type == "string" and length > 0)] | length > 0)
+      or ((($a | if type == "object" then .list else null end) // null) as $l | $l != null and $l != {} and $l != [] and $l != "")' \
+    "$pf" >/dev/null 2>&1 || rc=$?
+  case $rc in
+    0) printf 'harness: the project config %s holds an account command or an accounts.list; move the command to the user config under accounts.list.<label>.env_command, and keep only accounts.roles.<role>: "<label>" in the project config\n' "$pf" >&2
+       return 65 ;;
+    1) ;;
+    *) printf 'harness: cannot read the accounts of the project config %s\n' "$pf" >&2; return 65 ;;
+  esac
+  for spec in "project:$role" "user:$role" "project:default" "user:default"; do
+    where=${spec%%:*}; key=${spec#*:}
+    if [ "$where" = project ]; then f=$pf; else f=$uf; fi
+    v=$(jq -c --arg r "$key" 'try (.accounts.roles[$r]) catch "!bad" | . // null' "$f" 2>/dev/null) || v='"!bad"'
+    case $v in null | '""') continue ;; esac
+    label=$(printf '%s' "$v" | jq -r 'strings' 2>/dev/null) || label=""
+    if [ -z "$label" ] || ! printf '%s' "$label" | grep -Eqx '[a-z0-9][a-z0-9-]*'; then
+      printf 'harness: accounts.roles.%s in the %s config must be a label of a-z 0-9 - that does not start with -, not %s\n' "$key" "$where" "$v" >&2
+      return 65
+    fi
+    src="$where config accounts.roles.$key"
+    break
+  done
+  local f
+  if [ -z "$label" ]; then
     [ -z "$want" ] && return 0
     printf 'harness: --account %s given, but no account is configured for role %s\n' "$want" "$role" >&2
     return 65
   fi
-  case $mapped in *[!a-z0-9-]* | -*) printf 'harness: account name %s must use a-z 0-9 -\n' "$mapped" >&2; return 65 ;; esac
-  if [ -n "$want" ] && [ "$want" != "$mapped" ]; then
-    printf 'harness: role %s runs on account %s, not %s\n' "$role" "$mapped" "$want" >&2
+  if [ -n "$want" ] && [ "$want" != "$label" ]; then
+    printf 'harness: role %s runs on account %s, not %s\n' "$role" "$label" "$want" >&2
     return 65
   fi
-  cmd=$(ho_cfg_user ".accounts.list[\"$mapped\"].env_command" | jq -r 'strings // ""')
-  [ -n "$cmd" ] || { printf 'harness: account %s (role %s) has no env_command in accounts.list\n' "$mapped" "$role" >&2; return 65; }
-  out=$(ho_session_account_cmd "$profile" "$cmd" 2>/dev/null) || { printf 'harness: the env_command of account %s failed\n' "$mapped" >&2; return 65; }
-  printf '%s\n' "$out" | ho_account_env_parse >/dev/null || {
-    printf 'harness: the env_command of account %s must print KEY=VALUE lines only\n' "$mapped" >&2
+  entry=$(jq -c --arg l "$label" 'try (.accounts.list[$l]) catch null | . // null' "$uf" 2>/dev/null) || entry=null
+  if [ "$entry" = null ]; then
+    printf 'harness: account %s (role %s, named by the %s) has no entry in the user config; fill in accounts.list.%s.env_command (or accounts.list.%s.normal_login: true) in %s\n' \
+      "$label" "$role" "$src" "$label" "$label" "$(ho_user_config)" >&2
     return 65
-  }
-  # The variables as printed, for a caller that must not run the command a second time.
-  HO_SESSION_ACCOUNT_ENV=$out
-  printf '%s\t%s\n' "$mapped" "$cmd"
+  fi
+  cmd=$(printf '%s' "$entry" | jq -r 'if type == "object" then (.env_command | strings) // "" else "" end')
+  nl=$(printf '%s' "$entry" | jq -r 'if type == "object" and .normal_login == true then "yes" else "no" end')
+  if [ -n "$cmd" ] && [ "$nl" = yes ]; then
+    printf 'harness: account %s in the user config has both an env_command and normal_login: true; keep one\n' "$label" >&2; return 65
+  fi
+  if [ -z "$cmd" ] && [ "$nl" != yes ]; then
+    printf 'harness: account %s (role %s) needs accounts.list.%s.env_command or normal_login: true in the user config\n' "$label" "$role" "$label" >&2; return 65
+  fi
+  HO_SESSION_ACCOUNT_ENV=""
+  if [ -n "$cmd" ]; then
+    # The command's own error text is never logged: only its exit code and a fixed line (#89).
+    rc=0; out=$(ho_session_account_cmd "$profile" "$cmd" 2>/dev/null) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      ho_session_launcher_log "the env_command of account $label failed with exit $rc; its output is not logged"
+      printf 'harness: the env_command of account %s failed (exit %s)\n' "$label" "$rc" >&2
+      return 65
+    fi
+    printf '%s\n' "$out" | ho_account_env_parse >/dev/null || {
+      ho_session_launcher_log "the env_command of account $label printed a line that is not KEY=VALUE; its output is not logged"
+      printf 'harness: the env_command of account %s must print KEY=VALUE lines only\n' "$label" >&2
+      return 65
+    }
+    # The variables as printed, for a caller that must not run the command a second time.
+    HO_SESSION_ACCOUNT_ENV=$out
+  fi
+  printf '%s\t%s\n' "$label" "$cmd"
+}
+
+# ho_session_launcher_log <text>: one fixed line in <run>/logs/launcher.log.
+ho_session_launcher_log() {
+  [ -n "${HO_RUN_DIR-}" ] || return 0
+  mkdir -p "$HO_RUN_DIR/logs" 2>/dev/null || return 0
+  printf '%s harness: %s\n' "$(ho_now)" "$1" >> "$HO_RUN_DIR/logs/launcher.log" 2>/dev/null || true
 }
 
 # ho_session_clean_path: absolute PATH entries only, each once, without folders that hold a
 # 0.6.0 engine script.
 ho_session_clean_path() {
-  local out="" dir s rest skip
+  local out="" dir s rest skip roots
+  # Folders of the project, its worktrees folder and its worktrees are left out too, so nothing
+  # from the repository is found on the session's PATH (#89, D61).
+  roots=$(ho_session_project_roots 2>/dev/null) || roots=""
   rest="$(ho_sanitize_path "${PATH-}"):"
   while [ -n "$rest" ]; do
     dir=${rest%%:*}
@@ -252,6 +312,7 @@ ho_session_clean_path() {
     for s in $HO_OLD_SCRIPTS; do
       [ -e "$dir/$s" ] && { skip=1; break; }
     done
+    [ "$skip" -eq 1 ] || ! ho_session_under_roots "$dir" "$roots" || skip=1
     [ "$skip" -eq 0 ] && out="${out:+$out:}$dir"
   done
   printf '%s\n' "$out"
@@ -284,12 +345,39 @@ ho_session_project_roots() {
   done
 }
 
+# ho_session_under_roots <dir> <roots>: 0 when the folder is, or lies inside, one of the roots
+# (compared by identity, walking up), or is a git worktree of a repository inside the project.
+ho_session_under_roots() {
+  local d a root proj
+  d=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    a=$d
+    while :; do
+      [ "$a" -ef "$root" ] && return 0
+      [ "$a" = / ] && break
+      a=$(dirname "$a")
+    done
+  done <<EOF_ROOTS
+$2
+EOF_ROOTS
+  proj=$(cd "$HO_PROJECT_DIR" 2>/dev/null && pwd -P) || return 1
+  ho_is_project_worktree "$d" "$proj"
+}
+
 # ho_session_runtime_path_ok <cmdpath>: refuse (65) a runtime binary that is, or links to, a
 # file inside the project, its worktrees folder or a worktree of the project repository.
 # Folders are compared as physical paths; every link on the way is checked.
 ho_session_runtime_path_ok() {
-  local f=$1 d t root roots a n=0
+  local f=$1 d t root roots a n=0 proj
+  # A repos[] path or worktrees_dir with a line break would never become a root (#89).
+  if jq -e '[.repos[]? | objects | (.path, .worktrees_dir) | strings | select(test("[\n\r]"))] | length > 0' \
+      "$(ho_project_config_file "$HO_PROJECT_DIR")" >/dev/null 2>&1; then
+    echo "harness: a repos[] path or worktrees_dir in the project config holds a line break; it is refused" >&2
+    return 65
+  fi
   roots=$(ho_session_project_roots) || { echo "harness: cannot read the project folder" >&2; return 65; }
+  proj=$(cd "$HO_PROJECT_DIR" && pwd -P) || return 65
   while :; do
     d=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P) || { printf 'harness: cannot resolve the runtime command path %s\n' "$f" >&2; return 65; }
     # Folders are compared by identity (-ef), walking up from the binary folder, so
@@ -308,6 +396,11 @@ ho_session_runtime_path_ok() {
     done <<EOF_ROOTS
 $roots
 EOF_ROOTS
+    # The cwd guard's rule too: a worktree of any git repository inside the project (#89).
+    if ho_is_project_worktree "$d" "$proj"; then
+      printf 'harness: the runtime command resolves to %s, in a worktree of a repository inside the project; it is never run. Put the runtime first on PATH from a folder outside the project.\n' "$f" >&2
+      return 65
+    fi
     [ -L "$f" ] || return 0
     n=$((n + 1))
     [ "$n" -le 40 ] || { printf 'harness: the runtime command %s has too many links\n' "$1" >&2; return 65; }
@@ -400,7 +493,7 @@ ho_session_launcher_text() {
   printf 'ho_note() { printf '"'"'[%%s %%s] %%s\\n'"'"' "$(date -u +%%H:%%M:%%S)" %s "$*" >> "$HO_LOG"; printf '"'"'%%s\\n'"'"' "$*" >&2; }\n' "$(ho_q "$name")"
   printf 'ho_fatal() { ho_note "FATAL: $2"; printf '"'"'%%s\\n'"'"' "$2" > %s; sleep %s; exit "$1"; }\n' "$(ho_q "${pidfile%.pid}.failed")" "$hold"
   printf 'unset %s\n' "$HO_OLD_VARS"
-  ho_session_account_env_lines "$aenv" "$account"
+  ho_session_account_env_lines "$aenv" "$acct_cmd"
   printf 'export PATH=%s\n' "$(ho_q "$path")"
   printf 'export HO_PROJECT_DIR=%s HO_RUN_DIR=%s HO_RUN_ID=%s\n' "$(ho_q "$HO_PROJECT_DIR")" "$(ho_q "$HO_RUN_DIR")" "$(ho_q "$HO_RUN_ID")"
   printf 'export HO_SESSION_NAME=%s HO_SESSION_ROLE=%s HO_SESSION_ID=%s\n' "$(ho_q "$name")" "$(ho_q "$role")" "$(ho_q "$sid")"
@@ -420,9 +513,10 @@ ho_session_launcher_text() {
     "$(ho_q "${pidfile%.pid}.launcher.tmp")" "$(ho_q "${pidfile%.pid}.launcher.tmp")" "$(ho_q "${pidfile%.pid}.launcher")"
   printf '[ -e %s ] && { ho_note "a close is under way; not starting"; : > %s; exit 0; }\n' "$(ho_q "$closing")" "$(ho_q "${pidfile%.pid}.ended")"
   printf 'cd -- %s || ho_fatal 66 "cannot enter the working folder; the session was not started"\n' "$(ho_q "$cwd")"
-  if [ -n "$account" ]; then
+  if [ -n "$acct_cmd" ]; then
     declare -f ho_account_env_parse
-    printf 'ho_acct=$(/bin/bash -c %s 2>>"$HO_LOG") || ho_fatal 9 "the account command failed; the session was not started"\n' "$(ho_q "$acct_cmd")"
+    # The command's own error text stays out of the log (#89): the exit code and a fixed line.
+    printf 'ho_acct=$(/bin/bash -c %s 2>/dev/null) || ho_fatal 9 "the account command failed (exit $?); its output is not logged; the session was not started"\n' "$(ho_q "$acct_cmd")"
     printf 'ho_acct=$(printf '"'"'%%s\\n'"'"' "$ho_acct" | ho_account_env_parse) || ho_fatal 9 "the account command printed no usable KEY=VALUE line"\n'
     printf 'while IFS="$(printf '"'"'\\t'"'"')" read -r ho_k ho_v; do export "$ho_k=$ho_v"; done <<HO_ACCT\n$ho_acct\nHO_ACCT\n'
     printf 'ho_note %s\n' "$(ho_q "account $account applied")"
@@ -574,19 +668,31 @@ ho_session_launch_one() {
   else
     ho_assert_abs "$prompt" "prompt file" || return 65
     [ -f "$prompt" ] && [ -s "$prompt" ] && [ -r "$prompt" ] || { printf 'harness: prompt file missing or empty: %s\n' "$prompt" >&2; return 65; }
+    # The prompt is the runtime's last argument: text that starts with "-" would be read as a
+    # flag (#89). Refused, with no runtime-specific "--".
+    [ "$(LC_ALL=C head -c 1 "$prompt")" != - ] || { printf 'harness: the prompt in %s starts with "-"; it would reach the runtime as a flag\n' "$prompt" >&2; return 65; }
   fi
   local profile perm cmd cmdpath models acct acct_name="" acct_cmd=""
   profile=$(ho_runtime_profile) || return $?
   # D37-FLOW-8: the permission mode is never read from the project config (interim, fail
   # closed, until the local approval record of D37-FLOW-8 (b) exists).
-  perm=$(jq -r 'if (.session.permissions // null) == null or .session.permissions == "" then "" else "set" end' \
-    "$(ho_project_config_file "$HO_PROJECT_DIR")" 2>/dev/null) || perm=set
-  if [ -n "$perm" ]; then
-    printf 'harness: the project config %s sets session.permissions. A project config may not set the permission mode until the local approval record exists; move session.permissions to the user config %s\n' \
-      "$(ho_project_config_file "$HO_PROJECT_DIR")" "$(ho_user_config)" >&2
-    return 65
+  # D37-FLOW-8 (b) (#89): a project value counts only when it is the value the person approved
+  # (the record "config select" keeps); any other value, false included, is refused. No "//"
+  # here: it would turn a real false into "unset".
+  local ppv rpv
+  ppv=$(jq -c '.session.permissions | if . == null or . == "" then empty else . end' \
+    "$(ho_project_config_file "$HO_PROJECT_DIR")" 2>/dev/null) || ppv='"!unreadable"'
+  if [ -n "$ppv" ]; then
+    rpv=$(ho_sel_read "$HO_PROJECT_DIR" 2>/dev/null | jq -c '.approved.fields["session.permissions"] // empty' 2>/dev/null) || rpv=""
+    if [ "$ppv" != "$rpv" ] || ! printf '%s' "$ppv" | jq -e 'type == "string"' >/dev/null 2>&1; then
+      printf 'harness: the project config %s sets session.permissions to %s, which is not the value approved on this machine; select the config again with /harness:config, or move session.permissions to the user config %s\n' \
+        "$(ho_project_config_file "$HO_PROJECT_DIR")" "$ppv" "$(ho_user_config)" >&2
+      return 65
+    fi
+    perm=$(printf '%s' "$ppv" | jq -r .)
+  else
+    perm=$(ho_cfg_user '.session.permissions' | jq -r 'if . == null then "" elif type == "string" then . else tojson end') || return 78
   fi
-  perm=$(ho_cfg_user '.session.permissions' | jq -r 'if . == null then "" elif type == "string" then . else tojson end') || return 78
   [ -n "$perm" ] || perm=bypass
   jq -e --arg p "$perm" '.permissions[$p] | type == "array"' "$profile" >/dev/null 2>&1 || {
     printf 'harness: session.permissions %s is not known to runtime %s\n' "$perm" "$(basename "$profile" .json)" >&2
@@ -743,7 +849,7 @@ ho_session_launch_one() {
   if ! /bin/bash -n "$launcher.tmp" 2>/dev/null \
     || [ "$(sed -n 2p "$launcher.tmp")" != "# ho-launcher run=$HO_RUN_ID name=$name role=$role account=${acct_name:--} session=$sid" ] \
     || ! grep -qxF "cd -- $(ho_q "$cwd") || ho_fatal 66 \"cannot enter the working folder; the session was not started\"" "$launcher.tmp" \
-    || [ "$(grep -E '^(export|unset) ' "$launcher.tmp" | grep -vE '^(unset HARNESS_|export (PATH|HO_))')" != "$(ho_session_account_env_lines "$aenv" "$acct_name")" ]; then
+    || [ "$(grep -E '^(export|unset) ' "$launcher.tmp" | grep -vE '^(unset HARNESS_|export (PATH|HO_))')" != "$(ho_session_account_env_lines "$aenv" "$acct_cmd")" ]; then
     rm -f "$rec" "$launcher.tmp"
     echo "harness: the generated launcher does not match the request; nothing was launched" >&2
     return 65
@@ -758,9 +864,9 @@ ho_session_launch_one() {
     --arg runtime "$(basename "$profile" .json)" --arg sid "$sid" --arg cwd "$cwd" --arg launcher "$launcher" \
     --arg pidfile "$pidfile" --arg chain "$chain" --arg backend "$backend" --arg ts "$(ho_now)" --arg tag "$tag" \
     --arg rpath "$cmdpath" --argjson lp "$launch_pid" --arg ls "$launch_start" --arg ns "$pid_ns" --arg aenv "$aenv" \
-    --arg ticket "$ticket" --arg hev "$(ho_live_hook_events 2>/dev/null || printf '%s' "$HO_LIVE_HOOK_EVENTS_ALL")" \
+    --arg ticket "$ticket" --arg acmd "$acct_cmd" --arg hev "$(ho_live_hook_events 2>/dev/null || printf '%s' "$HO_LIVE_HOOK_EVENTS_ALL")" \
     '{schemaVersion: 2, run: $run, name: $name, role: $role, account: (if $account == "" then null else $account end),
-      account_env: (if $account != "" then null else ($aenv | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) end),
+      account_env: (if $acmd != "" then null else ($aenv | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) end),
       runtime: $runtime, runtime_path: $rpath, session_id: $sid, pid: null, backend: $backend, handle: null, term_tag: $tag, cwd: $cwd,
       launcher: $launcher, pid_file: $pidfile, model_chain: $chain, status: "launching", created: $ts,
       transcript_root: null, launch_pid: $lp, launch_start: $ls, pid_ns: $ns, ticket: (if $ticket == "" then null else $ticket end), hook_events: $hev}' \

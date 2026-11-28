@@ -21,7 +21,9 @@
 # The record (D37-FLOW-8 (b)): the values the selected committed config gives for each field of
 # autonomy/ranking/raises.json, with a sha256 digest. The gate compares the committed config with
 # it at every run start: a raise, or a change the ranking cannot place, stops the run (73); a
-# lowering is accepted and the record updated.
+# lowering is accepted and the record updated. A recorded field the committed config stops
+# setting counts as a raise too, because a looser user value could then apply. A selector that
+# git tracks is refused: a repository cannot ship a confirmation.
 # Requires lib/common.sh and lib/config.sh.
 
 HO_EXIT_CONFIRM=73
@@ -66,6 +68,11 @@ ho_sel_read() {
   local f
   f=$(ho_sel_file "$1")
   [ -e "$f" ] || return 0
+  # A committed selector is no one's confirmation on this machine (D37-FLOW-5): refused.
+  if git -C "$1" ls-files --error-unmatch .harness/local.json >/dev/null 2>&1; then
+    ho_sel_err "the local selection $f is tracked by git; a committed selection confirms nothing. Remove it from git (git rm --cached) and select again with /harness:config"
+    return 78
+  fi
   [ -f "$f" ] && [ ! -L "$f" ] && jq -ce 'select(type == "object" and .schemaVersion == 2
       and ((.config == null) or (.config | type == "string")))' "$f" 2>/dev/null || {
     ho_sel_err "the local selection $f is unreadable; select again with /harness:config"
@@ -135,8 +142,7 @@ ho_sel_raises() {
     def idx($l; $v): first(range(0; $l | length) as $i | select($l[$i] == $v) | $i) // null;
     def raised($rule; $old; $new):
       if $old == $new then false
-      elif $new == null then false
-      elif $old == null then true
+      elif $old == null or $new == null then true
       elif $rule.kind == "order" then
         (idx($rule.order; $old)) as $a | (idx($rule.order; $new)) as $b
         | if $a == null or $b == null then true else $b > $a end

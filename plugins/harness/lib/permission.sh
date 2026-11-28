@@ -14,20 +14,36 @@
 #            Any doubt, a failed or unreadable analysis, a screen that changed before the key, or
 #            a runtime without that key escalates as with off.
 # A committed config cannot raise the setting silently: it is a recorded field of D37-FLOW-8
-# (autonomy/ranking/raises.json), and off to analyse is a raise.
+# (autonomy/ranking/raises.json), and off to analyse is a raise. It is read once at run start
+# into <run>/settings.json, so a change pulled during a run counts from the next run start.
 # Requires lib/common.sh, lib/config.sh, lib/run.sh, lib/term.sh, lib/sessions.sh, lib/runtime.sh,
 # lib/liveness.sh and lib/screen.sh.
 
 ho_perm_err() { printf 'harness: permission prompt: %s\n' "$*" >&2; }
 
-# ho_perm_setting: print off or analyse; 78 for any other value.
-ho_perm_setting() {
+# ho_perm_config_value: the setting from the config lookup: off or analyse; 78 otherwise.
+ho_perm_config_value() {
   local v
   v=$(ho_cfg '.session.permission_prompts' 'off') || return 78
   case $v in
     off | analyse) printf '%s\n' "$v" ;;
     *) ho_perm_err "session.permission_prompts must be off or analyse, not $v"; return 78 ;;
   esac
+}
+
+# ho_perm_stamp <run-dir>: fix the setting for the run at run start (D37-FLOW-8: recorded
+# fields are read once at run start), in <run>/settings.json.
+ho_perm_stamp() {
+  local v
+  v=$(ho_perm_config_value) || return 78
+  jq -n --arg v "$v" '{schemaVersion: 2, permission_prompts: $v}' | ho_atomic_write "$1/settings.json"
+}
+
+# ho_perm_setting: the run's setting, from its stamp. A run without a readable stamp is off.
+ho_perm_setting() {
+  local v
+  v=$(jq -r '.permission_prompts // "off"' "$HO_RUN_DIR/settings.json" 2>/dev/null) || v=off
+  case $v in analyse) echo analyse ;; *) echo off ;; esac
 }
 
 # ho_perm_escalate <session> <digest> <why>

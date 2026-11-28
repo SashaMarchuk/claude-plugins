@@ -96,6 +96,10 @@ assert_eq "D37-FLOW-8: a human gate made automatic is a raise" 73 \
   "$(raise_of '{"schemaVersion":2,"autonomy":{"profile":"gated"}}' '{"schemaVersion":2,"autonomy":{"profile":"custom","custom":{"gates":{},"push":false,"pr":"none","pr_open":"none","merge":"never","post_merge":false,"deploy_production":false,"remarks":"human","allow_zero_tests":false}}}')"
 assert_eq "D37-FLOW-8: a value the ranking cannot place is a raise" 73 \
   "$(raise_of '{"schemaVersion":2,"tickets":{"readiness":{"on_not_ready":"ask"}}}' '{"schemaVersion":2,"tickets":{"readiness":{"on_not_ready":"maybe"}}}')"
+assert_eq "D37-FLOW-8: a dropped always-a-human list is a raise" 73 \
+  "$(raise_of '{"schemaVersion":2,"autonomy":{"always_human_paths":["a/*"]}}' '{"schemaVersion":2}')"
+assert_eq "D37-FLOW-8: a dropped profile is a raise (a looser user profile could apply)" 73 \
+  "$(raise_of '{"schemaVersion":2,"autonomy":{"profile":"safe"}}' '{"schemaVersion":2}')"
 assert_eq "D37-FLOW-8: a change of a setting that is not recorded starts" 0 \
   "$(raise_of '{"schemaVersion":2,"who":"a"}' '{"schemaVersion":2,"who":"b"}')"
 # A selection without a record (as after an upgrade), or with a damaged record, stops once.
@@ -106,6 +110,13 @@ hp config select alice >/dev/null 2>&1
 jq '.approved.fields["autonomy.push"] = false' "$proj/.harness/local.json" > "$base/l" && mv "$base/l" "$proj/.harness/local.json"
 assert_eq "D37-FLOW-8: a record whose values do not match its digest stops" 73 "$(rc_of hp config gate)"
 hp config select alice >/dev/null 2>&1
+
+# A selector committed to the repository is no confirmation.
+git -C "$proj" add -f .harness/local.json
+assert_eq "D37-FLOW-5: a selector tracked by git stops the start" 73 "$(rc_of hp config gate)"
+assert_contains "D37-FLOW-5: the stop says the selection is tracked" "$(cat "$base/err")" "tracked by git"
+git -C "$proj" rm -q --cached .harness/local.json
+assert_eq "D37-FLOW-5: an untracked selector starts again" 0 "$(rc_of hp config gate)"
 
 # ---- H-072: a selection that names a missing config: no fallback -------------------------------
 mv "$proj/.harness/config.alice.json" "$base/alice.keep"

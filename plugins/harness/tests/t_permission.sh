@@ -32,8 +32,21 @@ assert_eq "D37-AUTONOMY-1: the default writes one owner-action line" 1 "$(ledger
 perm >/dev/null
 assert_eq "D37-AUTONOMY-1: the same screen is escalated once" 1 "$(ledger | jq -c 'select(.kind == "owner-action" and (.title | test("permission prompt")))' | wc -l | tr -d ' ')"
 
-# analyse: the model judges the prompt acceptable -> one accept, recorded.
+# The setting is fixed at run start: analyse set during a run does not answer in that run.
 printf '{"schemaVersion": 2, "runtime": {"main": "synth"}, "session": {"permission_prompts": "analyse"}}\n' > "$user/config.json"
+show2 live
+before=$(enters)
+r=$(HO_FAKE_CLAUDE_STDOUT='{"acceptable": true}' perm)
+assert_contains "D37-FLOW-8 H-052: analyse set during a run is not used in that run" "$r" "owner-action"
+assert_eq "D37-FLOW-8: no key is pressed in a run started with off" "$before" "$(enters)"
+assert_eq "D37-FLOW-8: the run stamp holds the setting of its start" off "$(jq -r .permission_prompts "$run/settings.json")"
+# A new run under analyse, with its own session.
+run=$("$h" run new)
+assert_eq "H-052: a run started under analyse stamps analyse" analyse "$(jq -r .permission_prompts "$run/settings.json")"
+launch p1 >/dev/null
+h1=$(rec p1 .handle)
+out="$HO_FAKE_TERM_DIR/$(printf '%s' "$h1" | tr -c 'A-Za-z0-9-' '_')"
+# analyse: the model judges the prompt acceptable -> one accept, recorded.
 show2 a
 before=$(enters)
 r=$(HO_FAKE_CLAUDE_STDOUT='{"acceptable": true}' perm)
@@ -61,10 +74,10 @@ before=$(enters)
 r=$(HO_FAKE_CLAUDE_STDOUT='{"acceptable": true}' perm)
 assert_contains "D37-AUTONOMY-1: a runtime with no accept-once key escalates" "$r" "owner-action"
 assert_eq "D37-AUTONOMY-1: with no accept-once key nothing is pressed" "$before" "$(enters)"
-# A bad value is a config error.
+# A bad value is a config error at run start.
 printf '{"schemaVersion": 2, "runtime": {"main": "synth"}, "session": {"permission_prompts": "always"}}\n' > "$user/config.json"
-show2 f
-assert_contains "D37-AUTONOMY-1: there is no always-accept value" "$(perm)" "rc=78"
+assert_exit "D37-AUTONOMY-1: there is no always-accept value (run new refuses it)" 78 "$h" run new
+printf '{"schemaVersion": 2, "runtime": {"main": "synth"}}\n' > "$user/config.json"
 
 # D37-FLOW-8: a committed config cannot raise the setting silently.
 printf '%s\n' '{"schemaVersion":2,"session":{"permission_prompts":"off"}}' > "$base/pc.json"

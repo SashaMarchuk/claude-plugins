@@ -499,6 +499,8 @@ ho_run_new() {
   ho_limits_stamp "$dir" "$workers" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
   # Standby and on_only_human_blocked (H-079, S8-20a, OPEN-9) are fixed for the run as well.
   ho_life_stamp "$dir" "$standby" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
+  # The permission prompt setting (H-052, D37-FLOW-8) is fixed for the run as well.
+  ho_perm_stamp "$dir" || { local rc=$?; rm -rf "$dir"; exit "$rc"; }
   jq -n --argjson schema "$HO_RUN_SCHEMA" --arg engine "$HO_ENGINE" --arg id "$id" --arg ts "$(ho_now)" \
     '{schemaVersion: $schema, engine: $engine, runId: $id, created: $ts}' | ho_atomic_write "$dir/run.json" || exit 1
   HO_RUN_DIR=$dir

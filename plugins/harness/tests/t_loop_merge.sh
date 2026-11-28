@@ -535,6 +535,65 @@ assert_eq "H-046 confirmation: no merge-confirmed line for that lane" "" "$(jq -
 git -C "$proj" config --unset core.hooksPath
 git -C "$int" reset -q --hard "$cur"
 
+# ---- issue #102: run-loop follow-ups of wave 3 ------------------------------------------------
+user_gate
+cur=$(tip)
+# Item 1: a signal that ends git merge after its commit (here a post-merge hook stops its git)
+# leaves a commit that is provably this merge; it is rolled back, never left for a person.
+mkdir -p "$PWD/hooks3"
+printf '#!/bin/sh
+kill -TERM "$PPID"
+sleep 1
+' > "$PWD/hooks3/post-merge"; chmod +x "$PWD/hooks3/post-merge"
+git -C "$proj" config core.hooksPath "$PWD/hooks3"
+lane z1 z1.txt "from z1"; verdict z1 passed
+assert_eq "#102 H-046: a git merge stopped after its commit is not confirmed (exit 70)" 70 "$(merge_rc z1)"
+assert_eq "#102 H-046: its merge commit is rolled back to the last confirmed tip" "$cur" "$(tip)"
+assert_contains "#102 H-046: the message says rolled back" "$(cat "$PWD/err")" "rolled back"
+git -C "$proj" config --unset core.hooksPath
+assert_eq "#102 H-046: the next merge of the lane goes through" 0 "$(merge_rc z1)"
+cur=$(tip)
+# Item 9: a post-merge hook that detaches HEAD does not get a confirmed merge.
+printf '#!/bin/sh
+git checkout -q --detach
+' > "$PWD/hooks3/post-merge"
+git -C "$proj" config core.hooksPath "$PWD/hooks3"
+lane z2 z2.txt "from z2"; verdict z2 passed
+assert_eq "#102 H-046: a merge after which HEAD is detached is not confirmed (exit 70)" 70 "$(merge_rc z2)"
+assert_eq "#102 H-046: no merge-confirmed line for that lane" "" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "z2") | .lane' "$run/ledger.jsonl")"
+git -C "$proj" config --unset core.hooksPath
+git -C "$int" checkout -q "$(jq -r .branch "$run/integration.json")"; git -C "$int" reset -q --hard "$cur"
+# Item 6 (a): the roll back is reset --keep, so a local edit that appears just before it is kept.
+cat > "$PWD/shim/git" <<EOS
+#!/bin/bash
+case " \$* " in *" reset "*) [ -z "\${HO_T_DIRTY:-}" ] || printf 'local edit\n' > "\$HO_T_DIRTY" ;; esac
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$PWD/shim/git"
+lane z3 z3.txt "from z3"; verdict z3 passed
+setgate "exit 1"
+assert_eq "#102 H-046: a roll back that meets a local edit is left for a person (exit 70)" 70 \
+  "$(HO_T_DIRTY="$int/z3.txt" PATH="$PWD/shim:$PATH" merge_rc z3)"
+assert_eq "#102 H-046: the local edit is never overwritten by the roll back" "local edit" "$(cat "$int/z3.txt" 2>/dev/null)"
+git -C "$int" reset -q --hard "$cur"; rm -f "$int/z3.txt"
+user_gate
+# Item 6 (b) and item 4: an ignored file in the integration worktree refuses the merge before
+# git merge runs (65); nothing is merged. A global excludes entry such as .DS_Store counts too.
+printf '*.ign\n' >> "$proj/.git/info/exclude"
+: > "$int/before.ign"
+lane z4 z4.txt "from z4"; verdict z4 passed
+assert_eq "#102 H-046: an ignored file in the integration worktree refuses the merge (65)" 65 "$(merge_rc z4)"
+assert_contains "#102 H-046: the refusal names ignored files" "$(cat "$PWD/err")" "ignored files included"
+assert_eq "#102 H-046: nothing was merged" "$cur" "$(tip)"
+rm -f "$int/before.ign"
+# Item 6 (c) and item 5: a gate that writes an ignored file into the integration worktree by
+# absolute path gets no confirmed merge; the branch is left for a person (70).
+setgate "touch '$int/after.ign'"
+assert_eq "#102 H-046: an ignored file written by the gate leaves the merge unconfirmed (70)" 70 "$(merge_rc z4)"
+assert_eq "#102 H-046: no merge-confirmed line for that lane" "" "$(jq -r 'select(.kind == "merge-confirmed" and .lane == "z4") | .lane' "$run/ledger.jsonl")"
+rm -f "$int/after.ign"; git -C "$int" reset -q --hard "$cur"
+user_gate
+
 # ---- H-086, D25a: soft stops and the merge ------------------------------------------------
 # soft:step and soft:task refuse the merge; soft:ticket merges the lane of a ticket that began
 # before the stop, and only that lane.

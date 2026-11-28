@@ -406,13 +406,20 @@ ho_loop_merge_locked() {
   mkdir -p "$HO_RUN_DIR/gates"
   if ! git -C "$iwt" merge -q --no-ff --no-edit -m "merge($lane): $lsha into $branch" "$lsha" \
       > "$HO_RUN_DIR/gates/$lane-$lsha.merge.log" 2>&1; then
-    ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "git merge failed (conflict or error, log gates/$lane-$lsha.merge.log)" "$old"; return
+    # Issue #102: git can end after its commit (a signal during a slow post-merge hook). A
+    # commit that is provably this merge (parents: the old tip and the lane commit) is undone
+    # too; anything else is left for a person.
+    mc=$old
+    new=$(ho_loop_ref "$iwt" "refs/heads/$branch") || new=""
+    if [ -n "$new" ] && [ "$(ho_loop_ref "$iwt" "$new^1")" = "$old" ] && [ "$(ho_loop_ref "$iwt" "$new^2")" = "$lsha" ]; then mc=$new; fi
+    ho_loop_undo "$HO_EXIT_UNCONFIRMED" "$lane" "git merge failed (conflict, error or signal, log gates/$lane-$lsha.merge.log)" "$mc"; return
   fi
 
   # H-046: confirm through git, from the branch ref, not from what the merge printed.
   new=$(ho_loop_ref "$iwt" "refs/heads/$branch") || new=""
   if [ -z "$new" ] || [ "$new" = "$old" ] \
       || [ "$(ho_loop_ref "$iwt" HEAD)" != "$new" ] \
+      || [ "$(git -C "$iwt" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$branch" ] \
       || [ "$(ho_loop_ref "$iwt" "$new^1")" != "$old" ] \
       || [ "$(ho_loop_ref "$iwt" "$new^2")" != "$lsha" ] \
       || ! git -C "$iwt" merge-base --is-ancestor "$lsha" "refs/heads/$branch" 2>/dev/null \

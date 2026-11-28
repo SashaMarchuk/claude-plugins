@@ -12,7 +12,7 @@ alive_rec() { local p; p=$(jq -r '.pid // empty' "$1/sessions/$2.json" 2>/dev/nu
 # ---- the stop verb: variants, scope, refusals ------------------------------------------------
 r=$("$h" run new --workers 5)
 assert_exit "H-086: an unknown stop type is refused (64)" 64 "$h" state "$r" stop --type soft:nope
-assert_exit "H-086: hard stops are not part of this verb yet (64, #67)" 64 "$h" state "$r" stop --type hard:now
+assert_exit "H-086: an unknown hard variant is refused (64)" 64 "$h" state "$r" stop --type hard:nope
 assert_exit "H-086: --ticket goes only with soft:ticket (64)" 64 "$h" state "$r" stop --ticket 5
 assert_exit "H-086: a ticket id must be a number (64)" 64 "$h" state "$r" stop --type soft:ticket --ticket 5x
 assert_eq "H-086: a refused stop records nothing" "" "$(ledger_stops "$r")"

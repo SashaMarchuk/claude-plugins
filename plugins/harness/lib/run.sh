@@ -146,6 +146,8 @@ ho_ledger_takeover() { # <lock> <pid seen, or empty for "no PID file">
   elif [ -n "$(find "$lock.takeover" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
     rmdir "$lock.takeover" 2>/dev/null || true
   fi
+  # 0 only when the stale lock is gone, so the caller retries at once; else it waits as usual.
+  [ ! -d "$lock" ]
 }
 ho_ledger_lock() {
   local lock=$1 n=0 pid
@@ -153,12 +155,10 @@ ho_ledger_lock() {
   until mkdir "$lock" 2>/dev/null; do
     pid=$(cat "$lock/pid" 2>/dev/null || true)
     if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-      ho_ledger_takeover "$lock" "$pid"
-      continue
+      ! ho_ledger_takeover "$lock" "$pid" || continue
     fi
     if [ -z "$pid" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-      ho_ledger_takeover "$lock" ""
-      continue
+      ! ho_ledger_takeover "$lock" "" || continue
     fi
     n=$((n + 1))
     if [ "$n" -ge 1800 ]; then

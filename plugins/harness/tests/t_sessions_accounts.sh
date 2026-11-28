@@ -88,3 +88,13 @@ setu '.accounts = {"roles": {"default": "bad"}, "list": {"bad": {"env_command": 
 assert_eq "test setup: a failing account command refuses the launch" 65 "$(go worker)"
 assert_contains "#89: the launcher log names the exit code" "$(cat "$run/logs/launcher.log" 2>/dev/null)" "exit 7"
 assert_eq "#89: the launcher log holds none of the command's own output" "" "$(grep -F SECRET-TEXT "$run/logs/launcher.log" || true)"
+
+# ---- a missing user config, and a role value false ----
+setp '.'
+mv "$user/config.json" "$base/user.away.json"
+jq '.runtime.main = "claude-code"' "$base/proj.keep.json" > "$proj/.harness/config.json"; select_config "$proj"
+assert_eq "D37-SESSIONS-5: with no user config file a role with no account still launches" 0 "$(go worker)"
+mv "$base/user.away.json" "$user/config.json"
+setp '.accounts = {"roles": {"worker": false}}'
+setu "$ulist"
+assert_eq "D37-SESSIONS-5: a role value false is refused, not skipped (65)" 65 "$(go worker)"

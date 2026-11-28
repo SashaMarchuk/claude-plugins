@@ -50,3 +50,13 @@ rc=0; "$h" state "$r2" marker set lane-q.done >/dev/null 2>&1 || rc=$?
 assert_eq "Rebuild run (#88): marker set fails when a folder stands at the marker path" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 rc=0; "$h" state "$r2" marker check lane-q.done >/dev/null 2>&1 || rc=$?
 assert_eq "Rebuild run: that marker reads as not set" 1 "$rc"
+
+# ---- the ledger lock: a dead holder and a stale takeover folder still let a line in ----
+lock="$r2/ledger.jsonl.lock"
+mkdir -p "$lock" "$lock.takeover"
+sleep 30 & dead=$!; kill "$dead"; wait "$dead" 2>/dev/null || true
+echo "$dead" > "$lock/pid"
+touch -t 200001010000 "$lock.takeover"
+"$h" state "$r2" decision "after a stale takeover" "test" >/dev/null 2>&1 || true
+assert_eq "Rebuild ledger (#88): a dead holder plus a stale takeover folder still lets the line in" 1 \
+  "$(jq -r 'select(.kind == "decision") | .title' "$r2/ledger.jsonl" | grep -c 'after a stale takeover' || true)"

@@ -219,12 +219,11 @@ ho_session_account() {
   local role=$1 want=$2 profile=${3-} pf uf label="" src="" v spec where key entry cmd nl out rc
   pf=$(ho_project_config_file "$HO_PROJECT_DIR")
   uf=$(ho_user_config)
-  [ -f "$uf" ] || uf=/dev/null
   rc=0
-  jq -e '(.accounts // {}) as $a
+  ho_session_cfg_jq "$pf" -e '(.accounts // {}) as $a
     | ([$a | .. | objects | .env_command? | select(type == "string" and length > 0)] | length > 0)
       or ((($a | if type == "object" then .list else null end) // null) as $l | $l != null and $l != {} and $l != [] and $l != "")' \
-    "$pf" >/dev/null 2>&1 || rc=$?
+    >/dev/null 2>&1 || rc=$?
   case $rc in
     0) printf 'harness: the project config %s holds an account command or an accounts.list; move the command to the user config under accounts.list.<label>.env_command, and keep only accounts.roles.<role>: "<label>" in the project config\n' "$pf" >&2
        return 65 ;;
@@ -234,7 +233,8 @@ ho_session_account() {
   for spec in "project:$role" "user:$role" "project:default" "user:default"; do
     where=${spec%%:*}; key=${spec#*:}
     if [ "$where" = project ]; then f=$pf; else f=$uf; fi
-    v=$(jq -c --arg r "$key" 'try (.accounts.roles[$r]) catch "!bad" | . // null' "$f" 2>/dev/null) || v='"!bad"'
+    # No "// null": a role value false is refused, not skipped (#89 rule 2).
+    v=$(ho_session_cfg_jq "$f" -c --arg r "$key" 'try (.accounts.roles[$r]) catch "!bad"' 2>/dev/null) || v='"!bad"'
     case $v in null | '""') continue ;; esac
     label=$(printf '%s' "$v" | jq -r 'strings' 2>/dev/null) || label=""
     if [ -z "$label" ] || ! printf '%s' "$label" | grep -Eqx '[a-z0-9][a-z0-9-]*'; then
@@ -254,7 +254,7 @@ ho_session_account() {
     printf 'harness: role %s runs on account %s, not %s\n' "$role" "$label" "$want" >&2
     return 65
   fi
-  entry=$(jq -c --arg l "$label" 'try (.accounts.list[$l]) catch null | . // null' "$uf" 2>/dev/null) || entry=null
+  entry=$(ho_session_cfg_jq "$uf" -c --arg l "$label" 'try (.accounts.list[$l]) catch null | . // null' 2>/dev/null) || entry=null
   if [ "$entry" = null ]; then
     printf 'harness: account %s (role %s, named by the %s) has no entry in the user config; fill in accounts.list.%s.env_command (or accounts.list.%s.normal_login: true) in %s\n' \
       "$label" "$role" "$src" "$label" "$label" "$(ho_user_config)" >&2
@@ -286,6 +286,13 @@ ho_session_account() {
     HO_SESSION_ACCOUNT_ENV=$out
   fi
   printf '%s\t%s\n' "$label" "$cmd"
+}
+
+# ho_session_cfg_jq <file> <jq args...>: jq over a config file; a missing or empty file reads as
+# {} (jq on empty input prints nothing, which no caller here may take for a value).
+ho_session_cfg_jq() {
+  local f=$1; shift
+  if [ -s "$f" ]; then jq "$@" "$f"; else printf '{}\n' | jq "$@"; fi
 }
 
 # ho_session_launcher_log <text>: one fixed line in <run>/logs/launcher.log.

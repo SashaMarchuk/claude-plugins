@@ -42,7 +42,7 @@ cat > "$proj/.harness/config.json" <<'JSON'
  "terminal": {"app": "tmux", "enter_delay_seconds": 0},
  "session": {"boot_timeout_seconds": 30, "close_timeout_seconds": 5, "boot_grace_seconds": 5, "fatal_hold_seconds": 0},
  "watch": {"service_url": "https://service.invalid/", "internet_url": "https://net.invalid/", "cycle_seconds": 1},
- "limits": {"workers": 5}}
+ "limits": {"workers": 1}}
 JSON
 cat > "$user/config.json" <<'JSON'
 {"schemaVersion": 2, "runtime": {"main": "claude-code"},
@@ -56,7 +56,16 @@ jq '.steps |= map(select(.id == "plan" or .id == "execute"))' "$f" > "$f.t" && m
 printf '## Outcome\nA greeting file.\n\n## Scope\ngreeting.txt\n\n## Acceptance criteria\ngreeting.txt says hello.\n' > "$base/body.md"
 
 ledger_n() { jq -c "select(.kind == \"$1\")" "$run/ledger.jsonl" 2>/dev/null | wc -l | tr -d ' '; }
-tick() { "$h" run tick "$run" 2>>"$base/tick.err" || echo "tick-exit $?"; }
+# tick: one pass, run the way production runs it: from inside the orchestrator session.
+orch_name() { "$h" session "$run" list 2>/dev/null | awk '$2 == "orchestrator" && $3 != "closed" { print $1; exit }'; }
+# The poll interval is the orchestrator's "run wait"; here each tick finds the poll due.
+tick() {
+  local o
+  [ ! -f "$run/intake/poll.json" ] || touch -t 200001010000 "$run/intake/poll.json"
+  o=$(orch_name)
+  HO_SESSION_NAME=$o HO_SESSION_ID=$(jq -r '.session_id // ""' "$run/sessions/$o.json" 2>/dev/null) HO_SESSION_ROLE=orchestrator \
+    "$h" run tick "$run" 2>>"$base/tick.err" || echo "tick-exit $?"
+}
 rec() { jq -r "$2" "$run/orch/$1.json"; }
 sid_of() { jq -r .session_id "$run/sessions/$1.json"; }
 ho_test_cleanup() {
@@ -76,6 +85,7 @@ assert_eq "H-072: run start with nothing confirmed stops at the config gate (exi
 assert_eq "H-072: the refused start created no run" 0 "$(ls "$proj/.harness/runs" 2>/dev/null | wc -l | tr -d ' ')"
 select_config "$proj"
 t=$(cd "$proj" && "$h" tickets add "Add a greeting" "$base/body.md" ready 2>/dev/null | sed -n 's/^OK created ticket \([0-9]*\).*/\1/p')
+t2=$(cd "$proj" && "$h" tickets add "Add a farewell" "$base/body.md" ready 2>/dev/null | sed -n 's/^OK created ticket \([0-9]*\).*/\1/p')
 out=$("$h" run start 2>"$base/err") || true
 run=$(printf '%s\n' "$out" | sed -n 's/^run //p')
 assert_eq "#110: run start prints the new run" yes "$([ -n "$run" ] && [ -f "$run/run.json" ] && echo yes || echo no)"
@@ -95,6 +105,7 @@ out=$(tick)
 assert_contains "H-098: the first tick starts the context watcher" "$out" "watcher watcher"
 assert_contains "H-002: the tick takes the ready ticket" "$out" "start $t"
 assert_contains "H-064: the ticket's first flow step starts in a worker session" "$out" "launched $t plan w$t-plan"
+assert_eq "H-105: with a worker cap of 1 the second ready ticket is not taken" 0 "$(printf '%s\n' "$out" | grep -c "start $t2" || true)"
 assert_eq "H-064: the worker session carries the ticket" "$t" "$(jq -r '.ticket | tostring' "$run/sessions/w$t-plan.json")"
 assert_eq "H-086: the step went through the step gate" 1 "$(ledger_n step-begin)"
 wt=$(rec "$t" .worktree)
@@ -131,6 +142,7 @@ git -C "$wt" add greeting.txt && git -C "$wt" commit -qm "add greeting"
 printf 'pass\nexecuted\n' > "$run/orch/$t/execute.result"
 out=$(tick)
 assert_contains "H-064: the last step is done" "$out" "step-done $t execute"
+assert_eq "H-105: a ticket between two steps still holds its place under the cap" 0 "$(printf '%s\n' "$out" | grep -c "start $t2" || true)"
 assert_eq "H-028: each finished step is recorded on the ticket, so a resume finds it complete" complete \
   "$(cd "$proj" && "$h" tickets resume "$t" --repo "$wt" plan execute 2>&1)"
 out=$(tick)
@@ -161,13 +173,53 @@ jq '.statusCheckRollup = [{name: "ci", conclusion: "SUCCESS"}]' "$pf" > "$pf.t" 
 out=$(tick)
 assert_contains "H-045: with green CI the full profile merges and the ticket is done" "$out" "end $t done"
 assert_eq "H-046: the remote main holds the change" hello "$(git -C "$base/remote.git" show main:greeting.txt 2>/dev/null)"
-assert_contains "H-079: in the same tick, with every ticket done, the run ends" "$out" "lifecycle end"
+assert_contains "H-079: with a ticket still ready the run goes on" "$out" "lifecycle work"
 assert_eq "H-045: the ticket is done" "$t" "$(cd "$proj" && "$h" tickets ids done)"
 assert_eq "H-045: the ledger has the git-confirmed merge and the ticket end" "1 1" "$(ledger_n ship-merge-confirmed) $(ledger_n ship-ticket-done)"
 out=$("$h" run status "$run" 2>&1)
 assert_contains "#110: run status lists the ticket as done" "$out" "$t done lane t$t"
+
+# ---- the second ticket: a question blocks it, an unblock lets it continue -----------------
+out=$(tick)
+assert_contains "H-105: the freed place takes the second ticket" "$out" "launched $t2 plan w$t2-plan"
+printf 'blocked: which farewell text?\n' > "$run/orch/$t2/plan.result"
+out=$(tick)
+assert_contains "H-032: a step that needs an answer blocks the ticket with the question" "$out" "blocked $t2 step plan"
+assert_eq "H-032: the ticket is blocked" "$t2" "$(cd "$proj" && "$h" tickets ids blocked)"
+assert_eq "H-032: the question is the worker's, not the orchestrator's" "w$t2-plan" \
+  "$(jq -r --arg t "$t2" 'select(.kind == "question" and (.ticket | tostring) == $t) | .session' "$run/ledger.jsonl" | tail -n 1)"
+out=$(tick)
+assert_contains "H-082: with only a blocked ticket left the run waits" "$out" "lifecycle wait-blocked"
+assert_eq "H-082: the orchestrator stays while the run waits" yes "$([ -n "$(orch_name)" ] && echo yes || echo no)"
+(cd "$proj" && "$h" tickets unblock "$t2" >/dev/null 2>&1)
+out=$(tick)
+assert_contains "H-031 H-028: after an unblock the ticket is taken again" "$out" "start $t2"
+assert_contains "H-028: it continues at the step with no result" "$out" "launched $t2 plan"
+# The rest of the second ticket, the way sessions would do it.
+wt2=$(rec "$t2" .worktree)
+for i in $(seq 1 14); do
+  for s2 in plan execute; do
+    if [ -s "$run/orch/$t2/$s2.prompt.md" ] && [ ! -f "$run/orch/$t2/$s2.result" ]; then
+      [ "$s2" = plan ] || { printf 'bye\n' > "$wt2/farewell.txt"; git -C "$wt2" add farewell.txt; git -C "$wt2" commit -qm "add farewell"; }
+      printf 'pass\n' > "$run/orch/$t2/$s2.result"
+    fi
+  done
+  v=$(rec "$t2" '.validator // ""')
+  if [ -n "$v" ] && [ ! -f "$run/verdicts/t$t2/$(rec "$t2" .sha).json" ]; then
+    vsid=$(sid_of "$v")
+    HO_SESSION_NAME=$v HO_SESSION_ID=$vsid "$h" verify "$run" tests "t$t2" --total 1 --passed 1 --failed 0 --skipped 0 >/dev/null
+    printf 'passed\nok\n' | HO_SESSION_NAME=$v HO_SESSION_ID=$vsid "$h" loop "$run" verdict "t$t2" --sha "$(rec "$t2" .sha)" >/dev/null
+  fi
+  pf="$HO_FAKE_GH_DIR/prs/2.json"
+  [ ! -f "$pf" ] || { jq '.statusCheckRollup = [{name: "ci", conclusion: "SUCCESS"}]' "$pf" > "$pf.t" && mv "$pf.t" "$pf"; }
+  out=$(tick)
+  case $out in *"lifecycle end"*) break ;; esac
+done
+assert_contains "H-079: in the tick where the last ticket is done, the run ends" "$out" "lifecycle end"
+assert_eq "H-045: both tickets are done" "$t $t2" "$(cd "$proj" && "$h" tickets ids done | tr '\n' ' ' | sed 's/ $//')"
 assert_eq "H-079: the run end is recorded" "all-done" "$(jq -r 'select(.kind == "run-end") | .reason' "$run/ledger.jsonl" | tail -n 1)"
-assert_eq "D37-LIFECYCLE-3: at the end the orchestrator and the watcher close" "" \
+i=0; while [ -n "$(orch_name)" ] && [ "$i" -lt 150 ]; do sleep 0.1; i=$((i + 1)); done
+assert_eq "D37-LIFECYCLE-3: at the end the orchestrator and the watcher close (the orchestrator after its turn)" "" \
   "$("$h" session "$run" list | awk '($2 == "orchestrator" || $2 == "watcher") && $3 != "closed" { print $1 }')"
 assert_eq "#110: a tick after the end says ended" ended "$(tick)"
 rc=0; "$h" run resume "$run" >/dev/null 2>&1 || rc=$?

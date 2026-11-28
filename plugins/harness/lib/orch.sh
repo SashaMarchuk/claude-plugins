@@ -95,6 +95,14 @@ ho_orch_stop_ended() {
   return 1
 }
 
+# ho_orch_newest: the newest run folder of this project, ended or not.
+ho_orch_newest() {
+  local d last="" proj
+  proj=$(ho_project_root) || return 66
+  for d in "$proj/.harness/runs"/*/; do d=${d%/}; [ -f "$d/run.json" ] && last=$d; done
+  [ -n "$last" ] && printf '%s\n' "$last"
+}
+
 ho_orch_flow() {
   local f
   f=$(ho_cfg '.flow.use' '') || return 78
@@ -251,7 +259,7 @@ ho_orch_text() { # <ticket>: the ticket text exactly as "tickets fence" prints i
 
 ho_orch_claim() {
   local t=$1 lane wt branch flow title d
-  [ -f "$(ho_orch_rec "$t")" ] && return 0
+  if [ -f "$(ho_orch_rec "$t")" ]; then ho_orch_rearm "$t"; return; fi
   lane=$(ho_orch_lane "$t")
   d="$(ho_orch_dir)/$t"
   mkdir -p "$d" || return 1
@@ -272,6 +280,28 @@ ho_orch_claim() {
       phase: "step", step: "", session: "", questions: false}' | ho_atomic_write "$(ho_orch_rec "$t")" || return 1
   ho_orch_set "$t" '.step = $s' --arg s "$(ho_orch_next_step "$t")" || return 1
   ho_ledger_append orch-claim ticket "$t" lane "$lane" flow "$flow"
+}
+
+# ho_orch_rearm <ticket>: a ticket of this run that intake hands back (answered, unblocked and
+# ready again) continues from the first step whose real result does not exist (H-028, H-033).
+ho_orch_rearm() {
+  local t=$1 phase steps next id when q
+  phase=$(ho_orch_get "$t" phase)
+  case $phase in blocked | done) ;; *) return 0 ;; esac
+  q=$(ho_orch_get "$t" questions)
+  steps=$(ho_orch_steps "$t" | while IFS=$'\t' read -r id when; do
+    [ -n "$id" ] || continue
+    [ "$when" = questions ] && [ "$q" != true ] && continue
+    printf '%s\n' "$id"
+  done)
+  # shellcheck disable=SC2086 # one step id per word
+  next=$(ho_orch_h tickets resume "$t" --repo "$(ho_orch_get "$t" worktree)" $steps 2>/dev/null | head -n 1)
+  case $next in
+    "next "*) ho_orch_set "$t" '.phase = "step" | .step = $s | .session = "" | .validator = "" | del(.why)' --arg s "${next#next }" ;;
+    complete) ho_orch_set "$t" '.phase = "ready" | .session = "" | .validator = "" | del(.why)' ;;
+    *) ho_orch_set "$t" '.phase = "step" | .step = $s | .session = "" | .validator = "" | del(.why)' --arg s "$(ho_orch_next_step "$t")" ;;
+  esac
+  ho_ledger_append orch-rearm ticket "$t" from "$phase" next "${next:-first}"
 }
 
 # ho_orch_block <ticket> <state blocked|review> <reason>: the ticket leaves the run's work.
@@ -296,8 +326,13 @@ ho_orch_close() { # <base>: the task of that session ended (H-081)
 ho_orch_launch_step() {
   local t=$1 s=$2 d rc name prompt notes res wt
   d="$(ho_orch_dir)/$t"
-  name="w$t-$s"
-  name=${name:0:40}
+  local sbase
+  sbase="w$t-$s"
+  sbase=${sbase:0:29}
+  name=$sbase
+  # A step launched again (after an unblock) needs a new name in recovery's -r<n> form; the record
+  # keeps the base name, and the newest open session of that base is the step's session.
+  [ ! -e "$HO_RUN_DIR/sessions/$name.json" ] || name="$sbase-r$(date +%s)"
   # H-037, H-036: the profile's gate on this step first; a human gate waits, a refusal blocks.
   rc=0; ho_orch_h autonomy "$HO_RUN_DIR" check step --step "$s" --for "$t" >/dev/null 2>&1 || rc=$?
   case $rc in
@@ -313,6 +348,9 @@ ho_orch_launch_step() {
   [ "$rc" -eq 0 ] || { echo "wait $t stopped $s"; return 0; }
   res="$d/$s.result"
   rm -f "$res"
+  # Notes handed over by the step gate are kept for this step, so a launch that must wait does
+  # not lose them (the gate hands each note over once).
+  printf '%s\n' "$notes" | sed -n 's/^change //p' >> "$d/$s.notes"
   wt=$(ho_orch_get "$t" worktree)
   prompt="$d/$s.prompt.md"
   rc=0
@@ -329,12 +367,12 @@ ho_orch_launch_step() {
       [ -f "$nf" ] && { printf '\n## A change to the ticket, accepted since pickup\n\n'; cat "$nf"; } >> "$prompt" ;;
     esac
   done <<EOF
-$notes
+$(sed 's/^/change /' "$d/$s.notes" 2>/dev/null)
 EOF
   rc=0
   ho_orch_h session "$HO_RUN_DIR" launch --role worker --name "$name" --cwd "$wt" --prompt "$prompt" --ticket "$t" >/dev/null 2>"$d/launch.err" || rc=$?
   case $rc in
-    0) ho_orch_set "$t" '.session = $n' --arg n "$name"; echo "launched $t $s $name" ;;
+    0) ho_orch_set "$t" '.session = $n' --arg n "$sbase"; echo "launched $t $s $name" ;;
     73) echo "wait $t worker-slot" ;;
     74 | 75 | 76) echo "wait $t launch-refused $rc" ;;
     *) echo "error $t launch $s rc $rc" ;;
@@ -373,7 +411,12 @@ ho_orch_step_result() {
     blocked:*)
       ho_orch_close "$base"
       printf '1. %s\n' "${first#blocked: }" > "$(ho_orch_dir)/$t/questions.md"
-      ho_orch_h tickets ask "$t" "$(ho_orch_dir)/$t/questions.md" >/dev/null 2>&1 || true
+      # The worker asked: the question is recorded as the worker's, never the orchestrator's (the
+      # next poll closes the asking session, H-032).
+      local ws
+      ws=$(ho_orch_session "$base")
+      HO_SESSION_NAME=$ws HO_SESSION_ID=$(jq -r '.session_id // ""' "$HO_RUN_DIR/sessions/$ws.json" 2>/dev/null) HO_SESSION_ROLE=worker HO_RUN_DIR=$HO_RUN_DIR \
+        ho_orch_h tickets ask "$t" "$(ho_orch_dir)/$t/questions.md" >/dev/null 2>&1 || true
       ho_orch_set "$t" '.phase = "blocked" | .why = $w' --arg w "step $s: $first"
       ho_ledger_append orch-ticket-left ticket "$t" state blocked reason "step $s asked a question"
       echo "blocked $t step $s asked a question"
@@ -420,9 +463,12 @@ ho_orch_validate() {
     case $first in
       passed) ho_orch_set "$t" '.phase = "merge"'; echo "verdict $t passed" ;;
       "passed with remarks")
-        rc=0; ho_orch_h verify "$HO_RUN_DIR" remarks "$lane" >/dev/null 2>&1 || rc=$?
-        if [ "$rc" -eq 0 ]; then ho_orch_set "$t" '.phase = "merge"'; echo "verdict $t passed"
-        else ho_orch_set "$t" '.phase = "done"'; echo "needs-review $t the verdict has remarks for a person"; fi ;;
+        local rout
+        rc=0; rout=$(ho_orch_h verify "$HO_RUN_DIR" remarks "$lane" 2>/dev/null) || rc=$?
+        # Agent decision: the wiring runs no remarks fix round yet; a round the profile opens goes
+        # to a person, as remarks: human does (H-058).
+        if [ "$rc" -eq 0 ] && [ "${rout#clean:}" != "$rout" ]; then ho_orch_set "$t" '.phase = "merge"'; echo "verdict $t passed"
+        else ho_orch_block "$t" review "the verdict has remarks for a person"; fi ;;
       *) ho_orch_block "$t" blocked "the validator verdict is not a pass: ${first:0:200}" ;;
     esac
     return 0
@@ -430,10 +476,24 @@ ho_orch_validate() {
   if [ -n "$base" ]; then
     local live
     live=$(ho_orch_h session "$HO_RUN_DIR" status "$(ho_orch_session "$base")" 2>/dev/null | jq -r '.liveness // "unknown"') || live=unknown
-    case $live in dead | closed | unknown) echo "attention $t $(ho_orch_session "$base") $live" ;; *) echo "validating $t" ;; esac
+    case $live in
+      dead | closed)
+        # Recovery covers workers only; a validator that stopped with no verdict is replaced by a
+        # fresh one, at most twice (D37-VERIFICATION-6: a fresh validator judges).
+        if [ "$(ho_orch_get "$t" validator_runs)" -ge 3 ] 2>/dev/null; then
+          ho_orch_block "$t" blocked "three validator sessions ended with no verdict"
+        else
+          ho_orch_set "$t" '.validator = ""'; echo "attention $t $(ho_orch_session "$base") $live validator replaced"
+        fi ;;
+      unknown) echo "attention $t $(ho_orch_session "$base") $live" ;;
+      *) echo "validating $t" ;;
+    esac
     return 0
   fi
+  local runs
+  runs=$(ho_orch_get "$t" validator_runs); runs=$(( ${runs:-0} + 1 ))
   name="v$t"
+  [ "$runs" -eq 1 ] || name="v$t-$runs"
   ho_orch_text "$t" > "$d/ticket.txt"
   rc=0
   ho_orch_h flow render "$(ho_orch_get "$t" flow)" validator \
@@ -446,7 +506,7 @@ ho_orch_validate() {
   ho_orch_h session "$HO_RUN_DIR" launch --role validator --name "$name" --cwd "$(ho_orch_get "$t" worktree)" \
     --prompt "$d/validator.prompt.md" --ticket "$t" >/dev/null 2>"$d/launch.err" || rc=$?
   case $rc in
-    0) ho_orch_set "$t" '.validator = $n' --arg n "$name"; echo "launched $t validator $name" ;;
+    0) ho_orch_set "$t" '.validator = $n | .validator_runs = ($r | tonumber)' --arg n "$name" --arg r "$runs"; echo "launched $t validator $name" ;;
     73 | 74 | 75 | 76) echo "wait $t validator-launch $rc" ;;
     *) echo "error $t validator launch rc $rc" ;;
   esac
@@ -594,6 +654,18 @@ ho_orch_watcher() {
   [ "$rc" -eq 0 ] && echo "watcher $n" || echo "wait watcher-launch $rc"
 }
 
+# ho_orch_free: worker places left for new tickets. A ticket between two steps holds no worker
+# session, so intake's own count of free slots would take one ticket too many (H-105).
+ho_orch_free() {
+  local cap n=0 f
+  cap=$(ho_orch_h slot "$HO_RUN_DIR" limits 2>/dev/null | jq -r '.workers // 1') || cap=1
+  for f in "$(ho_orch_dir)"/*.json; do
+    [ -f "$f" ] || continue
+    case $(jq -r '.phase // ""' "$f") in done | blocked) ;; *) n=$((n + 1)) ;; esac
+  done
+  [ "$cap" -gt "$n" ] 2>/dev/null && echo $((cap - n)) || echo 0
+}
+
 ho_orch_tick() {
   local line t rc f life
   if ho_run_ended; then echo ended; return 0; fi
@@ -605,11 +677,11 @@ ho_orch_tick() {
   rc=0
   while IFS= read -r line; do
     case $line in
-      "start "*) t=${line#start }; ho_orch_claim "$t" && echo "start $t" || echo "error $t claim" ;;
+      "start "* | "resume "*) t=${line#* }; ho_orch_claim "$t" && echo "${line%% *} $t" || echo "error $t claim" ;;
       "") ;;
       *) echo "intake $line" ;;
     esac
-  done < <(ho_orch_h intake "$HO_RUN_DIR" tick || echo "intake-exit $?")
+  done < <(ho_orch_h intake "$HO_RUN_DIR" tick --max "$(ho_orch_free)" || echo "intake-exit $?")
   # Each taken ticket moves at most one move per tick (one bounded pass).
   for f in "$(ho_orch_dir)"/*.json; do
     [ -f "$f" ] || continue
@@ -621,6 +693,15 @@ ho_orch_tick() {
   ho_orch_h recover "$HO_RUN_DIR" tick 2>/dev/null | sed -n 's/^/recover /p' || true
   life=$(ho_orch_h lifecycle "$HO_RUN_DIR" check | head -n 1) || true
   echo "lifecycle ${life:-unknown}"
+  # The check never closes the session that calls it. When the orchestrator itself sees the end,
+  # a detached check closes it a little later, after its turn ends (D37-LIFECYCLE-3).
+  case $life in end | ended)
+    if [ -n "${HO_SESSION_NAME-}" ]; then
+      ( sleep 5
+        env -u HO_SESSION_NAME -u HO_SESSION_ID -u HO_SESSION_ROLE HO_PROJECT_DIR="$HO_PROJECT_DIR" \
+          "$HO_ROOT/bin/harness" lifecycle "$HO_RUN_DIR" check ) >/dev/null 2>&1 < /dev/null &
+    fi ;;
+  esac
 }
 
 # ---- wait ----------------------------------------------------------------------------------
@@ -738,7 +819,7 @@ ho_orch_main() {
       if [ "$verb" = tick ]; then ho_orch_tick || rc=$?; else ho_orch_wait "$@" || rc=$?; fi ;;
     status)
       HO_PROJECT_DIR=${HO_PROJECT_DIR:-$(ho_project_root 2>/dev/null || true)}
-      run=$(ho_orch_run_arg "${1-}") || exit 66
+      run=$(ho_orch_run_arg "${1-}" 2>/dev/null || ho_orch_newest) || { ho_orch_err "no run in this project"; exit 66; }
       ho_orch_bind "$run" || exit $?
       ho_orch_status || rc=$? ;;
     stop)

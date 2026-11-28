@@ -2,6 +2,21 @@
 
 This branch holds the stable-beta rebuild of the harness plugin. The 0.6.0 engine is removed here, and the new engine is not usable yet. Parts of the old engine come back only from the reuse list in the design, each with a behaviour test shown failing first. The released 0.6.0 code stays on `main`.
 
+Install: [docs/INSTALL.md](docs/INSTALL.md) (short guide, with a multi-worker recipe).
+
+## Tested with
+
+Flow systems tested with the harness so far: the shipped `basic` flow and the `gsd` flow (GSD), in the test suite with a fake runtime. Other flow systems may work, through an own flow (`bin/harness flow copy basic <new>`), but they are not tested. This list is updated from the evaluation results before the release.
+
+## Joining a project that already uses the harness
+
+You found a `.harness/` folder in a project.
+
+- **You do not want the harness:** ignore the folder and work as usual. Nothing in it runs by itself, adds a git hook or changes your build, tests or commits, so your work is not blocked. The harness acts only inside its own commands.
+- **You want the harness:** install the plugin ([docs/INSTALL.md](docs/INSTALL.md)), open Claude Code in the project and run `/harness:config`. It offers the committed configs (`.harness/config.json`, or `.harness/config.<name>.json` named for their owner) and records your choice in `.harness/local.json`, which stays on your machine. Until you confirm a config, no run starts (H-072).
+
+`/harness:config` can also write a short README into the project's `.harness/` folder (`templates/harness-folder-README.md`) that says the same to newcomers. The project's own README is not changed.
+
 ## Engine entry point
 
 The engine has one entry script: `bin/harness <verb> [args]`.

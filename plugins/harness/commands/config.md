@@ -25,4 +25,6 @@ The engine commands below all start with `"${CLAUDE_PLUGIN_ROOT}/bin/harness"`. 
    - Agent language: `agent.language` (English by default).
    - Commands (account commands, gate commands, channels wired by a command) go in the user config only; a project config may only name their label (D37-FLOW-8).
 
-5. **Check and finish.** Run `config check`. If you wrote or changed a committed config, select it again with `config select <name>`, so the record of the approved profile matches what the person saw. Run `config gate`; it prints nothing on success. Tell the person which config this machine uses now, and that committing the project config lets other machines reuse it after their own short `/harness:config`.
+5. **Newcomer note.** If the project config will be committed and `.harness/README.md` does not exist, offer to copy `${CLAUDE_PLUGIN_ROOT}/templates/harness-folder-README.md` there, so a newcomer learns that the harness is optional and how to set it up (design D19). Do not change the project's own README.
+
+6. **Check and finish.** Run `config check`. If you wrote or changed a committed config, select it again with `config select <name>`, so the record of the approved profile matches what the person saw. Run `config gate`; it prints nothing on success. Tell the person which config this machine uses now, and that committing the project config lets other machines reuse it after their own short `/harness:config`.

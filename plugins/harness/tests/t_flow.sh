@@ -12,7 +12,7 @@ printf 'ticket body line 1\nline 2\n' | "$h" tickets fence 41 > ticket.txt
 set_args() {
   printf '%s\0' --set RUN_ID 20261125-000000-abcdef --set TICKET_ID 41 \
     --set BRANCH lane/t8 --set BASE trunk --set WORKDIR /work/lane \
-    --set STEP_RESULT_FILE /run/step-result --set VERDICT_FILE /run/verdict \
+    --set STEP_RESULT_FILE /run/step-result --set VERDICT_FILE /run/verdict --set LANE t1 --set SHA 0123abc \
     --file TICKET_TEXT "${TICKET_FILE:-ticket.txt}"
 }
 render() { set_args | xargs -0 "$h" flow render "$@"; }
@@ -58,7 +58,7 @@ done
 
 # Shipped templates are plain ASCII and hold no double-brace token.
 tpl=$(cd "$HO_PLUGIN_ROOT" && find prompts flows -type f -name '*.md' 2>/dev/null | sort || true)
-assert_eq "H-064 D41: 2 role prompts, 16 step prompts and the requirements block ship" "19" "$(printf '%s\n' "$tpl" | grep -c . || true)"
+assert_eq "H-064 D41: 2 flow role prompts, the orchestrator and watcher prompts, 16 step prompts and the requirements block ship" "21" "$(printf '%s\n' "$tpl" | grep -c . || true)"
 assert_eq "H-064: shipped templates hold no double-brace token" "" \
   "$(cd "$HO_PLUGIN_ROOT" && grep -lE '\{\{|\}\}' $tpl /dev/null || true)"
 assert_eq "H-064: shipped templates are plain ASCII" "" \
@@ -161,7 +161,7 @@ assert_contains "H-064: the refusal names the value" "$out" "TICKET_TEXT"
 printf 'raw ticket text\n' > raw.txt
 for f in raw.txt ticket1.txt; do
   rc=0; err=$(HO_FLOWS_DIR= "$h" flow render basic validator --set RUN_ID r --set TICKET_ID 41 --set BRANCH b \
-    --set BASE m --set WORKDIR /w --set VERDICT_FILE /v --file TICKET_TEXT "$f" 2>&1 >/dev/null) || rc=$?
+    --set BASE m --set WORKDIR /w --set VERDICT_FILE /v --set LANE t1 --set SHA 0123abc --file TICKET_TEXT "$f" 2>&1 >/dev/null) || rc=$?
   assert_eq "H-018: ticket text $f that is not fenced for ticket 41 is refused (exit 65)" "65" "$rc"
   assert_contains "H-018: the refusal of $f names TICKET_TEXT" "$err" "TICKET_TEXT"
 done
@@ -169,7 +169,7 @@ done
 # a later --set or --file of the same name replaces the earlier value.
 v41() {
   HO_FLOWS_DIR= "$h" flow render basic validator --set RUN_ID r --set TICKET_ID 41 --set BRANCH b \
-    --set BASE m --set WORKDIR /w --set VERDICT_FILE /v --file TICKET_TEXT ticket.txt "$@"
+    --set BASE m --set WORKDIR /w --set VERDICT_FILE /v --set LANE t1 --set SHA 0123abc --file TICKET_TEXT ticket.txt "$@"
 }
 refused() { # refused <label> <args for v41>...: exit 65, nothing on stdout
   local label=$1 rc=0 out

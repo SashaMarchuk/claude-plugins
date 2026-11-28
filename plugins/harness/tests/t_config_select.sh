@@ -172,7 +172,7 @@ printf '%s\n' '{"schemaVersion":2}' > "$user/config.json"
 printf 'ticket body\n' | "$h" tickets fence 1 > "$base/ticket.txt"
 r=$("$h" flow render basic worker --step "$("$h" flow steps basic | head -1 | cut -f2)" \
   --set RUN_ID r --set TICKET_ID 1 --file TICKET_TEXT "$base/ticket.txt" --set BRANCH b --set BASE m --set WORKDIR /w \
-  --set STEP_RESULT_FILE /r --set VERDICT_FILE /v 2>&1) || true
+  --set STEP_RESULT_FILE /r --set VERDICT_FILE /v --set LANE t1 --set SHA 0123abc 2>&1) || true
 assert_contains "H-077: the worker prompt tells the agent to communicate in English by default" "$r" "Communicate in English"
 
 # ---- #110: a user's autonomy.profile never overrides a project's never_push true --------------

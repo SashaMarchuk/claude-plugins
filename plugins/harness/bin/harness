@@ -70,6 +70,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/watch.sh"
 # shellcheck source=../lib/notify.sh
 . "$HO_ROOT/lib/notify.sh"
+# shellcheck source=../lib/orch.sh
+. "$HO_ROOT/lib/orch.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -81,7 +83,7 @@ verbs:
   selftest   check that no 0.6.0 variable or script can leak into this engine
   tickets    the ticket queue (run "harness tickets help")
   config     config get|check|list|select|save-default|format|status|gate|language (config help)
-  run        run new [--workers N] [--standby on|off]: create a stamped run in this project
+  run        run new|start|tick|wait|status|stop|resume: a run and its loop (run help)
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
   session    session <run-dir> launch|close|list|status|read|deliver|proof: sessions, their liveness and instructions
   slot       slot <run-dir> acquire|release|list|limits|heavy-ops|heavy-add: engine-enforced limits
@@ -111,7 +113,7 @@ case $verb in
   selftest) ho_isolation_check ;;
   tickets)  ho_tickets "$@" ;;
   config)   ho_config_main "$@" ;;
-  run)      [ "${1-}" = new ] || { ho_usage >&2; exit 64; }; shift; ho_run_new "$@" ;;
+  run)      ho_orch_main "$@" ;;
   state)    ho_state_main "$@" ;;
   session)  ho_session_main "$@" ;;
   slot)     ho_slot_main "$@" ;;

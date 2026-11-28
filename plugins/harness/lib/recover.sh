@@ -138,7 +138,12 @@ ho_rec_pack() {
     printf -- '- Old session ID (for reference): %s\n' "$(jq -r '.session_id // "-"' "$rec")"
     printf -- '- Worktree: %s\n' "${cwd:--}"
     printf -- '- Branch: %s\n' "${branch:--}"
-    printf -- '- Current step: %s\n\n' "${step:--}"
+    printf -- '- Current step: %s\n' "${step:--}"
+    # The run wiring (lib/orch.sh) reads the step result from this file; a new session writes it.
+    if [ -n "$step" ] && [ -f "$HO_RUN_DIR/orch/$t.json" ]; then
+      printf -- '- Step result file: %s (first line pass, fail: <reason> or blocked: <question>)\n' "$HO_RUN_DIR/orch/$t/$step.result"
+    fi
+    printf '\n'
     printf '## Step reports\n\n%s\n\n' "${reports:-none}"
     printf '## Ticket text and thread\n\n'
     ho_rec_h tickets show "$t" 2>/dev/null || printf '(the ticket could not be read)\n'

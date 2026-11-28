@@ -40,4 +40,16 @@ Write your verdict to @VERDICT_FILE@. The first line is exactly one of:
 - `failed` - something does not work. Give each failure with its file and line, or the
   failing command and its output.
 
-Then list the evidence for each criterion. After you write the file, end your turn.
+Then list the evidence for each criterion.
+
+## Record it
+
+The engine counts only what you record from this session (lane @LANE@, commit @SHA@):
+
+1. The test counts you saw when you ran the tests yourself:
+   `"@HARNESS@" verify "$HO_RUN_DIR" tests @LANE@ --total N --passed P --failed F --skipped S`
+   (use `--no-tests` when the repository has none, `--unreadable` when you cannot count them).
+2. The verdict:
+   `"@HARNESS@" loop "$HO_RUN_DIR" verdict @LANE@ --sha @SHA@ < "@VERDICT_FILE@"`
+
+After both commands succeed, end your turn.

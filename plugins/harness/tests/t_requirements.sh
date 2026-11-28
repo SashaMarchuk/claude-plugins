@@ -18,11 +18,11 @@ pcfg() { printf '%s\n' "$1" > "$proj/.harness/config.json"; select_config "$proj
 printf 'ticket body\n' | "$h" tickets fence 7 > "$base/ticket.txt"
 grill() { # <flow>: the rendered grilling step of the worker prompt
   "$h" flow render "$1" worker --step grill --set RUN_ID r --set TICKET_ID 7 --file TICKET_TEXT "$base/ticket.txt" \
-    --set BRANCH b --set BASE m --set WORKDIR /w --set STEP_RESULT_FILE /r --set VERDICT_FILE /v 2>&1 || true
+    --set BRANCH b --set BASE m --set WORKDIR /w --set STEP_RESULT_FILE /r --set VERDICT_FILE /v --set LANE t1 --set SHA 0123abc 2>&1 || true
 }
 plan() {
   "$h" flow render "$1" worker --step plan --set RUN_ID r --set TICKET_ID 7 --file TICKET_TEXT "$base/ticket.txt" \
-    --set BRANCH b --set BASE m --set WORKDIR /w --set STEP_RESULT_FILE /r --set VERDICT_FILE /v 2>&1 || true
+    --set BRANCH b --set BASE m --set WORKDIR /w --set STEP_RESULT_FILE /r --set VERDICT_FILE /v --set LANE t1 --set SHA 0123abc 2>&1 || true
 }
 
 # ---- H-076: a project without OpenSpec is a normal case ----------------------------------------

@@ -199,6 +199,16 @@ ho_live_transcript_prefix() {
   printf '%s\n' "$out"
 }
 
+# ho_live_transcript_root_ok <folder>: issue #103. One absolute path with no line break or tab.
+# A folder inside the project stays allowed for liveness, because an account command may build
+# it from $PWD (H-090); delivery refuses such a folder itself (lib/deliver.sh). Agent decision
+# (D37): the guard against a session pointing at another session's transcript is on the file
+# (ho_live_transcript), not a project rule on the folder.
+ho_live_transcript_root_ok() {
+  case $1 in /*) ;; *) return 1 ;; esac
+  case $1 in *$'\n'* | *$'\t'*) return 1 ;; esac
+}
+
 # ho_live_transcript <record>: the transcript path of the session, or nothing. A file
 # must match the session ID (a UUID), so a match is that session's own transcript.
 ho_live_transcript() {
@@ -216,11 +226,21 @@ ho_live_transcript() {
   glob=$(jq -r '.transcript.glob // ""' "$profile" 2>/dev/null) || glob=""
   [ -n "$root" ] && [ -n "$glob" ] && [ -d "$root" ] || return 0
   case $glob in *..* | /*) return 0 ;; esac
+  # Issue #103: the folder is checked as at launch, and a file counts only when it is no link
+  # and its real folder lies under the real root (or the data folder the launch recorded), so
+  # a session cannot point its transcript at another session's file.
+  ho_live_transcript_root_ok "$root" || return 0
+  local rroot treal fd
+  rroot=$(cd -P "$root" 2>/dev/null && pwd -P) || return 0
+  treal=$(jq -r '.transcript_prefix_real // ""' "$rec" 2>/dev/null) || treal=""
+  case $treal in /*) ;; *) treal="" ;; esac
   glob=${glob//\{session_id\}/$sid}
   # A session resumed in another folder has a file in each; the newest one is the live one.
   local t best=-1
   for f in "$root"/$glob; do
-    [ -f "$f" ] || continue
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    fd=$(cd -P "$(dirname "$f")" 2>/dev/null && pwd -P) || continue
+    case $fd/ in "$rroot"/* | "${treal:-/nonexistent}"/*) ;; *) continue ;; esac
     t=$(ho_live_mtime "$f")
     [ -n "$t" ] || t=0
     if [ "$t" -gt "$best" ]; then best=$t; found=$f; fi

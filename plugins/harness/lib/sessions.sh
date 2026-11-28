@@ -440,16 +440,19 @@ ho_session_launcher_text() {
   # HOME). One function for the rule (lib/liveness.sh); the account command runs only here.
   declare -f ho_live_transcript_root
   printf 'ho_troot=$(ho_live_transcript_root %s "" 2>/dev/null) || ho_troot=""\n' "$(ho_q "$profile")"
-  printf '[ -z "$ho_troot" ] || { printf '"'"'%%s\n'"'"' "$ho_troot" > %s && mv -f %s %s; } 2>/dev/null || true\n' \
-    "$(ho_q "${pidfile%.pid}.transcript_root.tmp")" "$(ho_q "${pidfile%.pid}.transcript_root.tmp")" "$(ho_q "${pidfile%.pid}.transcript_root")"
+  # Issue #103: a unique temp name (mktemp, mode 600) in the same folder, and a log line when
+  # no folder could be worked out, so a missing transcript is never silent.
+  printf 'if [ -z "$ho_troot" ]; then ho_note "no transcript folder could be worked out; liveness reads the transcript as missing"\n'
+  printf 'else ho_t=$(mktemp %s 2>/dev/null) && { printf '"'"'%%s\n'"'"' "$ho_troot" > "$ho_t" && mv -f "$ho_t" %s || rm -f "$ho_t"; } 2>/dev/null || true; fi\n' \
+    "$(ho_q "${pidfile%.pid}.transcript_root.XXXXXX")" "$(ho_q "${pidfile%.pid}.transcript_root")"
   # The runtime's data folder below it (the glob's fixed leading part) may be a link in a
   # multi-account layout. Where it resolves now is recorded once, here, so delivery accepts
   # that one link only while it still leads to the same real folder (lib/deliver.sh).
   declare -f ho_live_transcript_prefix
   printf 'ho_tpre=$(ho_live_transcript_prefix %s)\n' "$(ho_q "$(jq -r '.transcript.glob // ""' "$profile" 2>/dev/null)")"
   printf 'ho_treal=""; [ -z "$ho_troot" ] || [ -z "$ho_tpre" ] || ho_treal=$(cd "$ho_troot/$ho_tpre" 2>/dev/null && pwd -P) || ho_treal=""\n'
-  printf '[ -z "$ho_treal" ] || { printf '"'"'%%s\n'"'"' "$ho_treal" > %s && mv -f %s %s; } 2>/dev/null || true\n' \
-    "$(ho_q "${pidfile%.pid}.transcript_prefix_real.tmp")" "$(ho_q "${pidfile%.pid}.transcript_prefix_real.tmp")" "$(ho_q "${pidfile%.pid}.transcript_prefix_real")"
+  printf '[ -z "$ho_treal" ] || { ho_t=$(mktemp %s 2>/dev/null) && { printf '"'"'%%s\n'"'"' "$ho_treal" > "$ho_t" && mv -f "$ho_t" %s || rm -f "$ho_t"; }; } 2>/dev/null || true\n' \
+    "$(ho_q "${pidfile%.pid}.transcript_prefix_real.XXXXXX")" "$(ho_q "${pidfile%.pid}.transcript_prefix_real")"
   if [ -n "$prompt" ]; then
     printf 'HO_PROMPT=$(cat %s) || ho_fatal 65 "cannot read the prompt file"\n' "$(ho_q "$prompt")"
   fi
@@ -822,6 +825,15 @@ ho_session_launch_one() {
   local treal=""
   treal=$(head -n 1 "$sdir/$name.transcript_prefix_real" 2>/dev/null) || treal=""
   case $treal in /*) ;; *) treal="" ;; esac
+  # Issue #103: the session can rewrite its notes before this copy, so the record keeps only a
+  # checked value (ho_live_transcript_root_ok), and the notes are removed here, so nothing reads
+  # them after the record holds the folder.
+  rm -f "$sdir/$name.transcript_root" "$sdir/$name.transcript_prefix_real"
+  if [ -n "$troot" ] && ! ho_live_transcript_root_ok "$troot"; then
+    ho_ledger_append transcript-root-refused name "$name" reason "the transcript folder is not one absolute path"
+    troot="" treal=""
+  fi
+  if [ -n "$treal" ] && ! ho_live_transcript_root_ok "$treal"; then treal=""; fi
   ho_session_set "$rec" '.pid = ($p | tonumber) | .status = "running" | .started = $ts
       | (if $t != "" then .transcript_root = $t else . end)
       | (if $t != "" and $r != "" then .transcript_prefix_real = $r else . end)' --arg p "$pid" --arg ts "$(ho_now)" --arg t "$troot" --arg r "$treal" || {

@@ -307,6 +307,17 @@ The engine checks the profile at every step boundary and before push, PR, merge 
 - **Ticket end.** `autonomy <run-dir> end <ticket>` sets the ticket to needs-review when the profile never merges. Under a profile that merges, the ticket waits for the confirmed merge. With local tickets and `HO_TICKETS_DIR` unset, it acts on `<run's project>/.harness/tickets`, wherever it is called from, as intake and lifecycle do.
 - The setup question for the profile is `/harness:config`, and the record of the approved profile with its comparison at run start is in Config and run state. Not built here: the push and PR steps that call these checks (#59), remarks and external review (#60), and the reaction to a ticket that is not ready (#51).
 
+## Notifications (H-115 to H-123, D36, S8-28a)
+
+Channels are optional; with none set, questions and answers stay in the tracker, which is always the source of truth. Each channel is one entry under `notify.channels.<label>` with a `preset` (`telegram`, `slack` or `gmail`) and a route:
+
+- `"via": "command", "argv": [...]`: only in the user config. The engine runs `<argv> send` (text on stdin, `HO_NOTIFY_KIND`, `HO_NOTIFY_TICKET`, `HO_NOTIFY_EVENT`, `HO_NOTIFY_REPLY_TO`; first stdout line is the message ref), `<argv> read_replies` (JSON lines `{id, reply_to, sender, text, authenticated}`) and `<argv> check`, with no shell and 20 s at most. Tokens stay with that program. A project config that holds a channel command is refused at start (D37-FLOW-8).
+- `"via": "mcp", "mcp": "<connector>"`: allowed in the project config too. The engine queues each message in `<run>/notify/outbox.jsonl`; the session sends it with the connector and reports `harness notify <run> sent <id> <ref>` or `failed <id>`, and passes replies in with `harness notify <run> inbox <label> <file>`.
+
+Settings: `notify.use` (active labels; default all), `notify.priority` (default the order of setup), `notify.questions` (labels for questions; default all active), `notify.events.<event>` (default true) for `question`, `blocked`, `taken`, `done`, `run-ended`, `limit-pause`, `orchestrator-down`. A message goes to each selected channel; a failed send goes to the next unselected channel by priority.
+
+`harness tickets ask` mirrors the exact numbered lines once the tracker holds them. The intake tick reads replies: the first reply to a question is recorded on the ticket with `tickets answer`, with the author mapped through `identities` in the user config (`senders.telegram`, `senders.slack`, or `emails` for an authenticated Gmail sender); exactly one entry must match, or the sender is unmapped. The normal answer rules then apply it or move the ticket to needs-review. A later reply gets the tracker link and is never applied. A message that answers no question is dropped. `harness notify check` is the read-only connections check before the build; it lists the owner actions from `templates/notify-presets.json` for a failed channel.
+
 ## Feedback (H-140, D43, D60)
 
 `/harness:feedback` files a problem with the harness as one issue in the plugin's own repository (the manifest `homepage`), with no labels. The person describes the problem in their own words. The command file (`commands/feedback.md`) runs two engine verbs:

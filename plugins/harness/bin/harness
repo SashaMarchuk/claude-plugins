@@ -68,6 +68,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/resources.sh"
 # shellcheck source=../lib/watch.sh
 . "$HO_ROOT/lib/watch.sh"
+# shellcheck source=../lib/notify.sh
+. "$HO_ROOT/lib/notify.sh"
 
 ho_usage() {
   cat <<USAGE
@@ -95,6 +97,7 @@ verbs:
   resources  resources <run-dir> oom|sample | resources recommend: out-of-memory cap, usage history
   watch      watch <run-dir> loop|cycle|outage-check|back-check|restart|pid-check: the watch script
   recover    recover last | recover <run-dir> tick|reopen|state: recovery of stopped sessions
+  notify     notify check|channels | notify <run-dir> event|question|poll|sent|failed|inbox: channels
   feedback   feedback preview <file> | send --draft <dir> --code <code> --yes: report a harness problem
 USAGE
 }
@@ -125,6 +128,7 @@ case $verb in
   recover)  ho_rec_main "$@" ;;
   resources) ho_res_main "$@" ;;
   watch)    ho_watch_main "$@" ;;
+  notify)   ho_notify_main "$@" ;;
   *)
     [ -n "$verb" ] && printf 'harness: unknown verb: %s\n' "$verb" >&2
     ho_usage >&2

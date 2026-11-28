@@ -41,7 +41,8 @@ if [ -n "${HO_FAKE_GH_FAIL:-}" ] && [ "${1:-} ${2:-}" = "$HO_FAKE_GH_FAIL" ]; th
 fi
 issue_file() {
   case ${1:-} in ''|*[!0-9]*) fail "bad issue number: ${1:-}" ;; esac
-  [ -f "$dir/issues/$1.json" ] || fail "no issue $1"
+  # The text real gh prints for a missing issue.
+  [ -f "$dir/issues/$1.json" ] || { printf 'GraphQL: Could not resolve to an issue or pull request with the number of %s. (repository.issue)\n' "$1" >&2; exit 1; }
   printf '%s\n' "$dir/issues/$1.json"
 }
 label_event() { # label_event <issue number> <labeled|unlabeled> <label>

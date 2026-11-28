@@ -79,6 +79,8 @@ ho_tk_settings() {
   HO_TK_SOURCE=${HO_TICKETS_SOURCE:-local}
   HO_TK_REPO=${HO_TICKETS_REPO:-}
   HO_TK_DIR=${HO_TICKETS_DIR:-$PWD/.harness/tickets}
+  # An absolute path, so a relative one that starts with a tab survives the tab-split rows (#88).
+  case $HO_TK_DIR in /*) ;; *) HO_TK_DIR=$PWD/$HO_TK_DIR ;; esac
   case $HO_TK_DIR in *"
 "*) ho_tk_err "the ticket folder path holds a line break; move the project to a path without one"; return 64 ;; esac
   HO_TK_PREFIX=${HO_STATE_PREFIX:-harness}
@@ -214,7 +216,10 @@ EOF
 HO_TK_GH_LIMIT=200
 ho_tk_gh_rows() { # <state> -> number<TAB>title, oldest first
   local json n
-  json=$(gh issue list --repo "$HO_TK_REPO" --label "$HO_TK_PREFIX:$1" --state open --limit "$HO_TK_GH_LIMIT" --json number,title) || return 1
+  # done closes the issue (D11), so done tickets are listed from open and closed issues (#88).
+  local st=open
+  [ "$1" != done ] || st=all
+  json=$(gh issue list --repo "$HO_TK_REPO" --label "$HO_TK_PREFIX:$1" --state "$st" --limit "$HO_TK_GH_LIMIT" --json number,title) || return 1
   # Real gh prints at least []: empty output is a failed listing, never "no tickets" (#110).
   [ -n "$json" ] || { ho_tk_err "the issue listing of $HO_TK_REPO printed nothing; read as a failed listing"; return 1; }
   n=$(printf '%s' "$json" | jq -e 'if type == "array" then length else error("not a list") end' 2>/dev/null) \
@@ -225,8 +230,17 @@ ho_tk_gh_rows() { # <state> -> number<TAB>title, oldest first
 }
 ho_tk_gh_show() {
   local id=$1 json state
-  json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json number,title,body,labels,comments) ||
-    { ho_tk_err "no ticket #$id"; return 66; }
+  # Only gh's own "not found" answer means no ticket; any other failure is an outage (69), so
+  # a network or gh failure never reads as a missing ticket (#88).
+  local verr
+  verr=$(mktemp "${TMPDIR:-/tmp}/ho-gh-err.XXXXXX") || return 1
+  if ! json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json number,title,body,labels,comments 2>"$verr"); then
+    if grep -qiE 'Could not resolve to an issue|HTTP 404|Not Found' "$verr"; then
+      rm -f "$verr"; ho_tk_err "no ticket #$id"; return 66
+    fi
+    rm -f "$verr"; ho_tk_err "cannot read ticket #$id from $HO_TK_REPO (gh failed; the tracker may be down)"; return 69
+  fi
+  rm -f "$verr"
   # Only the five state names reach the header line; any other label text stays out.
   state=$(printf '%s' "$json" | jq -r --arg p "$HO_TK_PREFIX:" --arg s "$HO_STATES" \
     '[.labels[].name | select(startswith($p)) | ltrimstr($p) | select(. as $x | $s | split(" ") | index($x))] | join(" ")')
@@ -445,25 +459,34 @@ ho_tk_locked() { # <function> [args...]
 
 # ho_tk_l_each: every ticket file as <id><TAB><path>. Only <digits>-<slug>.md with at most
 # 9 digits is a ticket; "7 IGNORE ... -x.md" is not ticket 7.
+# With HO_TK_L_WARN=1 (ids and list) it says on stderr how many names it skipped, and which
+# id it found on more than one file; the later file of one id is always left out (#88).
 ho_tk_l_each() {
   local LC_ALL=C   # byte-wise ranges in the name check below
-  local f n
+  local f n skipped=0 seen=" "
   for f in "$HO_TK_DIR"/[0-9]*-*.md; do
     [ -f "$f" ] || continue
     n=${f##*/}
     # Allow list on the file name only: <digits>-<letters, digits, . _ ->.md. A name
     # with a newline, tab, space or other control byte could forge a record; skip it.
-    case $n in *[!A-Za-z0-9._-]*) continue ;; esac
-    n=$(ho_tk_id "${n%%-*}") || continue
+    case $n in *[!A-Za-z0-9._-]*) skipped=$((skipped + 1)); continue ;; esac
+    n=$(ho_tk_id "${n%%-*}") || { skipped=$((skipped + 1)); continue; }
+    case $seen in *" $n "*)
+      [ "${HO_TK_L_WARN:-0}" != 1 ] || ho_tk_err "warning: id $n is on more than one file; only the first one is read"
+      continue ;;
+    esac
+    seen="$seen$n "
     printf '%s\t%s\n' "$n" "$f"
   done
+  [ "${HO_TK_L_WARN:-0}" != 1 ] || [ "$skipped" -eq 0 ] \
+    || ho_tk_err "warning: $skipped file(s) in the ticket folder are skipped: a ticket file is named <digits>-<letters, digits, . _ ->.md"
 }
 # ho_tk_l_max_id: the highest id carried by ANY file name <digits>-*.md, valid ticket name
 # or not, so a stray file never blocks the next id forever. Only the digits are read.
 ho_tk_l_max_id() {
   local LC_ALL=C f p max=0
   for f in "$HO_TK_DIR"/[0-9]*-*.md; do
-    [ -e "$f" ] || continue
+    [ -e "$f" ] || [ -L "$f" ] || continue   # a dangling link holds its id too (#88)
     p=${f##*/}; p=${p%%-*}
     p=$(ho_tk_id "$p") || continue
     [ "$p" -gt "$max" ] && max=$p
@@ -562,7 +585,7 @@ ho_tk_l_add_locked() { # <title> <body-file> <state>
   # Any file that carries the id blocks it (approved hand patch), also one whose name is
   # not a valid ticket name, so a stray file is never silently shadowed.
   local g taken=""
-  for g in "$HO_TK_DIR/$n"-*.md; do [ -e "$g" ] && taken=1; break; done
+  for g in "$HO_TK_DIR/$n"-*.md; do { [ -e "$g" ] || [ -L "$g" ]; } && taken=1; break; done
   if [ -n "$taken" ] || [ -n "$(ho_tk_l_find "$n")" ]; then
     ho_tk_err "ticket id $n is already on disk; no ticket was created. Ids are never reused: run the add again."
     return 70
@@ -746,7 +769,7 @@ ho_tk_comments() {
   local id=$1 own json f start
   if ho_tk_gh; then
     own=$(ho_tk_own_login)
-    json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json comments) || { ho_tk_err "no ticket #$id"; return 66; }
+    json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json comments) || { ho_tk_err "cannot read ticket #$id (it may not exist, or the tracker may be down)"; return 66; }
     printf '%s' "$json" | jq -c --arg own "$own" --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE"'
       .comments | to_entries[] | (.value.author.login // "") as $login
       | (($own != "") and ($login == $own)) as $mine
@@ -824,7 +847,7 @@ ho_tk_unblock_terminal() { # <id>: the terminal form of unblock (OPEN-10, D37)
     return "$HO_EXIT_DENIED"
   fi
   if ho_tk_gh; then
-    state=$(ho_tk_gh_state "$id") || { ho_tk_err "no ticket #$id"; return 66; }
+    state=$(ho_tk_gh_state "$id") || { ho_tk_err "cannot read ticket #$id (it may not exist, or the tracker may be down)"; return 66; }
     case " $state " in *" blocked "*) ;; *) ho_tk_err "#$id is not blocked (state: ${state:-none}); nothing was changed"; return 65 ;; esac
     who=$(ho_tk_own_login)
     [ -n "$who" ] || { ho_tk_err "cannot read the signed-in account, so its access is unconfirmed; #$id stays blocked"; return 65; }
@@ -891,7 +914,7 @@ ho_tickets() {
       ho_tk_check_state "$state" || return
       if ho_tk_gh; then rows=$(ho_tk_gh_rows "$state") || return 1
       elif ho_tk_ad; then rows=$(ho_tk_ad_rows "$state") || return 1
-      else rows=$(ho_tk_l_rows "$state") || return 1; fi
+      else rows=$(HO_TK_L_WARN=1 ho_tk_l_rows "$state") || return 1; fi
       if [ "$verb" = ids ]; then
         [ -z "$rows" ] || printf '%s\n' "$rows" | cut -f1
       else
@@ -939,8 +962,9 @@ ho_tickets() {
       local brole
       ho_tk_need_file "${2:-}" || return
       brole=$(ho_tk_role "") || return 64
-      ho_tk_set_state "$1" blocked || return
+      # The reason first: a block never leaves a ticket blocked with no reason (#88).
       ho_tk_post "$1" "$brole" blocked blocked "$2" || return
+      ho_tk_set_state "$1" blocked || return
       echo "OK blocked $1" ;;
     ask)
       local arole
@@ -1013,9 +1037,15 @@ ho_tickets() {
       echo "OK released $1" ;;
     done)
       if ho_tk_gh; then
+        local prev
+        prev=$(ho_tk_gh_state "$1") || { ho_tk_err "cannot read the labels of #$1"; return 1; }
         ho_tk_gh_set_state "$1" "done" || return
-        # D11: close_on_merge false sets done and leaves the issue open.
-        [ "${2-}" = --keep-open ] || gh issue close "$1" --repo "$HO_TK_REPO" >/dev/null || return
+        # D11: close_on_merge false sets done and leaves the issue open. A close that fails puts
+        # the earlier state back, so a ticket is never done while still open (#88).
+        if [ "${2-}" != --keep-open ] && ! gh issue close "$1" --repo "$HO_TK_REPO" >/dev/null; then
+          case " $HO_STATES " in *" $prev "*) ho_tk_gh_set_state "$1" "$prev" || ho_tk_err "#$1 is done but still open, and putting $prev back failed" ;; esac
+          return 1
+        fi
       else
         ho_tk_locked ho_tk_l_set_state_locked "$1" "done" || return
       fi

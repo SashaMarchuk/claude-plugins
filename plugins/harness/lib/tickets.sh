@@ -5,7 +5,9 @@
 #
 # Two backends, one verb set:
 #   github  issues with one state label <prefix>:<state>
-#   local   <dir>/<n>-<slug>.md with a header (title, status, created), a blank line, the body
+#   local   <dir>/<n>-<slug>.md with a header (title, status, created, body-lines), a blank
+#           line, the body, then the comment log. body-lines is the number of body lines, so
+#           the comment parser starts after the body and never reads body text as a record.
 # Five states (design D2): ready, in-progress, blocked, needs-review, done.
 #
 # Settings (own HO_ variables; the config lookup is a separate task and can set them later):
@@ -207,12 +209,38 @@ ho_tk_gh_show() {
   # Only the five state names reach the header line; any other label text stays out.
   state=$(printf '%s' "$json" | jq -r --arg p "$HO_TK_PREFIX:" --arg s "$HO_STATES" \
     '[.labels[].name | select(startswith($p)) | ltrimstr($p) | select(. as $x | $s | split(" ") | index($x))] | join(" ")')
+  # Only comments by a person with write access reach the text a session reads (H-018, D9):
+  # a non-writer's change never enters the work on its own. The harness's own comments count
+  # as the harness's, except a recorded answer (H-034), which counts as its author's.
+  local own whos who ok='{}'
+  own=$(ho_tk_own_login)
+  whos=$(printf '%s' "$json" | jq -r --arg own "$own" --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE$HO_TK_JQ_WHO"'
+    [.comments[] | who($own; $re)] | unique | .[] | select(. != $own)') || return 1
+  while IFS= read -r who; do
+    [ -n "$who" ] && [ "$(ho_tk_access "$who")" = writer ] || continue
+    ok=$(printf '%s' "$ok" | jq -c --arg w "$who" '.[$w] = true') || return 1
+  done <<EOF_WHO
+$whos
+EOF_WHO
   printf '### Ticket %s (state: %s)\n' "$id" "${state:-none}"
-  printf '%s' "$json" | jq -r '
+  printf '%s' "$json" | jq -r --arg own "$own" --arg re "$HO_TK_MACHINE_RE" --argjson ok "$ok" "$HO_TK_JQ_MLINE$HO_TK_JQ_WHO"'
     "Title: \(.title)", "", (.body // ""),
-    (.comments | to_entries[] | "", "--- comment \(.key + 1) by \(.value.author.login) ---", .value.body)' |
+    (.comments | to_entries[] | (.value | who($own; $re)) as $w
+      | if ($own != "" and $w == $own) or $ok[$w] then
+          "", "--- comment \(.key + 1) by \(.value.author.login) ---", .value.body
+        else
+          "", "--- comment \(.key + 1) by \($w): left out (no confirmed write access) ---"
+        end)' |
     ho_tk_fence "$id"
 }
+# jq who($own; $re): the person a comment speaks for. The platform author, or on the harness's own
+# comment the machine author field when it has one (a recorded answer, H-034). Needs HO_TK_JQ_MLINE.
+HO_TK_JQ_WHO='def who($own; $re): (.author.login // "") as $login
+  | if $own != "" and $login == $own then
+      ((.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "" | mline($re)) as $m
+      | if $m != null and ($m.author | type) == "string" then $m.author else $login end
+    else $login end;'
+
 ho_tk_gh_add() { # <title> <body-file> <state>
   local url
   url=$(gh issue create --repo "$HO_TK_REPO" --title "$1" --body-file "$2" --label "$HO_TK_PREFIX:$3") || return 1
@@ -385,8 +413,20 @@ ho_tk_l_comment_text() { # <file> <body-file>
   cat "$2"
 }
 ho_tk_l_new_text() { # <title> <state> <body-file>
-  printf 'title: %s\nstatus: %s\ncreated: %s\n\n' "$1" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  local n
+  n=$(LC_ALL=C awk 'END { print NR }' "$3") || return 1
+  printf 'title: %s\nstatus: %s\ncreated: %s\nbody-lines: %s\n\n' "$1" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$n"
   cat "$3"
+}
+# ho_tk_l_log_start <file>: the first line number after the body, where the comment log starts.
+# A file without a valid body-lines field (written by hand or by an older version) has no
+# trusted log: nothing is printed and the caller reads no comment record.
+ho_tk_l_log_start() {
+  local hdr bl
+  hdr=$(ho_tk_l_header "$1")
+  bl=$(printf '%s\n' "$hdr" | sed -n 's/^body-lines: *//p' | head -1)
+  bl=$(ho_tk_id "$bl") || return 0
+  printf '%s\n' "$(( $(printf '%s\n' "$hdr" | wc -l) + 2 + bl ))"
 }
 ho_tk_l_add_locked() { # <title> <body-file> <state>
   local title=$1 n slug
@@ -532,7 +572,7 @@ ho_tk_last_labeled() {
 # machine is the parsed last line only on the harness's own comments, else null; author is the
 # machine author field on an own comment that has one (H-034), else the platform author.
 ho_tk_comments() {
-  local id=$1 own json f
+  local id=$1 own json f start
   if ho_tk_gh; then
     own=$(ho_tk_own_login)
     json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json comments) || { ho_tk_err "no ticket #$id"; return 66; }
@@ -546,12 +586,15 @@ ho_tk_comments() {
          machine: $m}' 2>/dev/null || { ho_tk_err "cannot read the comments of #$id"; return 1; }
   else
     f=$(ho_tk_l_file "$id") || return
-    # Comments are the parts after each "---" / "<time> harness log:" pair; all are the harness's own.
-    LC_ALL=C awk '
+    start=$(ho_tk_l_log_start "$f")
+    [ -n "$start" ] || return 0
+    # Comments are the parts after each "---" / "<time> harness log:" pair, read only after the
+    # body (body-lines), so body text never passes for a record; all are the harness's own.
+    LC_ALL=C awk -v start="$start" '
       { line[NR] = $0 }
       END {
         k = 0
-        for (i = 1; i <= NR; i++) {
+        for (i = start; i <= NR; i++) {
           if (line[i] == "---" && line[i + 1] ~ / harness log:$/) { k++; i++; last[k] = ""; continue }
           if (k > 0 && line[i] ~ /[^ \t]/) last[k] = line[i]
         }

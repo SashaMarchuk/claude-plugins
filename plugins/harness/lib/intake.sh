@@ -11,8 +11,9 @@
 #      Write, maintain or admin access passes; anything else, an unknown person, a login of an
 #      unexpected shape or a failed query is read-only (H-009), and the ticket moves to
 #      needs-review with one status comment (H-011, H-026, D5). A configured target repository
-#      that the ticket text (title or body) names needs the same access (D37-INTAKE-9); a text
-#      that cannot be read means no claim. A bot is judged by its
+#      that the ticket text (title or body) names needs the same access (D37-INTAKE-9); a ticket
+#      that names none needs it on every configured target; a text that cannot be read means no
+#      claim. A bot is judged by its
 #      own access, with no allow-list (H-008 interim rule until OPEN-INTAKE-1 is answered).
 #   2. Claim: ready -> in-progress, then one "picked up" comment.
 #   3. Readiness: the main runtime, run without a terminal and with no tools (sandbox.no-tools
@@ -235,7 +236,7 @@ ho_in_set_state() { # <id> <state>: on either backend
 
 # ho_in_pickup_steps <id>: returns 0 start, 1 handled (not started), 2 a step failed.
 ho_in_pickup_steps() {
-  local id=$1 state events ready blocked login="" ridx=-1 bidx=-1 repo body="" raw targets qf
+  local id=$1 state events ready blocked login="" ridx=-1 bidx=-1 repo body="" raw targets named qf
   if ho_tk_gh; then
     state=$(ho_tk_gh_state "$id") || { ho_in_err "cannot read the labels of #$id"; return 2; }
     # The listing is a snapshot from the start of the tick. A ready label removed since then (for
@@ -306,17 +307,22 @@ ho_in_pickup_steps() {
       raw=$(gh issue view "$id" --repo "$HO_TK_REPO" --json title,body 2>/dev/null) || { ho_in_err "cannot read the text of #$id to check its target repositories"; return 2; }
       body=$(printf '%s' "$raw" | jq -er '"\(.title // "")\n\(.body // "")"' 2>/dev/null) || { ho_in_err "cannot read the text of #$id to check its target repositories"; return 2; }
     fi
+    # The targets the ticket names; a ticket that names none may work in any of them, so the
+    # trigger author needs write access on every configured target (D37-INTAKE-9).
+    named=$(printf '%s\n' "$targets" | while IFS= read -r repo; do
+      [ -n "$repo" ] && printf '%s\n' "$body" | LC_ALL=C grep -Fqi -- "$repo" && printf '%s\n' "$repo"
+    done || true)
+    [ -n "$named" ] || named=$targets
     while IFS= read -r repo; do
       [ -n "$repo" ] || continue
-      printf '%s\n' "$body" | LC_ALL=C grep -Fqi -- "$repo" || continue
       if [ "$(ho_tk_access "$login" "$repo")" != writer ]; then
-        ho_in_review "$id" ready "the person who set the ready label has no confirmed write access to $repo, which the ticket names" || return 2
+        ho_in_review "$id" ready "the person who set the ready label has no confirmed write access to $repo, a target repository of this ticket" || return 2
         ho_ledger_append intake ticket "$id" verdict needs-review by "$login" repo "$repo"
         echo "needs-review $id"
         return 1
       fi
     done <<EOF_REPOS
-$targets
+$named
 EOF_REPOS
   fi
 

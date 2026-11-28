@@ -142,7 +142,7 @@ docs/
 Docs build.")
 label alice "$t10" ready
 out=$(HO_FAKE_GH_FAIL_API=repos/fake/api/ tick)
-assert_contains "D37-INTAKE-9 a ticket that names no other target repository is taken" "$out" "start $t10"
+assert_contains "D37-INTAKE-9 a ticket that names no target repository needs access on every configured target" "$out" "needs-review $t10"
 
 # The ledger records each intake verdict with the trigger author.
 assert_contains "H-011 the ledger records the needs-review verdict" "$(ledger)" "\"ticket\":\"$t4\""

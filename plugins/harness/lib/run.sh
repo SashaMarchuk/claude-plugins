@@ -164,6 +164,7 @@ ho_ledger_events() {
 #   soft:ticket  a ticket that began before the stop may begin its next steps and merge; the
 #                other tickets get soft:step; no new ticket begins
 HO_STOP_TYPES="soft:step soft:task soft:ticket"
+HO_STOP_HARD_TYPES="hard:message hard:now"
 
 # ho_stop_info: one jq pass over the whole ledger, so no early-closing reader can hide a bad line.
 # Prints <state>|<type>|<tickets>|<stop id>|<tickets begun before the stop> (| never collapses
@@ -266,10 +267,13 @@ ho_stop_text() {
   esac
 }
 
-# state <run> stop [--type T] [--ticket ID]... [reason...]: record a soft stop. The stop text is
-# printed for the caller to deliver (session deliver --id <stop id>); this verb sends nothing.
+# state <run> stop [--type T] [--ticket ID]... [--message TEXT] [--service-down] [reason...]:
+# record a stop. A soft stop's text is printed for the caller to deliver (session deliver --id
+# <stop id>); the verb sends nothing then. A hard stop is acted on at once (lib/stop.sh). The own
+# message (--message, D37-LIFECYCLE-5) is added word for word after the standard line, as one
+# line, and written once to the run ledger. --service-down goes with hard:message only.
 ho_state_stop() {
-  local type=soft:step tickets="" t id scope reason
+  local type=soft:step tickets="" t id scope reason own="" have_own=0 down=0
   while [ $# -gt 0 ]; do
     case $1 in
       --type) [ $# -ge 2 ] || { ho_state_usage; return 64; }; type=$2; shift 2 ;;
@@ -279,27 +283,37 @@ ho_state_stop() {
         tickets="$tickets $t"
         shift 2
         ;;
+      --message) [ $# -ge 2 ] || { ho_state_usage; return 64; }; own=$(ho_stop_own_text "$2"); have_own=1; shift 2 ;;
+      --service-down) down=1; shift ;;
       --) shift; break ;;
       *) break ;;
     esac
   done
   case $type in
-    soft:step | soft:task | soft:ticket) ;;
-    hard:*) printf 'harness: %s is a hard stop; hard stops are not part of this engine yet\n' "$type" >&2; return 64 ;;
-    *) printf 'harness: unknown stop type %s (one of: %s)\n' "$type" "$HO_STOP_TYPES" >&2; return 64 ;;
+    soft:step | soft:task | soft:ticket | hard:message | hard:now) ;;
+    *) printf 'harness: unknown stop type %s (one of: %s %s)\n' "$type" "$HO_STOP_TYPES" "$HO_STOP_HARD_TYPES" >&2; return 64 ;;
   esac
   [ -z "$tickets" ] || [ "$type" = soft:ticket ] || { echo "harness: --ticket goes only with --type soft:ticket" >&2; return 64; }
+  [ "$down" -eq 0 ] || [ "$type" = hard:message ] || { echo "harness: --service-down goes only with --type hard:message" >&2; return 64; }
+  [ "$have_own" -eq 0 ] || [ -n "${own// /}" ] || { echo "harness: --message needs some text" >&2; return 64; }
   scope=all
   [ -z "$tickets" ] || scope=$(printf '%s\n' $tickets | sort -n -u | tr '\n' ' ' | sed 's/ $//')
   reason=${*:-stop requested}
   id=$(ho_stop_id_new)
-  ho_ledger_append stop source verb type "$type" tickets "$scope" stop_id "$id" reason "$reason"
-  printf 'stop %s %s tickets %s\n' "$id" "$type" "$scope"
-  if [ "$type" = soft:ticket ] && [ "$scope" != all ]; then
-    printf 'text (tickets %s): %s\n' "$scope" "$(ho_stop_text soft:ticket)"
-    printf 'text (other tickets): %s\n' "$(ho_stop_text soft:step)"
+  if [ -n "$own" ]; then
+    ho_ledger_append stop source verb type "$type" tickets "$scope" stop_id "$id" reason "$reason" own_message "$own"
   else
-    printf 'text: %s\n' "$(ho_stop_text "$type")"
+    ho_ledger_append stop source verb type "$type" tickets "$scope" stop_id "$id" reason "$reason"
+  fi
+  printf 'stop %s %s tickets %s\n' "$id" "$type" "$scope"
+  case $type in hard:*) ho_stop_hard "$type" "$id" "$own" "$down"; return $? ;; esac
+  local tail=""
+  [ -z "$own" ] || tail=" $own"
+  if [ "$type" = soft:ticket ] && [ "$scope" != all ]; then
+    printf 'text (tickets %s): %s%s\n' "$scope" "$(ho_stop_text soft:ticket)" "$tail"
+    printf 'text (other tickets): %s%s\n' "$(ho_stop_text soft:step)" "$tail"
+  else
+    printf 'text: %s%s\n' "$(ho_stop_text "$type")" "$tail"
   fi
   printf 'note: the stop text is not delivered by this verb; send it to each session the stop covers with "session deliver <name> --id %s".\n' "$id"
 }
@@ -515,9 +529,13 @@ usage: harness state <run-dir> <verb> [args]
   marker set|check|clear <name>           markers carry the run ID
   decision <title> <reason>               append a decision to the run ledger
   owner-action <title> <why> <command> <verify>
-  stop [--type soft:step|soft:task|soft:ticket] [--ticket ID]... [reason]
+  stop [--type soft:step|soft:task|soft:ticket] [--ticket ID]... [--message TEXT] [reason]
                                           record a soft stop (default soft:step); prints its
                                           stop id and text, which it does not deliver
+  stop --type hard:message|hard:now [--message TEXT] [--service-down] [reason]
+                                          a hard stop, acted on at once: hard:message sends
+                                          the stop line and escalates a session that does not
+                                          park in time; hard:now force-closes by exact PID
   stop-state                              the stop in force, one JSON line
   begin --ticket T --step S               the step gate: 0 may begin, 75 a stop refuses it
   resume                                  record a resume (refused while the STOP file exists)

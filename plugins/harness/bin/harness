@@ -46,6 +46,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/screen.sh"
 # shellcheck source=../lib/intake.sh
 . "$HO_ROOT/lib/intake.sh"
+# shellcheck source=../lib/stop.sh
+. "$HO_ROOT/lib/stop.sh"
 # shellcheck source=../lib/lifecycle.sh
 . "$HO_ROOT/lib/lifecycle.sh"
 # shellcheck source=../lib/feedback.sh

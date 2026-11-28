@@ -79,6 +79,7 @@ ho_ledger_append() {
   local -a args
   args=(--arg ts "$(ho_now)" --arg run "$HO_RUN_ID" --arg kind "$kind")
   shift
+  local -a fields=("$@")
   while [ $# -ge 2 ]; do
     args+=(--arg "$1" "$2")
     shift 2
@@ -111,6 +112,11 @@ ho_ledger_append() {
     exit 1
   fi
   ho_ledger_unlock
+  # Run events for the notification channels (S8-28a); silent, and never fails this append.
+  case $kind in
+    pickup | run-end | stop | limits-over | orchestrator-down)
+      ! declare -F ho_nt_ledger_event >/dev/null || ho_nt_ledger_event "$kind" "${fields[@]}" || true ;;
+  esac
 }
 
 ho_ledger_unlock() {
@@ -522,6 +528,8 @@ ho_run_new() {
   fi
   # D37-FLOW-8: a project config that holds an out-of-memory check command is refused at start.
   ho_res_project_cmd_check || exit 78
+  # D37-FLOW-8, D36: so is one that wires a notification channel by command.
+  ho_nt_project_cmd_check || exit 78
   runs="$proj/.harness/runs"
   mkdir -p "$runs"
   while :; do

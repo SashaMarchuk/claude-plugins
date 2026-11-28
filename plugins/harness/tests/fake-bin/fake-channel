@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Fake notification channel for the notification tests (H-115 to H-123, D36). Never a real
+# channel and never a token. Wired as: "argv": ["fake-channel", "<name>"]; the engine appends
+# the operation. State lives in $HO_FAKE_CHANNEL_DIR/<name>/:
+#   sent.jsonl      one line per send: {ref, kind, ticket, event, reply_to, text}
+#   replies.jsonl   what read_replies prints (the test writes it)
+#   fail            present: send exits 1
+#   down            present: check exits 1
+set -euo pipefail
+command -v jq > /dev/null 2>&1 || PATH="$PATH:${HO_FAKE_TOOLS_PATH:-}"
+name=${1:?channel name}
+op=${2:?operation}
+d="${HO_FAKE_CHANNEL_DIR:?HO_FAKE_CHANNEL_DIR}/$name"
+mkdir -p "$d"
+case $op in
+  send)
+    [ ! -e "$d/fail" ] || exit 1
+    n=$(( $( [ -f "$d/sent.jsonl" ] && wc -l < "$d/sent.jsonl" || echo 0) + 1 ))
+    ref="$name-$n"
+    jq -cn --arg ref "$ref" --arg kind "${HO_NOTIFY_KIND-}" --arg ticket "${HO_NOTIFY_TICKET-}" \
+      --arg event "${HO_NOTIFY_EVENT-}" --arg reply "${HO_NOTIFY_REPLY_TO-}" --rawfile text /dev/stdin \
+      '{ref: $ref, kind: $kind, ticket: $ticket, event: $event, reply_to: $reply, text: $text}' >> "$d/sent.jsonl"
+    printf '%s\n' "$ref" ;;
+  read_replies) [ ! -f "$d/replies.jsonl" ] || cat "$d/replies.jsonl" ;;
+  check) [ ! -e "$d/down" ] ;;
+  *) exit 64 ;;
+esac

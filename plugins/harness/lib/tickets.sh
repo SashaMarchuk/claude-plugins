@@ -671,7 +671,9 @@ ho_tk_l_body_text() { # <file> <body-file> <log-start>
 ho_tk_set_state() {
   if ho_tk_gh; then ho_tk_gh_set_state "$1" "$2"
   elif ho_tk_ad; then ho_tk_ad_set_state "$1" "$2"
-  else ho_tk_locked ho_tk_l_set_state_locked "$1" "$2"; fi
+  else ho_tk_locked ho_tk_l_set_state_locked "$1" "$2"; fi || return
+  # S8-28a: blocked, needs-review and done are run events for the channels (silent, never fails).
+  ! declare -F ho_nt_state_event >/dev/null || ho_nt_state_event "$1" "$2"
 }
 # ho_tk_status_comment <id> <role> <from> <to> <reason> <next>: the D5 status-change comment.
 ho_tk_status_comment() {
@@ -785,8 +787,10 @@ ho_tk_ask() {
     cat "$tmp"
     printf '\nReply in a comment on this ticket. Only a reply from a person with write access resumes the work.\n'
   } | ho_tk_post "$id" "$role" question question - questions "$n" || { rm -f "$tmp"; return 1; }
+  # H-116: the channels get the exact numbered lines, only after the tracker holds them.
+  ! declare -F ho_nt_hook >/dev/null || ho_nt_hook ho_nt_question "$id" "$tmp"
   rm -f "$tmp"
-  ho_tk_set_state "$id" blocked || return 1
+  HO_NT_ASKING=1 ho_tk_set_state "$id" blocked || return 1
   HO_TK_ASKED=$n
 }
 # ho_tk_step_records <id>: "<step>\t<result>" for each trusted step record, oldest first.
@@ -1007,6 +1011,7 @@ ho_tickets() {
       else
         ho_tk_locked ho_tk_l_set_state_locked "$1" "done" || return
       fi
+      ! declare -F ho_nt_state_event >/dev/null || ho_nt_state_event "$1" done
       echo "OK done $1" ;;
     *)
       ho_tk_err "unknown verb: $verb"

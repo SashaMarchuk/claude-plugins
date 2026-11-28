@@ -892,6 +892,9 @@ ho_in_tick() {
   fi
   ho_in_close_asked
   ho_in_watch_all
+  # H-117, H-120: the channels are read at each due tick; first answers land on the ticket
+  # before the answers are read there (H-118).
+  if ho_nt_defined; then ho_nt_poll || true; fi
   ho_in_answers_all
   if ! ids=$(ho_tickets ids ready 2>/dev/null); then
     ho_in_record $(( $(ho_in_errors) + 1 )) || return 1

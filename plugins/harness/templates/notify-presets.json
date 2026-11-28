@@ -1,0 +1,30 @@
+{
+  "_comment": "Notification channel presets (H-115, H-122, design D36, S8-28a, D37-NOTIFICATIONS-3). A preset says how a channel names its senders and what only the owner can set up (OPEN-14). It holds no token and no address: those stay with the channel program or connector in the user config.",
+  "telegram": {
+    "sender": "the numeric user ID the bot reports for the sender",
+    "identity": "identities[].senders.telegram",
+    "authenticated_required": false,
+    "owner_actions": [
+      "Create the Telegram bot and keep its token with the channel program in your user-level setup.",
+      "Map each person's Telegram user ID under identities[].senders.telegram in the user config."
+    ]
+  },
+  "slack": {
+    "sender": "the Slack user ID of the sender",
+    "identity": "identities[].senders.slack",
+    "authenticated_required": false,
+    "owner_actions": [
+      "Pick the Slack chat and the route (a bot program or an MCP connector) and connect it in your user-level setup.",
+      "Map each person's Slack user ID under identities[].senders.slack in the user config."
+    ]
+  },
+  "gmail": {
+    "sender": "the sender address, only when Gmail reports that sender authentication passed",
+    "identity": "identities[].emails",
+    "authenticated_required": true,
+    "owner_actions": [
+      "Confirm the Gmail address the harness writes from and connect it in your user-level setup.",
+      "List each person's e-mail addresses under identities[].emails in the user config."
+    ]
+  }
+}

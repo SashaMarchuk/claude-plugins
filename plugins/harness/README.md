@@ -2,6 +2,21 @@
 
 This branch holds the stable-beta rebuild of the harness plugin. The 0.6.0 engine is removed here, and the new engine is not usable yet. Parts of the old engine come back only from the reuse list in the design, each with a behaviour test shown failing first. The released 0.6.0 code stays on `main`.
 
+Install: [docs/INSTALL.md](docs/INSTALL.md) (short guide, with a multi-worker recipe).
+
+## Tested with
+
+Flow systems tested with the harness so far: the shipped `basic` flow and the `gsd` flow (GSD), in the test suite with a fake runtime. Other flow systems may work, through an own flow (`bin/harness flow copy basic <new>`), but they are not tested. This list is updated from the evaluation results before the release.
+
+## Joining a project that already uses the harness
+
+You found a `.harness/` folder in a project.
+
+- **You do not want the harness:** ignore the folder and work as usual. Nothing in it runs by itself, adds a git hook or changes your build, tests or commits, so your work is not blocked. The harness acts only inside its own commands.
+- **You want the harness:** install the plugin ([docs/INSTALL.md](docs/INSTALL.md)), open Claude Code in the project and run `/harness:config`. It offers the committed configs (`.harness/config.json`, or `.harness/config.<name>.json` named for their owner) and records your choice in `.harness/local.json`, which stays on your machine. Until you confirm a config, no run starts (H-072).
+
+`/harness:config` can also write a short README into the project's `.harness/` folder (`templates/harness-folder-README.md`) that says the same to newcomers. The project's own README is not changed.
+
 ## Engine entry point
 
 The engine has one entry script: `bin/harness <verb> [args]`.
@@ -56,6 +71,9 @@ It never reads any `HARNESS_*` variable from the 0.6.0 engine.
 ## Config and run state
 
 - **Config lookup.** A project value beats a user value, and a user value beats the engine default. The project config is `<project>/.harness/config.json`. The user config is `$HO_USER_DIR/config.json`, by default `~/.claude/harness/config.json`. Only a missing key or `null` falls through to the next layer. Every config file must have `"schemaVersion": 2`; any other file is refused (exit 78) and the message names the file. The templates are in `templates/`.
+- **Committed configs and the local selection (H-070 to H-072, D37-FLOW-4, D37-FLOW-5).** A project may commit `.harness/config.json` (name `config`) and configs named for their owner, `.harness/config.<name>.json`. Each machine selects one in `.harness/local.json`, which is never committed (a selector that git tracks is refused): `bin/harness config select <name>` writes it with the config's name (no path) and makes git ignore that one file through the clone's local exclude file; the shared `.gitignore` does not change. Worktrees read the main checkout's selection. With a selection the lookup reads the selected config, then the user config, then the shipped default (`templates/default-config.json`: the `gsd` flow with `openspec` requirements, English). `config select --default [--flow F] [--format openspec|none]` confirms the default without a project config; `config save-default` saves that confirmation in the user config (`confirmed_default`) for projects that commit no config. `config format none` records a declined OpenSpec setup for this project on this machine, and it wins there. `config list`, `config status` and `config language` (the agent language, `agent.language`, English by default, H-077) show the state.
+- **The start check (H-072).** `bin/harness run new` calls `bin/harness config gate` first. With no selection it stops (exit 73) and asks once: it names the committed configs it found and `/harness:config`, or, with nothing configured, offers the default. A saved user default starts a project with no committed config without a question and is recorded as the source; it never accepts a committed config. A selection that names a missing or unreadable config stops too, with no fallback. With `--unattended` the stop also prints an attention line; it never picks. A config committed after a start on the default is announced once and used only after it is selected. Without a selection, `config get` and status still read `.harness/config.json`.
+- **The record of the approved profile (D37-FLOW-8 (b)).** `config select <name>` also records what the person approved: the autonomy profile the committed config selects and the value it gives for each field in `autonomy/ranking/raises.json` (the profile fields, `session.permissions`, `tickets.readiness.on_not_ready`, review bots, external review and its wait limits, and the "always a human" paths), with a sha256 digest. At every run start the gate compares the committed config with the record. A raise (a dropped field counts as one), or a change the ranking cannot place, stops the run (exit 73), names the fields and asks to select the config again with `/harness:config`. A lowering is accepted and the record updated. A selection with no record (as after an upgrade) or a record that does not match its digest stops the same way. A selection is never written from inside a harness session (exit 77).
 - **Run stamp.** `bin/harness run new` creates `<project>/.harness/runs/<run-id>/` with a `run.json` stamp. Every `bin/harness state <run-dir> ...` verb checks the stamp first. A folder without a valid stamp, such as a 0.6.0 run, is refused (exit 66) and nothing in it changes.
 - **Run ledger.** `ledger.jsonl` in the run folder holds decisions, owner actions, stops, resumes and marker events, one JSON line each. Lines are only appended, under a lock, and every line carries the run ID.
 - **Markers.** Each marker file holds the run ID. A marker without this run's ID is ignored and logged once as foreign.
@@ -139,6 +157,14 @@ Design D22, D23, D32, D37-SESSIONS-3, D37-SESSIONS-4. `lib/watch.sh`, `harness w
 A flow config is a folder with `flow.json` and one prompt file per step. It holds the steps, their order and their runners (S8-15). Gates and permissions belong to the autonomy profile, a separate file: a `flow.json` that sets one of its keys (`gates`, `push`, `pr`, `merge` and the like) is refused, and no flow verb writes outside the flow folder (D37-FLOW-3).
 
 Two ready-made flows ("flow profiles") ship in `flows/`: `gsd` and `basic`. Both give the default cycle (H-064): classification, discussion (grilling) only when classification finds open questions, planning, execution, code review, verification, UI check and shipping, in that order. `basic` writes every step out as a plain prompt and needs no flow system. `gsd` runs the middle steps through GSD, which must be installed; classification and shipping stay harness steps. A project's own flows live in `<project>/.harness/flows/<name>/`. A project flow may not have the name of a shipped flow, and its folder must stay inside the project.
+
+### Requirements format (H-076, D41, D37-FLOW-7)
+
+`requirements.format` is `openspec` or `none`; it resolves project, then user, then the confirmed default (OpenSpec, confirmed once with the flow). A recorded `none` in the local selection (`config format none`, after a declined OpenSpec setup) wins on this machine. A project without OpenSpec is a normal case, and an `openspec/` folder alone decides nothing. With `openspec`, the render adds one read-only block (`prompts/requirements-openspec.md`) to the step marked `"kind": "grilling"` (the `grill` step of both shipped flows), unless `requirements.use_in_grilling` is false. The block tells the session to read and cite the requirements and never to edit or adopt anything into them. No other step gets it, and the engine never creates `openspec/`; OpenSpec is set up only after a person's yes.
+
+### Project setup: `/harness:ai-ready` (H-129, H-074, D33a)
+
+`/harness:ai-ready` prepares a repository for AI development: it reviews `CLAUDE.md`, offers an `AGENTS.md` link, `SECURITY.md` and hooks where they fit, and offers OpenSpec only after a yes. It never installs or configures a flow system (D37-DISTRIBUTION-1), writes nothing under `.harness/`, and adds nothing the project would depend on: the harness installs no git hook and changes no shared file, so a clone works the same without the harness. It has no alias; the old `init` and `onboard` names point to `/harness:config`.
 
 - `bin/harness flow list` prints the shipped and the project flows; a missing flows folder stops with exit 78. `flow check <flow>` checks the flow file, every step prompt and the role prompts. `flow steps <flow>` prints the steps that are on, one per line: number, id, `always` or `questions`, title.
 - `bin/harness flow render <flow> <role> [--step <id>] [--set NAME VALUE]... [--file NAME PATH]...` prints a role prompt. The roles are `worker` (one step; needs `--step`) and `validator`. The role prompts are in `prompts/` and are the same for every flow.
@@ -249,6 +275,17 @@ Every close goes through `session close`, by the exact process, over this run's 
 
 Settings (OPEN-9): `run.standby` (`true` or `false`, default `false`), overridden for one run by `run new --standby on|off`. `run.on_only_human_blocked` (`wait` or `end`, default `wait`). Both are fixed in `<run>/lifecycle.json` at run start and written once to the ledger as `run-settings`. Any other value is a config error (exit 78).
 
+## Permission prompts (H-052, D37-AUTONOMY-1, D37-AUTONOMY-2)
+
+The permission mode stays your own setting: `session.permissions` in the user config (`bypass`, the shipped default, `auto`, `acceptEdits` or `dontAsk`). The plugin passes it to each session and enforces nothing else. Under `bypass` prompts normally do not appear.
+
+`session.permission_prompts` decides what the harness does when a permission prompt is on a session's screen (screen class `permission`). It never changes the mode and adds no deny list.
+
+- `off` (the default): no answer. One owner-action line goes to the run ledger, once per screen.
+- `analyse`: the main runtime reads the prompt with no tools, from an empty folder, with the screen inside an untrusted fence (`templates/permission-prompt.md`). If it answers `{"acceptable": true}`, the harness reads the screen again and, when it is unchanged, presses the runtime's accept-once key (`permission_prompt.accept_once` in the runtime profile) once and writes a `permission-answer` ledger line. It never picks "always allow". Doubt, a failed analysis, a changed screen or a runtime without the key escalates as with `off`. There is no always-accept value.
+
+The setting is read once at run start into `<run>/settings.json`. `bin/harness screen <run-dir> permission <session>` reads the screen and reacts; `screen ... watch` does the same when it sees the prompt. The setting is a recorded field of D37-FLOW-8: a committed config that moves it from `off` to `analyse` stops the next run start. The shipped screen pattern file has no permission shape yet, so until it gets one, real prompts read as other screen text; the tests use a synthetic pattern.
+
 ## Autonomy profiles
 
 An autonomy profile holds gates and permissions only; the steps stay in the flow config (D12, D37-FLOW-3). Four ready-made profiles ship in `autonomy/`. None of them deploys to production, and none names a stage environment.
@@ -259,7 +296,7 @@ An autonomy profile holds gates and permissions only; the steps stay in the flow
 - `full`: no human gates. It pushes, opens the PR, marks it ready and merges only when every mechanical condition holds (S8-08b). Then it runs the project's post-merge steps.
 - `custom`: set `autonomy.profile` to `custom` and every field in `autonomy.custom`, at your own risk. Only here may `merge` be `classifier`, and only here may `deploy_production` be true. A missing or unknown field is refused.
 
-Fields: `gates` (`{<point>: "auto" | "human"}`; a point is a flow step id or one of `start`, `readiness`, `pr`, `merge`), `push`, `pr` (`none`, `draft`, `ready`), `pr_open` (`none`, `after-validator` or a step id), `merge` (`never`, `always`, `classifier`), `post_merge`, `deploy_production`, `remarks` (`human`, `fix`) and `allow_zero_tests`. Select a profile with `autonomy.profile` in the project or user config. A config with no profile but with the 0.6.0 key `guardrails.never_push` gets `safe` for true and `draft-pr` for false. `bin/harness autonomy migrate <0.6.0-config>` prints the profile an old config file becomes.
+Fields: `gates` (`{<point>: "auto" | "human"}`; a point is a flow step id or one of `start`, `readiness`, `pr`, `merge`), `push`, `pr` (`none`, `draft`, `ready`), `pr_open` (`none`, `after-validator` or a step id), `merge` (`never`, `always`, `classifier`), `post_merge`, `deploy_production`, `remarks` (`human`, `fix`) and `allow_zero_tests`. Select a profile with `autonomy.profile` in the project or user config. A config with no profile but with the 0.6.0 key `guardrails.never_push` gets `safe` for true and `draft-pr` for false. A project config that sets `guardrails.never_push: true` and no profile of its own gets `safe`, whatever profile the user config names (#110). `bin/harness autonomy migrate <0.6.0-config>` prints the profile an old config file becomes.
 
 The engine checks the profile at every step boundary and before push, PR, merge and deploy, not per tool call (S8-08a): `bin/harness autonomy <run-dir> check <action>`, with the actions `start`, `step --step <id>`, `push`, `pr`, `pr-ready`, `merge`, `post-merge` and `deploy`. Exit 0 allows it, 76 means it waits for a human, 77 means the profile does not allow it, and 78 is a config error. Each check writes one ledger line. The profile is read at the first check of a run and kept in `<run>/autonomy.json`, so a config change during a run counts from the next run (H-036).
 
@@ -268,7 +305,7 @@ The engine checks the profile at every step boundary and before push, PR, merge 
 - **Local integration merge.** `loop merge` asks the profile first. It refuses when the profile allows no push and no merge, as `safe` does. Other profiles keep the loop's own checks. A config with no profile gets `safe`, so a test or project that merges locally must select a profile, for example `"autonomy": {"profile": "draft-pr"}`.
 - **Deploy.** Allowed only when the profile has `deploy_production: true` and the project config names a deployment (`deploy.use`) (H-049).
 - **Ticket end.** `autonomy <run-dir> end <ticket>` sets the ticket to needs-review when the profile never merges. Under a profile that merges, the ticket waits for the confirmed merge. With local tickets and `HO_TICKETS_DIR` unset, it acts on `<run's project>/.harness/tickets`, wherever it is called from, as intake and lifecycle do.
-- Not built here: the setup question for the profile (#74), the record of the approved profile in `.harness/local.json` and its comparison at run start (D37-FLOW-8), the push and PR steps that call these checks (#59), remarks and external review (#60), and the reaction to a ticket that is not ready (#51).
+- The setup question for the profile is `/harness:config`, and the record of the approved profile with its comparison at run start is in Config and run state. Not built here: the push and PR steps that call these checks (#59), remarks and external review (#60), and the reaction to a ticket that is not ready (#51).
 
 ## Feedback (H-140, D43, D60)
 

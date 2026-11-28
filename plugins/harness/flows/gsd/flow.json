@@ -13,7 +13,7 @@
   },
   "steps": [
     { "id": "classify",    "title": "Classification", "when": "always",    "prompt": "steps/classify.md" },
-    { "id": "grill",       "title": "Discussion (grilling)", "when": "questions", "prompt": "steps/grill.md" },
+    { "id": "grill", "kind": "grilling",       "title": "Discussion (grilling)", "when": "questions", "prompt": "steps/grill.md" },
     { "id": "plan",        "title": "Planning",       "when": "always",    "prompt": "steps/plan.md" },
     { "id": "execute",     "title": "Execution",      "when": "always",    "prompt": "steps/execute.md" },
     { "id": "code-review", "title": "Code review",    "when": "always",    "prompt": "steps/code-review.md" },

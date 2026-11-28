@@ -708,6 +708,12 @@ ho_screen_watch() {
       printf 'trust\n'
       return 0
       ;;
+    permission)
+      # H-052, D37-AUTONOMY-1: lib/permission.sh answers only under the analyse setting.
+      ho_perm_handle "$name" "$dir/$name.txt" >/dev/null || return $?
+      printf 'permission\n'
+      return 0
+      ;;
     password)
       if ! ho_screen_logged password "$name" "$digest"; then
         ho_ledger_append screen session "$name" shape password action owner-action digest "$digest"
@@ -731,6 +737,8 @@ verbs:
   classify <capture-file>              print limit | trust | password | none | unknown
   watch <session> [--reset <epoch|unknown>]
                                        read that session's screen, record it once and act
+  permission <session>                 a permission prompt on that screen: owner action, or one
+                                       accept under session.permission_prompts analyse
   pretrust <dir>                       trust a folder inside the project before a launch
   wait <epoch|unknown>                 the STOP-aware wait for a limit reset
 USAGE
@@ -747,6 +755,7 @@ ho_screen_main() {
     classify) ho_screen_classify "${1-}" ;;
     watch)    ho_screen_watch "$@" ;;
     pretrust) ho_screen_pretrust "${1-}" ;;
+    permission) ho_perm_main "$@" ;;
     wait)     ho_screen_wait "${1-}" ;;
     *) printf 'harness screen: unknown verb %s\n' "$verb" >&2; ho_screen_usage >&2; return 64 ;;
   esac

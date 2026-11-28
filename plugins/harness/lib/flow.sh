@@ -12,13 +12,16 @@
 #               "system": {"name", "link", "install", "skills": [...], "agents": [...], "steps": [ids]},
 #               "install": {"<skill>": "<install step>"},
 #               "steps": [{"id", "title", "when": "always" | "questions", "prompt",
-#                          "enabled": false, "runtime": "<label>", "kind": "review",
+#                          "enabled": false, "runtime": "<label>", "kind": "review" | "grilling",
 #                          "skills": [...], "agents": [...]}]}
 #
 # Step order is file order (H-066). "enabled": false switches a step off: it leaves every
 # step list, the numbering and the render. "runtime" names the step's runner, a runtime
 # profile label (lib/runtime.sh); a step without one uses config runtime.main. "kind":
-# "review" marks a review-type step (D37-RUNTIME-2).
+# "review" marks a review-type step (D37-RUNTIME-2). "kind": "grilling" marks the step that
+# settles open questions: with requirements.format openspec and requirements.use_in_grilling not
+# false, the render adds the one read-only block of prompts/requirements-openspec.md to it (D41,
+# H-076). With format none, or an openspec/ folder alone, nothing is added.
 # One source of steps per flow (D17, D37-FLOW-2): "source": "own" is an own step list and
 # carries no "system"; "source": "system" names a chosen system, whose "system.steps" are
 # the ids it owns. Those ids form one block, in that order; harness extra steps go only
@@ -44,8 +47,8 @@ HO_EXIT_DATA=65
 HO_EXIT_FLOW=78
 HO_FLOW_SCHEMA=2
 HO_FLOW_ROLES="worker validator"
-# Every placeholder a template may use. The engine fills the first five itself.
-HO_FLOW_ENGINE_TOKENS="FLOW_NAME FLOW_STEP_LIST STEP_ID STEP_TITLE STEP_TEXT"
+# Every placeholder a template may use. The engine fills the first six itself.
+HO_FLOW_ENGINE_TOKENS="FLOW_NAME FLOW_STEP_LIST STEP_ID STEP_TITLE STEP_TEXT AGENT_LANGUAGE"
 HO_FLOW_CALLER_TOKENS="RUN_ID TICKET_ID TICKET_TEXT BRANCH BASE WORKDIR STEP_RESULT_FILE VERDICT_FILE"
 # The caller values that may span lines. Every other caller value is one line of text.
 HO_FLOW_MULTILINE_TOKENS="TICKET_TEXT"
@@ -173,7 +176,7 @@ ho_flow_load() {
           or (.prompt | split("/") | any(. == ".." or . == "."))
           or (has("enabled") and ((.enabled | type) != "boolean"))
           or (has("runtime") and (.runtime | rtname | not))
-          or (has("kind") and .kind != "review")
+          or (has("kind") and (.kind | IN("review", "grilling") | not))
           or (has("skills") and ((.skills | type) != "array" or (.skills | any(skill | not))))
           or (has("agents") and ((.agents | type) != "array" or (.agents | any(agent | not))))) ] as $bad
       | if ($bad | length) > 0 then bad("bad step: \($bad[0] | tojson)")
@@ -393,7 +396,20 @@ ho_flow_render() {
   for name in $HO_FLOW_CALLER_TOKENS; do
     [ -s "$tmpd/$name" ] && valargs+=(--rawfile "V_$name" "$tmpd/$name")
   done
-  jq -nj --arg flow "$flow" --arg step "$step" ${valargs[@]+"${valargs[@]}"} \
+  # H-077: the agent language, English by default.
+  local lang reqf=/dev/null fmt use
+  lang=$(ho_sel_language) || exit "$HO_EXIT_FLOW"
+  # D41, H-076: the requirements block, only on a grilling step and only when the setting says so.
+  if [ -n "$step" ] && [ "$(jq -r --arg s "$step" '.steps[] | select(.id == $s) | .kind // ""' "$HO_FLOW_JSON")" = grilling ]; then
+    fmt=$(ho_cfg '.requirements.format' 'none') || exit "$HO_EXIT_FLOW"
+    use=$(ho_cfg '.requirements.use_in_grilling' 'true') || exit "$HO_EXIT_FLOW"
+    case $fmt in
+      openspec) [ "$use" = false ] || reqf="$HO_ROOT/prompts/requirements-openspec.md" ;;
+      none) ;;
+      *) printf 'harness: requirements.format must be openspec or none, not %s\n' "$fmt" >&2; exit "$HO_EXIT_FLOW" ;;
+    esac
+  fi
+  jq -nj --arg flow "$flow" --arg step "$step" --arg lang "$lang" --rawfile req "$reqf" ${valargs[@]+"${valargs[@]}"} \
     --slurpfile cfg "$HO_FLOW_JSON" --rawfile role "$role_file" --rawfile steptpl "$step_prompt" '
     def render($v):
       . as $t
@@ -407,6 +423,7 @@ ho_flow_render() {
     | ($ARGS.named | with_entries(select(.key | startswith("V_")) | .key |= .[2:])) as $vals
     | ($vals + {
         FLOW_NAME: $flow,
+        AGENT_LANGUAGE: $lang,
         FLOW_STEP_LIST: ([[$c.steps[] | select(.enabled != false)] | to_entries[]
           | "\(.key + 1). \(.value.title) (\(.value.id))"
             + (if .value.when == "questions" then ", only when classification finds open questions" else "" end)]
@@ -417,7 +434,7 @@ ho_flow_render() {
          | ($base + {STEP_ID: $s.id, STEP_TITLE: $s.title}) as $sb
          | ($steptpl | render($sb)) as $st
          | if ($st.missing | length) > 0 then error("missing or empty values: \($st.missing | unique | join(" "))")
-           else $sb + {STEP_TEXT: $st.out} end
+           else $sb + {STEP_TEXT: ($st.out + (if $req == "" then "" else "\n\n" + ($req | rtrimstr("\n")) + "\n" end))} end
        end) as $all
     | ($role | render($all)) as $r
     | if ($r.missing | length) > 0 then error("missing or empty values: \($r.missing | unique | join(" "))")

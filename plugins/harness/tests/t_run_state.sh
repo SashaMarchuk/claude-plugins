@@ -19,6 +19,7 @@ tree_sum() {
 }
 
 # ---- a new run is stamped ----------------------------------------------------
+select_config "$proj"
 run=$("$h" run new)
 id=$(basename "$run")
 assert_eq "Rebuild run: a new run lives under .harness/runs" "$proj/.harness/runs/$id" "$run"
@@ -226,6 +227,7 @@ rm "$proj/.harness/STOP"
 # project still stops the run (PR #87 re-check, B2).
 proj2="$PWD/proj2"; mkdir -p "$proj2/.harness" "$PWD/elsewhere-runs"
 cp "$proj/.harness/config.json" "$proj2/.harness/config.json"
+select_config "$proj2"
 ln -s "$PWD/elsewhere-runs" "$proj2/.harness/runs"
 run8=$(cd "$proj2" && HO_PROJECT_DIR="$proj2" "$h" run new)
 assert_eq "H-086 setup: a run starts in a project with a linked runs folder" "yes" "$([ -n "$run8" ] && [ -d "$run8" ] && echo yes || echo no)"

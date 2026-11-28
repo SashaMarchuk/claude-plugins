@@ -130,7 +130,7 @@ ho_deliver_setting() {
   local path=$1 def=$2 min=$3 max=$4 v
   # Presence counts, not truthiness: false or 0 in the project config is refused too.
   v=$(jq -r --arg p "$path" 'if type == "object" then (try getpath($p | ltrimstr(".") | split(".")) catch null) else null end
-    | if . == null then "" else "set" end' "$HO_PROJECT_DIR/.harness/config.json" 2>/dev/null) || v=set
+    | if . == null then "" else "set" end' "$(ho_project_config_file "$HO_PROJECT_DIR")" 2>/dev/null) || v=set
   if [ -n "$v" ]; then
     printf 'harness: the project config sets %s; it is a delivery safety setting and belongs in the user config %s\n' "${path#.}" "$(ho_user_config)" >&2
     return 65

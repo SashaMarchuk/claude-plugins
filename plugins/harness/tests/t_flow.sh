@@ -58,7 +58,7 @@ done
 
 # Shipped templates are plain ASCII and hold no double-brace token.
 tpl=$(cd "$HO_PLUGIN_ROOT" && find prompts flows -type f -name '*.md' 2>/dev/null | sort || true)
-assert_eq "H-064: 2 role prompts and 16 step prompts ship" "18" "$(printf '%s\n' "$tpl" | grep -c . || true)"
+assert_eq "H-064 D41: 2 role prompts, 16 step prompts and the requirements block ship" "19" "$(printf '%s\n' "$tpl" | grep -c . || true)"
 assert_eq "H-064: shipped templates hold no double-brace token" "" \
   "$(cd "$HO_PLUGIN_ROOT" && grep -lE '\{\{|\}\}' $tpl /dev/null || true)"
 assert_eq "H-064: shipped templates are plain ASCII" "" \

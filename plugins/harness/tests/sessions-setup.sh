@@ -26,6 +26,7 @@ export HO_FAKE_TERM_DIR="$base/term" HO_FAKE_CLAUDE_LOG="$base/claude.log" HO_FA
 # own state file in the scratch HOME). Pre-trust of a working folder needs that consent.
 trust_root() { jq -n --arg p "$proj" '.projects[$p].hasTrustDialogAccepted = true' > "$HOME/.claude.json"; }
 trust_root
+select_config "$proj"
 run=$("$h" run new)
 printf 'do the work\n' > "$base/prompt.md"
 

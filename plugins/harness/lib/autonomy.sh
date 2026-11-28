@@ -70,9 +70,18 @@ ho_au_problems() {
     end' 2>/dev/null || echo "the profile is not readable JSON"
 }
 
-# ho_au_name: print "<profile name> TAB <source>" from the config lookup.
+# ho_au_name: print "<profile name> TAB <source>" from the config lookup. A project config that
+# sets guardrails.never_push true and no profile of its own selects safe: a user's
+# autonomy.profile never overrides it (wave-4 follow-up #110; fail closed).
 ho_au_name() {
-  local name np
+  local name np proj pf pnp
+  if proj=$(ho_project_root 2>/dev/null); then
+    pf=$(ho_sel_project_config "$proj") || return 78
+    if [ -n "$pf" ]; then
+      pnp=$(jq -r 'if (.autonomy.profile // null) == null and .guardrails.never_push == true then "yes" else "no" end' "$pf" 2>/dev/null) || return 78
+      [ "$pnp" = no ] || { printf 'safe\tproject guardrails.never_push true\n'; return 0; }
+    fi
+  fi
   name=$(ho_cfg '.autonomy.profile' '') || return 78
   if [ -n "$name" ]; then printf '%s\tconfig autonomy.profile\n' "$name"; return 0; fi
   np=$(ho_cfg '.guardrails.never_push' '') || return 78

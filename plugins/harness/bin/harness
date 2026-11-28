@@ -22,6 +22,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/files.sh"
 # shellcheck source=../lib/config.sh
 . "$HO_ROOT/lib/config.sh"
+# shellcheck source=../lib/select.sh
+. "$HO_ROOT/lib/select.sh"
 # shellcheck source=../lib/run.sh
 . "$HO_ROOT/lib/run.sh"
 # shellcheck source=../lib/term.sh
@@ -44,6 +46,8 @@ export HO_ROOT
 . "$HO_ROOT/lib/runtime.sh"
 # shellcheck source=../lib/screen.sh
 . "$HO_ROOT/lib/screen.sh"
+# shellcheck source=../lib/permission.sh
+. "$HO_ROOT/lib/permission.sh"
 # shellcheck source=../lib/intake.sh
 . "$HO_ROOT/lib/intake.sh"
 # shellcheck source=../lib/ship.sh
@@ -74,7 +78,7 @@ verbs:
   help       print this help
   selftest   check that no 0.6.0 variable or script can leak into this engine
   tickets    the ticket queue (run "harness tickets help")
-  config     config get <jq-path> [default] | config get --int <jq-path> <default> | config check
+  config     config get|check|list|select|save-default|format|status|gate|language (config help)
   run        run new [--workers N] [--standby on|off]: create a stamped run in this project
   state      state <run-dir> <verb>: markers, run ledger, stop (state help for verbs)
   session    session <run-dir> launch|close|list|status|read|deliver|proof: sessions, their liveness and instructions

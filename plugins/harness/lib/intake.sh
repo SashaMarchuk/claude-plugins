@@ -522,6 +522,15 @@ ho_in_watch_init() {
     --arg b "$(printf '%s' "$json" | jq -r '.body // ""' | ho_in_digest)" \
     '{seen: $n, body: $b, edit_noted: false}' | ho_atomic_write "$(ho_in_watch_file "$id")"
 }
+# ho_in_watch_skip <id>: every comment so far counts as read; the saved description and digest
+# stay. With no watch file yet, a full init.
+ho_in_watch_skip() {
+  local wf n
+  wf=$(ho_in_watch_file "$1")
+  [ -f "$wf" ] || { ho_in_watch_init "$1"; return; }
+  n=$(gh issue view "$1" --repo "$HO_TK_REPO" --json comments 2>/dev/null | jq '.comments | length') || return 1
+  jq -c --argjson n "$n" '.seen = $n' "$wf" | ho_atomic_write "$wf"
+}
 # ho_in_merged <id>: the ticket's lane has a merge-confirmed line in this run.
 ho_in_merged() {
   local lj lane
@@ -589,6 +598,18 @@ ho_in_watch() {
       who=writer st=ready
       case $first in harness:apply) mode=apply ;; harness:new-ticket) mode=new-ticket ;; *) mode=$HO_IN_CHANGES ;; esac
       [ "$mode" = apply ] && ho_in_merged "$id" && mode=new-ticket
+      # A writer's new ticket starts ready, labelled by the harness account, so the author's own
+      # access on every target the comment names is checked here (D37-FLOW-8 c); a gap makes it
+      # start in needs-review instead.
+      if [ "$mode" = new-ticket ]; then
+        while IFS= read -r repo; do
+          [ -n "$repo" ] || continue
+          printf '%s\n' "$body" | LC_ALL=C grep -Fqi -- "$repo" || continue
+          [ "$(ho_tk_access "$login" "$repo")" = writer ] || { st=needs-review; break; }
+        done <<EOF_NT
+$(ho_in_targets | grep -vxF -- "$HO_TK_REPO" || true)
+EOF_NT
+      fi
     fi
     [ "$who" = reader ] && mode=new-ticket
     case $mode in
@@ -690,8 +711,10 @@ ho_in_answers() {
         "The work resumes from the first step whose result does not exist yet." || return 1
       ho_ledger_append answer ticket "$id" comment "$k" by "$login" verdict resumed
       mkdir -p "$HO_RUN_DIR/intake/answers" && jq -cn --argjson n "$((total + 1))" '{seen: $n}' | ho_atomic_write "$af" || return 1
-      # The answers and the status comment are no ticket change (H-019): the watch starts anew.
-      ho_in_watch_init "$id" || return 1
+      # The answers and the status comment are no ticket change (H-019): the watch reads on from
+      # here. The description picked up stays (D37-INTAKE-7): an edit made while the ticket
+      # waited still gets its notice at the next watch.
+      ho_in_watch_skip "$id" || return 1
       echo "resume $id"
       return 0
     fi
@@ -753,11 +776,12 @@ ho_in_unpause() {
     [ -f "$f" ] || continue
     t=${f##*/}; t=${t%.json}
     u=$(jq -r '.for // ""' "$f" 2>/dev/null) || u=""
-    # The pause holds while its urgent ticket waits for the slot (ready) or runs (in progress or
-    # blocked); a state that cannot be read keeps it too.
+    # The pause holds while its urgent ticket waits for the slot (ready) or runs (in progress); a
+    # state that cannot be read keeps it too. A blocked urgent ticket waits for a person, so the
+    # paused lane goes on meanwhile (H-032); the urgent ticket pauses a lane again if it needs one.
     case $u in '' | *[!0-9]*) ;; *)
       st=$(ho_tk_gh_state "$u" 2>/dev/null) || continue
-      case " $st " in *" ready "* | *" in-progress "* | *" blocked "*) continue ;; esac ;;
+      case " $st " in *" ready "* | *" in-progress "*) continue ;; esac ;;
     esac
     rm -f "$f" || continue
     ho_ledger_append urgent-unpause ticket "$t" for "$u"
@@ -885,7 +909,7 @@ ho_in_tick() {
     for id in $ids; do if ho_in_is_urgent "$id"; then urg="$urg $id"; else rest="$rest $id"; fi; done
     act=$(ho_in_active_urgent)
     for id in $urg; do
-      if [ -n "$act" ]; then echo "urgent-waiting $id"; continue; fi
+      if [ -n "$act" ] && [ "$act" != "$id" ]; then echo "urgent-waiting $id"; continue; fi
       if [ "$started" -ge "$free" ]; then
         ho_in_pause_newest "$id" || return
         echo "urgent-waiting $id"

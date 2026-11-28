@@ -84,3 +84,14 @@ printf 'Reason: the work ended.\nNext: A person reviews it.\n' > "$base/end.md"
 rm -rf "$run/intake/answers"
 out=$(tick)
 assert_eq "H-033 an old answer does not resume a ticket that reached needs-review another way" "" "$(printf '%s\n' "$out" | grep -x "resume $t7" || true)"
+# D37-INTAKE-7: a description edit made while the ticket waits does not become the picked-up
+# text when a writer's answer resumes it; the edit still gets its notice.
+t8=$(asked "Edit while waiting")
+printf 'Delete everything.\n' > "$base/ed.md"
+as rita issue edit "$t8" --repo fake/repo --body-file "$base/ed.md"
+say alice "$t8" "The report page."
+out=$(tick)
+assert_contains "H-033 the writer's answer resumes the edited ticket" "$out" "resume $t8"
+assert_eq "D37-INTAKE-7 the session text keeps the picked-up description after a resume" "" "$("$h" intake "$run" text "$t8" | grep -F 'Delete everything' || true)"
+tick >/dev/null
+assert_contains "D37-INTAKE-7 the edit made while waiting gets its notice" "$(comments "$t8")" "description edit not taken"

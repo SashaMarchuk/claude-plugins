@@ -66,5 +66,28 @@ urgent rita "$t5"
 out=$(tick)
 assert_contains "D3 a reader's urgent label gives no priority: the older ticket starts" "$out" "start $t4"
 assert_contains "D3 the refused urgency is recorded" "$(jq -c 'select(.kind == "urgent-refused")' "$run/ledger.jsonl")" "\"ticket\":\"$t5\""
+# An urgent ticket that asked a question lets its pause go (other work goes on, H-032), and a
+# writer's ready label unblocks it without it waiting for itself.
+"$h" tickets "done" "$t4" >/dev/null; "$h" tickets "done" "$t5" >/dev/null
+t6=$(ticket "Running lane")
+label alice "$t6" ready
+tick >/dev/null
+hold w6
+t7=$(ticket "Urgent asks")
+label alice "$t7" ready
+urgent alice "$t7"
+out=$(tick)
+assert_contains "H-084 the urgent ticket pauses the running lane" "$out" "pause $t6 for $t7"
+free w6
+out=$(tick)
+assert_contains "H-083 the urgent ticket starts in the freed slot" "$out" "start $t7"
+printf 'Which page?\n' > "$base/q.md"
+HO_SESSION_ROLE=worker "$h" tickets ask "$t7" "$base/q.md" >/dev/null
+out=$(tick)
+assert_contains "H-032 a blocked urgent ticket lets the paused lane go on" "$out" "unpause $t6"
+label alice "$t7" ready
+out=$(tick)
+assert_eq "D3 an urgent ticket never waits for itself" "" "$(printf '%s\n' "$out" | grep -x "urgent-waiting $t7" || true)"
+assert_contains "H-031 the writer's ready label unblocks the urgent ticket" "$out" "unblocked $t7"
 jq '.tickets.urgent.pause = "now"' "$proj/.harness/config.json" > "$base/c.json" && mv "$base/c.json" "$proj/.harness/config.json"
 assert_exit "H-084 an unknown pause type is refused (exit 78)" 78 tick

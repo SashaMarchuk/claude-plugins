@@ -87,6 +87,13 @@ out=$(HO_FAKE_GH_FAIL_API=repos/fake/api/ tick)
 assert_contains "D37-FLOW-8 a change naming a target without confirmed access is not applied" "$out" "needs-review $t6"
 assert_eq "D37-FLOW-8 the ticket moves to needs-review" '["harness:needs-review"]' "$(labels "$t6")"
 assert_contains "D37-FLOW-8 the comment names the repository" "$(jq -r '.comments[-1].body' "$HO_FAKE_GH_DIR/issues/$t6.json")" "fake/api"
+# D37-FLOW-8 (c): a writer's new ticket that names a target without the author's access starts in needs-review.
+t6b=$(take "Target new ticket")
+say alice "$t6b" "harness:new-ticket
+Port this to fake/api."
+out=$(HO_FAKE_GH_FAIL_API=repos/fake/api/ tick)
+new6=$(printf '%s\n' "$out" | sed -n "s/^change-ticket $t6b //p")
+assert_eq "D37-FLOW-8 a writer's new ticket naming a target without access is created in needs-review" "harness:needs-review" "$(jq -r '[.[] | select(.event == "labeled")][0].label.name' "$HO_FAKE_GH_DIR/events/$new6.json")"
 setcfg 'del(.tickets.target_repos)'
 
 # D37-INTAKE-7: a description edit is no change; the first one gets one comment asking for a comment.

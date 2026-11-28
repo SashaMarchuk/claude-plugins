@@ -22,6 +22,7 @@ live_workers() {
   done
   printf '%s\n' "$c"
 }
+sleep_marks "$base/marks"
 # wait_file <file> [tenths]: wait until the file exists.
 wait_file() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt "${2:-300}" ]; do sleep 0.1; i=$((i + 1)); done; [ -e "$1" ]; }
 
@@ -29,17 +30,18 @@ wait_file() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt "${2:-300}" ]; do sle
 r=$("$h" run new --workers 1)
 wl "$r" w1 >/dev/null
 p1=$(pid_of "$r" w1)
+# Each launch marks its slot wait (the sleep after a failed try), so the records are aged only
+# once all three really wait (issue #109). The two that lose wait out their --slot-wait.
 for n in a b c; do
-  (c=0; wl "$r" "$n" --slot-wait 12 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-$n") &
+  (c=0; PATH="$base/marks:$PATH" T_SLEEP_MARK="$base/wait-$n" wl "$r" "$n" --slot-wait 20 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-$n") &
 done
-for n in a b c; do wait_file "$r/sessions/$n.json" || bad "test setup: $n has no record" ""; done
-sleep 0.5
+for n in a b c; do wait_mark "$base/wait-$n" 0.5 || bad "test setup: launch $n does not wait for a slot" ""; done
 age "$r"/sessions/a.json "$r"/sessions/b.json "$r"/sessions/c.json
 assert_eq "H-105: a launch waiting for a slot reads as starting at any age, never dead" "starting starting starting" \
   "$(for n in a b c; do "$h" session "$r" status "$n" | jq -r .liveness; done | tr '\n' ' ' | sed 's/ $//')"
 kill "$p1"
 wait_gone "$p1" || bad "test setup: w1 did not end" "$p1"
-for n in a b c; do wait_file "$base/rc-$n" 200 || bad "test setup: launch $n did not return" ""; done
+for n in a b c; do wait_file "$base/rc-$n" 600 || bad "test setup: launch $n did not return" ""; done
 assert_eq "H-105: old waiting launches: cap 1 never shows two worker processes" 1 "$(live_workers "$r" a b c)"
 assert_eq "H-105: old waiting launches: one launched, two reported no free slot" "0 73 73" \
   "$(cat "$base/rc-a" "$base/rc-b" "$base/rc-c" | sort -n | tr '\n' ' ' | sed 's/ $//')"
@@ -67,12 +69,14 @@ cp "$base/user.orig.json" "$user/config.json"
 
 # ---- the launch command is killed while its launcher is still in the account command ----
 r=$("$h" run new --workers 1)
-acct '[ -n "${HO_SESSION_NAME:-}" ] && sleep 4; echo FOO=bar'
+# The launcher's account command waits while the hold file exists, so the kill always lands
+# before any session starts, however slow the machine is (issue #109).
+acct '[ -z "${HO_SESSION_NAME:-}" ] || while [ -e "'"$base"'/hold-k1" ]; do sleep 0.1; done; echo FOO=bar'
+: > "$base/hold-k1"
 wl "$r" k1 >/dev/null 2>&1 &
 wrap=$!
-i=0; while [ "$(jq -r '.handle // ""' "$r/sessions/k1.json" 2>/dev/null)" = "" ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i + 1)); done
-# The launch command itself, by the PID it recorded ($! is only the shell around it). The
-# launcher sleeps 4 s in its account command, so the kill lands before any session starts.
+i=0; while [ "$(jq -r '.handle // ""' "$r/sessions/k1.json" 2>/dev/null)" = "" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
+# The launch command itself, by the PID it recorded ($! is only the shell around it).
 lp=$(jq -r .launch_pid "$r/sessions/k1.json")
 assert_eq "test setup: the recorded launch PID is the running launch command" yes \
   "$(ps -o command= -p "$lp" 2>/dev/null | grep -q -- ' launch ' && echo yes || echo no)"
@@ -85,8 +89,9 @@ assert_eq "test setup: the launch command is gone and no session runs yet" "laun
 assert_eq "H-105: a launcher that is still starting keeps the record starting at any age" starting \
   "$("$h" session "$r" status k1 | jq -r .liveness)"
 assert_exit "H-105: killed launch: its slot is not freed, so the next worker waits" 73 wl "$r" k2
-wait_file "$r/sessions/k1.pid" 100 || bad "test setup: the k1 launcher did not start its session" ""
-sleep 0.5
+rm -f "$base/hold-k1"
+wait_file "$r/sessions/k1.pid" 300 || bad "test setup: the k1 launcher did not start its session" ""
+i=0; while [ "$("$h" session "$r" status k1 | jq -r .liveness)" != working ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
 assert_eq "H-105: killed launch: cap 1 never shows two worker processes" 1 "$(live_workers "$r" k1 k2)"
 kp=$(pid_of "$r" k1)
 assert_contains "H-105: once its launch command is gone, close ends the session of a launching record" \
@@ -182,13 +187,16 @@ jq -n --arg run "$(basename "$r")" '{run: $run, kind: "worker", holder: "u1", op
 # notty <cmd...>: run the command in a new session, with no terminal at all.
 notty() { perl -e 'use POSIX; POSIX::setsid(); exec @ARGV or exit 127' "$@"; }
 assert_exit "H-105: a forced worker release with no terminal is refused" 65 notty "$h" slot "$r" release worker --holder u1 --force
-# answer <text> <cmd...>: run the command on a terminal (script) and type the text until it reads it.
-# The exit is the command's own: the typing loop may end by a broken pipe once the command is done.
+# answer <text> <cmd...>: run the command on a terminal (script); once it has printed anything (its
+# prompt, or a refusal), type the text until it is done (issue #109: no fixed typing window).
+# The exit is the command's own: the typing loop ends by a broken pipe once the command is done.
 answer() {
-  local a=$1 st
+  local a=$1 st scr i=0
   shift
-  { for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do sleep 0.5; printf '%s\n' "$a" || break; done; } 2>/dev/null \
-    | script -q /dev/null "$@" >/dev/null 2>&1 && st=0 || st=${PIPESTATUS[1]}
+  scr=$(mktemp "$base/answer.XXXXXX")
+  { while [ ! -s "$scr" ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
+    for _ in $(seq 1 60); do printf '%s\n' "$a" || break; sleep 0.5; done; } 2>/dev/null \
+    | script -q /dev/null "$@" > "$scr" 2>&1 && st=0 || st=${PIPESTATUS[1]}
   return "$st"
 }
 rc=0; answer nope "$h" slot "$r" release worker --holder u1 --force || rc=$?
@@ -215,7 +223,7 @@ assert_eq "H-090: a narrow view with an end file next to a live worker reads unk
 rm -f "$r/sessions/e1.ended"
 # A real end under the same narrow view still reads dead: the kernel says no such process.
 kill "$ep"; wait_gone "$ep" || bad "test setup: e1 did not end" "$ep"
-i=0; while [ "$(PATH="$base/selfps:$PATH" "$h" session "$r" status e1 | jq -r .liveness)" != dead ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+i=0; while [ "$(PATH="$base/selfps:$PATH" "$h" session "$r" status e1 | jq -r .liveness)" != dead ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
 assert_eq "H-090: a worker that really ended reads dead under a narrow view too" dead \
   "$(PATH="$base/selfps:$PATH" "$h" session "$r" status e1 | jq -r .liveness)"
 
@@ -224,11 +232,11 @@ r=$("$h" run new --workers 3)
 wl "$r" q1 >/dev/null
 wl "$r" q2 >/dev/null
 assert_exit "test setup: q1 takes the heavy slot" 0 "$h" slot "$r" acquire heavy --holder q1 --op image-build
-(c=0; "$h" slot "$r" acquire heavy --holder q2 --op app-build --wait 20 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-q2") &
-sleep 1
+(c=0; PATH="$base/marks:$PATH" T_SLEEP_MARK="$base/wait-q2" "$h" slot "$r" acquire heavy --holder q2 --op app-build --wait 60 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-q2") &
+wait_mark "$base/wait-q2" 0.5 || bad "test setup: q2 does not wait for the heavy slot" ""
 assert_contains "test setup: q2 is closed while it waits" "$("$h" session "$r" close q2 2>&1)" "closed"
 "$h" slot "$r" release heavy --holder q1 >/dev/null
-wait_file "$base/rc-q2" 250 || bad "test setup: the q2 acquire did not return" ""
+wait_file "$base/rc-q2" 600 || bad "test setup: the q2 acquire did not return" ""
 assert_eq "H-107: a wait for a session closed meanwhile ends non-zero and records no slot for it" "nonzero none" \
   "$([ "$(cat "$base/rc-q2")" -ne 0 ] && echo nonzero || echo zero) $([ -f "$r/slots/heavy/q2.json" ] && echo held || echo none)"
 
@@ -241,9 +249,9 @@ fo=$( (sleep 3000 > /dev/null 2>&1 & echo $!) ); echo "$fo" >> "$base/extra.pids
 fs=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$fo" | sed 's/^ *//; s/ *$//')
 : > "$base/f1.screen"
 # Once the prompt shows, the record gains a live launch command, then the name is typed.
-{ i=0; while ! grep -q 'Type the session name' "$base/f1.screen" 2>/dev/null && [ $i -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+{ i=0; while ! grep -q 'Type the session name' "$base/f1.screen" 2>/dev/null && [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
   jq --argjson p "$fo" --arg s "$fs" '.launch_pid = $p | .launch_start = $s' "$r/sessions/f1.json" > "$base/f1.json" && mv "$base/f1.json" "$r/sessions/f1.json"
-  for _ in 1 2 3 4 5 6; do printf 'f1\n' || break; sleep 0.5; done; } 2>/dev/null \
+  for _ in $(seq 1 60); do printf 'f1\n' || break; sleep 0.5; done; } 2>/dev/null \
   | script -q /dev/null "$h" slot "$r" release worker --holder f1 --force > "$base/f1.screen" 2>&1 && rc=0 || rc=${PIPESTATUS[1]}
 assert_eq "H-105: a holder that reads starting after the answer keeps its slot, and no close flag is left" "65 held no" \
   "$rc $([ -f "$r/slots/worker/f1.json" ] && echo held || echo freed) $([ -f "$r/sessions/f1.closing" ] && echo yes || echo no)"
@@ -277,16 +285,17 @@ wl "$r" s1 >/dev/null
 wl "$r" s2 >/dev/null
 assert_exit "test setup: s1 takes the heavy slot" 0 "$h" slot "$r" acquire heavy --holder s1 --op image-build
 assert_exit "test setup: s1 takes the stage slot" 0 "$h" slot "$r" acquire stage:browser --holder s1
-(c=0; "$h" slot "$r" acquire heavy --holder s2 --op app-build --wait 30 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-sh") &
-(c=0; "$h" slot "$r" acquire stage:browser --holder s2 --wait 30 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-ss") &
-sleep 1.5
+(c=0; PATH="$base/marks:$PATH" T_SLEEP_MARK="$base/wait-sh" "$h" slot "$r" acquire heavy --holder s2 --op app-build --wait 60 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-sh") &
+(c=0; PATH="$base/marks:$PATH" T_SLEEP_MARK="$base/wait-ss" "$h" slot "$r" acquire stage:browser --holder s2 --wait 60 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-ss") &
+wait_mark "$base/wait-sh" 0.5 || bad "test setup: the heavy acquire does not wait" ""
+wait_mark "$base/wait-ss" 0.5 || bad "test setup: the stage acquire does not wait" ""
 i=0; until mkdir "$r/slots/.lock" 2>/dev/null; do sleep 0.05; i=$((i + 1)); [ $i -lt 200 ] || break; done
 "$h" state "$r" stop "test stop" >/dev/null
 "$h" slot "$r" release heavy --holder s1 >/dev/null
 "$h" slot "$r" release stage:browser --holder s1 >/dev/null
 rm -rf "$r/slots/.lock"
-wait_file "$base/rc-sh" 250 || bad "test setup: the heavy wait did not return" ""
-wait_file "$base/rc-ss" 250 || bad "test setup: the stage wait did not return" ""
+wait_file "$base/rc-sh" 600 || bad "test setup: the heavy wait did not return" ""
+wait_file "$base/rc-ss" 600 || bad "test setup: the stage wait did not return" ""
 assert_eq "D25a: a soft stop during a heavy wait of a running session gives it the slot" "0 held" \
   "$(cat "$base/rc-sh") $([ -f "$r/slots/heavy/s2.json" ] && echo held || echo none)"
 assert_eq "D25a: a soft stop during a stage wait of a running session gives it the slot" "0 held" \

@@ -62,9 +62,11 @@ assert_eq "H-105: the losing starts wrote no launcher, so no terminal ran one" 3
 
 # The loser waits, then starts as soon as the slot is free.
 wl "$r" c1 >/dev/null
-(c=0; wl "$r" c2 --slot-wait 30 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-c2") &
+sleep_marks "$base/marks"
+# The waiter marks each sleep after a failed try: the check below runs once it really waits.
+(c=0; PATH="$base/marks:$PATH" T_SLEEP_MARK="$base/wait-c2" wl "$r" c2 --slot-wait 60 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-c2") &
 waiter=$!
-sleep 2
+wait_mark "$base/wait-c2" 0.5 || bad "test setup: c2 does not wait for a slot" ""
 assert_eq "H-105: a start that waits for the slot has not launched yet" "" "$(cat "$base/rc-c2" 2>/dev/null || true)"
 assert_eq "H-105: while one waits, only one worker runs" 1 "$(working_workers "$r")"
 "$h" session "$r" close c1 >/dev/null
@@ -77,7 +79,7 @@ p=$(jq -r .pid "$r/sessions/c2.json")
 kill "$p"
 wait_gone "$p" || bad "test setup: c2 did not end" "$p"
 # The launcher may still try the next model; it ends (or gives up) at once, as no model is left.
-i=0; while [ "$("$h" session "$r" status c2 | jq -r .liveness)" = starting ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+i=0; while [ "$("$h" session "$r" status c2 | jq -r .liveness)" = starting ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
 assert_exit "H-105: a worker whose process died frees its slot" 0 wl "$r" c3
 assert_contains "H-105: the freed slot is in the ledger" "$(grep slot-freed "$r/ledger.jsonl")" '"holder":"c2"'
 
@@ -91,9 +93,9 @@ for n in h1 h2 h3 g1 g2; do holder "$r" "$n"; done
 assert_eq "D26: the shipped heavy list has six types" 6 "$("$h" slot "$r" heavy-ops | wc -l | tr -d ' ')"
 assert_exit "H-107: the first heavy job takes the slot" 0 "$h" slot "$r" acquire heavy --holder h1 --op image-build
 assert_exit "H-107: a second heavy job does not start while the first runs" 73 "$h" slot "$r" acquire heavy --holder h2 --op app-build
-(c=0; "$h" slot "$r" acquire heavy --holder h2 --op app-build --wait 30 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-h2") &
+(c=0; PATH="$base/marks:$PATH" T_SLEEP_MARK="$base/wait-h2" "$h" slot "$r" acquire heavy --holder h2 --op app-build --wait 60 >/dev/null 2>&1 || c=$?; echo "$c" > "$base/rc-h2") &
 waiter=$!
-sleep 1.5
+wait_mark "$base/wait-h2" 0.5 || bad "test setup: h2 does not wait for the heavy slot" ""
 assert_eq "H-107: the second heavy job waits" "" "$(cat "$base/rc-h2" 2>/dev/null || true)"
 "$h" slot "$r" release heavy --holder h1 >/dev/null
 wait "$waiter"
@@ -202,16 +204,19 @@ cp "$base/config.orig.json" "$cfg"
 # Its record still says launching. Past the launch window its live session is not dead.
 r=$("$h" run new --workers 1)
 # The launch command itself is killed (not a shell around it), as when a tool call times out.
-# A slow account command keeps the launch in its boot check, so the kill always lands there.
-jq '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: "[ -n \"${HO_SESSION_NAME:-}\" ] && sleep 2; echo FOO=bar"}}}' \
+# The launcher's account command waits while the hold file exists, so the launch is in its boot
+# check when it is killed, however slow the machine is (issue #109).
+jq --arg hold "$base/hold-k3" '.accounts = {roles: {default: "acc"}, list: {acc: {env_command: ("[ -z \"${HO_SESSION_NAME:-}\" ] || while [ -e \"" + $hold + "\" ]; do sleep 0.1; done; echo FOO=bar")}}}' \
   "$base/user.orig.json" > "$user/config.json"
+: > "$base/hold-k3"
 "$h" session "$r" launch --role worker --name k3 --cwd "$proj/src" --prompt "$base/prompt.md" >/dev/null 2>&1 &
 lp=$!
-i=0; while [ "$(jq -r '.handle // ""' "$r/sessions/k3.json" 2>/dev/null)" = "" ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i + 1)); done
+i=0; while [ "$(jq -r '.handle // ""' "$r/sessions/k3.json" 2>/dev/null)" = "" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
 kill -9 "$lp" 2>/dev/null || true; wait "$lp" 2>/dev/null || true
 cp "$base/user.orig.json" "$user/config.json"
-i=0; while [ ! -s "$r/sessions/k3.pid" ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i + 1)); done
-sleep 0.5
+rm -f "$base/hold-k3"
+i=0; while [ ! -s "$r/sessions/k3.pid" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
+i=0; while ! alive "$(pidof_s "$r" k3)" && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
 kp=$(pidof_s "$r" k3)
 assert_eq "test setup: the record says launching and the session runs" "launching yes" "$(jq -r .status "$r/sessions/k3.json") $(alive "$kp" && echo yes || echo no)"
 touch -t "$(date -v-1H '+%Y%m%d%H%M' 2>/dev/null || date -d '-1 hour' '+%Y%m%d%H%M')" "$r/sessions/k3.json"

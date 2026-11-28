@@ -352,7 +352,11 @@ n=0; while [ ! -s "$PWD/gsleep.pid" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n 
 kill -TERM "$hp"
 rc=0; wait "$hp" || rc=$?
 assert_eq "H-046 signal: a merge stopped by TERM exits 75" 75 "$rc"
-sleep 0.5
+# The gate's processes end after the merge returned; wait for that end (a generous cap, issue #109).
+for f in gate.pid gsleep.pid; do
+  p=$(cat "$PWD/$f" 2>/dev/null || echo 0)
+  n=0; while [ "$p" != 0 ] && ps -o pid= -p "$p" >/dev/null 2>&1 && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done
+done
 assert_eq "H-046 signal: no merge is confirmed after TERM" "$confirmed_before" "$(ledger_has merge-confirmed)"
 assert_eq "H-046 signal: the branch is back at its tip" "$cur" "$(tip)"
 assert_eq "H-046 signal: the merge lock is released" "no" "$([ -e "$run/merge.lock" ] && echo yes || echo no)"
@@ -369,8 +373,11 @@ cur=$(tip)
 lane q q.txt "from q"; verdict q passed
 sh -c 'exit 0' & dead=$!; wait "$dead" || true
 mkdir "$run/merge.lock"; echo "$dead" > "$run/merge.lock/pid"; mkdir "$run/merge.lock/takeover"
-"$h" loop "$run" merge q >/dev/null 2>"$PWD/err" & hp=$!
-sleep 1.5
+# The merge marks each pass of its lock wait (sleep 0.1); three passes prove it saw the lock
+# under takeover three times and left it (issue #109).
+sleep_marks "$PWD/marks"
+PATH="$PWD/marks:$PATH" T_SLEEP_MARK="$PWD/wait-q" "$h" loop "$run" merge q >/dev/null 2>"$PWD/err" & hp=$!
+wait_mark "$PWD/wait-q" 0.1 3 || bad "test setup: the merge does not wait for the lock" ""
 assert_eq "Rebuild loop lock: a lock under takeover by another waiter is not removed" "$dead" "$(cat "$run/merge.lock/pid" 2>/dev/null || echo gone)"
 rmdir "$run/merge.lock/takeover" 2>/dev/null || true
 rc=0; wait "$hp" || rc=$?

@@ -11,6 +11,6 @@ Resume a harness run: $ARGUMENTS
 2. If it stops:
    - the STOP file exists: tell the person its path; it must be removed first. Never remove it yourself.
    - no unfinished run: say so and offer `/harness:run`.
-   - `recovery.ask_first` is set (exit 77): ask the person with AskUserQuestion whether to resume; on yes run `run resume --yes $ARGUMENTS`.
+   - `recovery.ask_first` is set (exit 77): ask the person with AskUserQuestion whether to resume; on yes run `run resume $ARGUMENTS --yes`.
 
 3. Report what came back: the run, the sessions reopened, the orchestrator and the watch script. `/harness:status` shows the rest.

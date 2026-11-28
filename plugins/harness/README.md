@@ -321,7 +321,7 @@ The engine checks the profile at every step boundary and before push, PR, merge 
 - **Ticket end.** `autonomy <run-dir> end <ticket>` sets the ticket to needs-review when the profile never merges. Under a profile that merges, the ticket waits for the confirmed merge. With local tickets and `HO_TICKETS_DIR` unset, it acts on `<run's project>/.harness/tickets`, wherever it is called from, as intake and lifecycle do.
 - The setup question for the profile is `/harness:config`, and the record of the approved profile with its comparison at run start is in Config and run state. Not built here: the push and PR steps that call these checks (#59), remarks and external review (#60), and the reaction to a ticket that is not ready (#51).
 
-## Notifications (H-115 to H-123, D36, S8-28a)
+## Notifications (H-115 to H-124, D36, S8-28a)
 
 Channels are optional; with none set, questions and answers stay in the tracker, which is always the source of truth. Each channel is one entry under `notify.channels.<label>` with a `preset` (`telegram`, `slack` or `gmail`) and a route:
 
@@ -331,6 +331,10 @@ Channels are optional; with none set, questions and answers stay in the tracker,
 Settings: `notify.use` (active labels; default all), `notify.priority` (default the order of setup), `notify.questions` (labels for questions; default all active), `notify.events.<event>` (default true) for `question`, `blocked`, `taken`, `done`, `run-ended`, `limit-pause`, `orchestrator-down`. A message goes to each selected channel; a failed send goes to the next unselected channel by priority.
 
 `harness tickets ask` mirrors the exact numbered lines once the tracker holds them. The intake tick reads replies: the first reply to a question is recorded on the ticket with `tickets answer`, with the author mapped through `identities` in the user config (`senders.telegram`, `senders.slack`, or `emails` for an authenticated Gmail sender); exactly one entry must match, or the sender is unmapped. The normal answer rules then apply it or move the ticket to needs-review. A later reply gets the tracker link and is never applied. A message that answers no question is dropped. `harness notify check` is the read-only connections check before the build; it lists the owner actions from `templates/notify-presets.json` for a failed channel.
+
+Clarification has a round limit (H-117, D37-NOTIFICATIONS-4): `clarify.max_rounds`, default 3, 0 for no limit. One round is one follow-up question and the reply to it; the first question is not a follow-up, and a question with no reply uses no round. When the reply to the last follow-up is still not enough, `tickets ask` posts no question: one tracker comment lists what is still missing, the blocked event goes to the channels, and the ticket stays blocked. Asked again before a person acts, it posts nothing. A writer returns the ticket in the usual way (a reply on the ticket or `tickets unblock`), and a new count begins.
+
+`harness notify <run> verify` (H-124) is read-only. It prints one line per flow and active channel: `question-mirror`, `reply-read`, `answer-written` and `event-announced`, plus one `fallback` line. Each reads `confirmed` only when the run's ledger proves the flow; anything else reads `not working`, and the exit is 69. An mcp send counts only after the session's `sent` report (ledger line `notify-delivered`); the queue alone proves nothing. Before a release, run each flow once with the real channels, then run this verify on that run.
 
 ## Feedback (H-140, D43, D60)
 

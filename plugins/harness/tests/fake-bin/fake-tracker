@@ -14,6 +14,7 @@
 #   trigger <id> status|text  {email}: who set the current status / wrote the body (null: unknown)
 #   new <title> <body-file> <status> [email]   test helper: a ticket created by that person
 #   person-status <id> <status> <email|->      test helper: a person sets the status
+#   person-comment <id> <file> <email>         test helper: a person adds a comment
 set -euo pipefail
 dir=${HO_FAKE_TRACKER_DIR:-$HOME/fake-tracker}
 me=${HO_FAKE_TRACKER_ME:-harness@example.invalid}
@@ -35,5 +36,6 @@ case ${1:-} in
         text_by: (if $e == "" then null else $e end), comments: []}' > "$dir/$n.json"
     echo "$n" ;;
   person-status) save "$(f "$2")" '.status = $s | .status_by = (if $e == "-" then null else $e end)' --arg s "$3" --arg e "$4" ;;
+  person-comment) save "$(f "$2")" '.comments += [{email: $e, body: $b}]' --rawfile b "$3" --arg e "$4" ;;
   *) echo "fake-tracker: unsupported call: $*" >&2; exit 2 ;;
 esac

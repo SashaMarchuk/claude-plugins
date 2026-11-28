@@ -747,6 +747,16 @@ ho_tk_comments() {
       | {n: (.key + 1), login: $login, own: $mine,
          author: (if $m != null and ($m.author | type) == "string" and ($m.author | test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\\[bot\\])?$")) then $m.author else $login end),
          machine: $m}' 2>/dev/null || { ho_tk_err "cannot read the comments of #$id"; return 1; }
+  elif ho_tk_ad; then
+    # The adapter's own reports carry a machine line; a person's comment has none. The tracker
+    # gives no account to compare, so a comment with a machine line counts as the harness's own.
+    json=$(ho_tk_ad_call view "$id") || { ho_tk_err "no ticket $id"; return 66; }
+    printf '%s' "$json" | jq -c --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE"'
+      (.comments // []) | to_entries[] | (.value.email // "" | tostring) as $email
+      | ((.value.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "" | mline($re)) as $m
+      | {n: (.key + 1), login: $email, own: ($m != null),
+         author: (if $m != null and ($m.author | type) == "string" then $m.author else $email end), machine: $m}' 2>/dev/null ||
+      { ho_tk_err "cannot read the comments of $id"; return 1; }
   else
     f=$(ho_tk_l_file "$id") || return
     start=$(ho_tk_l_log_start "$f")
@@ -772,16 +782,68 @@ ho_tk_comments() {
 }
 
 # ---------------------------------------------------------------- questions, steps, answers
+# ho_tk_clarify_state <id> <max-rounds>: where the ticket's clarification stands (H-117,
+# D37-NOTIFICATIONS-4). One round is one follow-up question (any own question after the first)
+# with a reply before the next question: a person's comment or a recorded answer. A question
+# with no reply uses no round. Counting starts after the newest used-up comment, but only once
+# a person acted after it (a reply, a recorded answer or a status change). Prints:
+#   ask      another question may go out
+#   used-up  the reply to the last follow-up came and more is still needed (max 0: never)
+#   held     the used-up comment is the newest word and no person acted since
+ho_tk_clarify_state() {
+  local comments
+  comments=$(ho_tk_comments "$1") || return 1
+  printf '%s\n' "$comments" | jq -rs --argjson max "$2" '
+    def used_up: .own and .machine != null and .machine.event == "question" and .machine.clarify == "rounds-used-up";
+    def question: .own and .machine != null and .machine.event == "question" and (used_up | not);
+    def reply: (.own | not) or (.machine != null and .machine.event == "answer");
+    def person: reply or (.machine != null and .machine.event == "status");
+    map(select(type == "object")) as $c
+    | ([range(0; $c | length) | select($c[.] | used_up)] | last) as $u
+    | if $u != null and ([$c[$u + 1:][] | select(person)] | length) == 0 then "held"
+      else
+        $c[(if $u == null then 0 else $u + 1 end):] as $s
+        | [range(0; $s | length) | select($s[.] | question)] as $q
+        | [range(1; $q | length) | . as $j
+            | select(any($s[$q[$j] + 1:(if $j + 1 < ($q | length) then $q[$j + 1] else ($s | length) end)][]; reply))]
+        | length as $used
+        | if $max > 0 and $used >= $max then "used-up" else "ask" end
+      end'
+}
+
 # ho_tk_ask <id> <questions-file> [role]: numbered questions in one new comment, then the ticket
 # waits in blocked (H-032, D2). One question per non-empty line; a leading "1." or "-" is dropped.
+# The round limit (clarify.max_rounds, default 3, 0 for none; H-117, D37-NOTIFICATIONS-4): once
+# the rounds are used up, the lines are posted once as what is still missing, with no question
+# and no channel mirror; the ticket goes to blocked, which sends the blocked event. Asked again
+# before a person acts, nothing is posted. HO_TK_CLARIFY tells the caller which case it was.
 ho_tk_ask() {
-  local id=$1 qf=$2 role=$3 tmp n
+  local id=$1 qf=$2 role=$3 tmp n max cs
   tmp=$(mktemp "${TMPDIR:-/tmp}/ho-ask.XXXXXX") || return 1
   LC_ALL=C tr -d '\r' < "$qf" | LC_ALL=C tr -d '\000-\010\013-\037\177' |
     sed -E 's/^[[:space:]]*([0-9]+[.)]|[-*])[[:space:]]+//; s/^[[:space:]]+//; s/[[:space:]]+$//' |
     awk 'NF { n++; if (n <= 20) printf "%d. %s\n", n, substr($0, 1, 500) }' > "$tmp"
   n=$(wc -l < "$tmp" | tr -d ' ')
   if [ "$n" -eq 0 ]; then rm -f "$tmp"; ho_tk_err "no question in $qf; nothing was posted"; return 64; fi
+  max=$(ho_cfg_int '.clarify.max_rounds' 3 2>/dev/null) || max=3
+  cs=$(ho_tk_clarify_state "$id" "$max") || { rm -f "$tmp"; ho_tk_err "cannot read the comments of $id; nothing was posted"; return 1; }
+  case $cs in
+    held)
+      rm -f "$tmp"
+      HO_NT_ASKING=1 ho_tk_set_state "$id" blocked || return 1
+      HO_TK_ASKED=0 HO_TK_CLARIFY=held
+      return 0 ;;
+    used-up)
+      {
+        printf 'The clarification rounds are used up (clarify.max_rounds is %s). These points are still missing:\n\n' "$max"
+        cat "$tmp"
+        printf '\nThe harness asks no more questions and does not guess the answers. A person with write access returns the ticket to work with a reply here or with the unblock command.\n'
+      } | ho_tk_post "$id" "$role" question "clarification rounds used up" - clarify rounds-used-up missing "$n" || { rm -f "$tmp"; return 1; }
+      rm -f "$tmp"
+      ho_tk_set_state "$id" blocked || return 1
+      HO_TK_ASKED=0 HO_TK_CLARIFY=used-up
+      return 0 ;;
+  esac
   {
     printf 'The work needs answers from a person before it can go on:\n\n'
     cat "$tmp"
@@ -791,7 +853,7 @@ ho_tk_ask() {
   ! declare -F ho_nt_hook >/dev/null || ho_nt_hook ho_nt_question "$id" "$tmp"
   rm -f "$tmp"
   HO_NT_ASKING=1 ho_tk_set_state "$id" blocked || return 1
-  HO_TK_ASKED=$n
+  HO_TK_ASKED=$n HO_TK_CLARIFY=asked
 }
 # ho_tk_step_records <id>: "<step>\t<result>" for each trusted step record, oldest first.
 ho_tk_step_records() {
@@ -944,7 +1006,11 @@ ho_tickets() {
       if [ -n "${HO_RUN_DIR:-}" ] && [ -n "${HO_SESSION_NAME:-}" ]; then
         ( ho_run_open "$HO_RUN_DIR" && ho_ledger_append question ticket "$1" session "$HO_SESSION_NAME" count "$HO_TK_ASKED" ) || return 1
       fi
-      echo "OK asked $1 ($HO_TK_ASKED questions). The ticket waits for an answer: end this session now; the next poll closes it." ;;
+      case ${HO_TK_CLARIFY:-asked} in
+        used-up) echo "OK $1: the clarification rounds are used up; one comment lists what is still missing and the ticket stays blocked until a person returns it. End this session now; the next poll closes it." ;;
+        held) echo "OK $1 stays blocked: its clarification rounds are used up and no person has acted since, so nothing was posted. End this session now; the next poll closes it." ;;
+        *) echo "OK asked $1 ($HO_TK_ASKED questions). The ticket waits for an answer: end this session now; the next poll closes it." ;;
+      esac ;;
     answer)
       # An author that cannot be mapped to an account is "-", with the channel's sender id as a
       # fourth argument: the answer is recorded with that sender and never applied (H-035).

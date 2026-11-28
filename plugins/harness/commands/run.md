@@ -1,6 +1,6 @@
 ---
 description: "Start a harness run in this project: preflight, the orchestrator session and the watch script, then every ready ticket unattended. With an unfinished last run, it resumes that run instead."
-argument-hint: "[--workers N] [--standby on|off] [--ticket ID]"
+argument-hint: "[--workers N] [--standby on|off]"
 ---
 
 Start (or resume) a harness run for this project: $ARGUMENTS

@@ -48,8 +48,8 @@ HO_EXIT_FLOW=78
 HO_FLOW_SCHEMA=2
 HO_FLOW_ROLES="worker validator"
 # Every placeholder a template may use. The engine fills the first six itself.
-HO_FLOW_ENGINE_TOKENS="FLOW_NAME FLOW_STEP_LIST STEP_ID STEP_TITLE STEP_TEXT AGENT_LANGUAGE"
-HO_FLOW_CALLER_TOKENS="RUN_ID TICKET_ID TICKET_TEXT BRANCH BASE WORKDIR STEP_RESULT_FILE VERDICT_FILE"
+HO_FLOW_ENGINE_TOKENS="FLOW_NAME FLOW_STEP_LIST STEP_ID STEP_TITLE STEP_TEXT AGENT_LANGUAGE HARNESS"
+HO_FLOW_CALLER_TOKENS="RUN_ID TICKET_ID TICKET_TEXT BRANCH BASE WORKDIR STEP_RESULT_FILE VERDICT_FILE LANE SHA"
 # The caller values that may span lines. Every other caller value is one line of text.
 HO_FLOW_MULTILINE_TOKENS="TICKET_TEXT"
 
@@ -409,7 +409,7 @@ ho_flow_render() {
       *) printf 'harness: requirements.format must be openspec or none, not %s\n' "$fmt" >&2; exit "$HO_EXIT_FLOW" ;;
     esac
   fi
-  jq -nj --arg flow "$flow" --arg step "$step" --arg lang "$lang" --rawfile req "$reqf" ${valargs[@]+"${valargs[@]}"} \
+  jq -nj --arg flow "$flow" --arg step "$step" --arg lang "$lang" --arg harness "$HO_ROOT/bin/harness" --rawfile req "$reqf" ${valargs[@]+"${valargs[@]}"} \
     --slurpfile cfg "$HO_FLOW_JSON" --rawfile role "$role_file" --rawfile steptpl "$step_prompt" '
     def render($v):
       . as $t
@@ -424,6 +424,7 @@ ho_flow_render() {
     | ($vals + {
         FLOW_NAME: $flow,
         AGENT_LANGUAGE: $lang,
+        HARNESS: $harness,
         FLOW_STEP_LIST: ([[$c.steps[] | select(.enabled != false)] | to_entries[]
           | "\(.key + 1). \(.value.title) (\(.value.id))"
             + (if .value.when == "questions" then ", only when classification finds open questions" else "" end)]

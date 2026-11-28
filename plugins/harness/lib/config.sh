@@ -10,6 +10,13 @@
 HO_CONFIG_SCHEMA=2
 HO_EXIT_CONFIG=78
 
+# ho_project_root needs ho_is_project from lib/select.sh (committed configs and the local
+# selection). Load it here, so this file is safe to source alone.
+if ! declare -F ho_is_project >/dev/null 2>&1; then
+  # shellcheck source=select.sh
+  . "$(dirname "${BASH_SOURCE[0]}")/select.sh"
+fi
+
 # ho_project_root: print the project folder (the one holding .harness/config.json).
 # Order: $HO_PROJECT_DIR, then walk up from $PWD to .harness/config.json or to a
 # .harness-project pointer file (a worktree outside the project carries one).

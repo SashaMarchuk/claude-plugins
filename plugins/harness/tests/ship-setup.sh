@@ -15,7 +15,7 @@ printf '.harness/\n' >> "$proj/.git/info/exclude"
 printf 'base\n' > "$proj/shared.txt"
 git -C "$proj" add shared.txt && git -C "$proj" commit -qm base && git -C "$proj" push -q origin main
 export HO_PROJECT_DIR="$proj" HO_USER_DIR="$base/user"
-cfg() { jq -n --arg p "$1" --argjson extra "${2:-$E}" '{schemaVersion: 2, autonomy: {profile: $p}} * $extra' > "$proj/.harness/config.json"; }
+cfg() { jq -n --arg p "$1" --argjson extra "${2:-$E}" '{schemaVersion: 2, autonomy: {profile: $p}} * $extra' > "$proj/.harness/config.json"; select_config "$proj"; }
 user_cfg() { jq -n --argjson extra "${1:-$E}" '{schemaVersion: 2} * $extra' > "$base/user/config.json"; }
 user_cfg
 vsid=11111111-1111-4111-8111-111111111111

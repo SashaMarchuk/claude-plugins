@@ -8,6 +8,7 @@ mkdir -p "$proj/.harness" "$user" "$base/bin"
 export HO_PROJECT_DIR="$proj" HO_USER_DIR="$user"
 printf '{"schemaVersion": 2, "limits": {"workers": 2}}\n' > "$proj/.harness/config.json"
 printf '{"schemaVersion": 2}\n' > "$user/config.json"
+select_config "$proj"
 # A fake container runtime: its record of a container comes from $base/records/<id>.json.
 cat > "$base/bin/docker" <<'SH'
 #!/bin/bash

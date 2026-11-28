@@ -71,6 +71,7 @@ setcfg 'del(.tickets.normalize)'
 
 # H-016 D37-INTAKE-5: under the full profile the default is assume.
 setcfg '.autonomy.profile = "full"'
+select_config "$proj" # a raise needs a new selection (H-072)
 runF=$(cd "$proj" && "$h" run new --workers 5)
 t5=$(ticket "Gaps")
 label alice "$t5" ready
@@ -89,6 +90,7 @@ assert_contains "H-016 assume: the human question is numbered on the ticket" "$(
 
 # H-016 a set value always wins over the profile default.
 setcfg '.tickets.readiness.on_not_ready = "ask"'
+select_config "$proj" # a recorded field changed (H-072)
 runA=$(cd "$proj" && "$h" run new --workers 5)
 t7=$(ticket "Set ask")
 label alice "$t7" ready

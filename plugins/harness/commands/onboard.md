@@ -1,6 +1,6 @@
 ---
-argument-hint: "[re-run any time]"
-description: "Set up (or update) your user-level harness config — terminal, layout, accounts, limit policy, models. Detects your default terminal first."
+description: "Old name of /harness:config, kept for one release: configure the harness for this project. To prepare a repository for AI development, use /harness:ai-ready."
+argument-hint: "[what you want to change, optional]"
 ---
 
-Invoke the `harness:harness` skill via the Skill tool, passing `--onboard $ARGUMENTS` through verbatim. The skill's flag router handles the `--onboard` mode.
+`/harness:onboard` is the old name of `/harness:config` (design D33a). It stays for one release. Tell the person once that the new name is `/harness:config`. Then read `${CLAUDE_PLUGIN_ROOT}/commands/config.md` and follow it exactly, with these arguments: $ARGUMENTS

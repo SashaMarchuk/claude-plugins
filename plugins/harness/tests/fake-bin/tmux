@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Fake tmux for terminal adapter tests. Implements only the calls the tmux backend makes;
+# any other call exits 2. See fake-term-lib.sh for the state it keeps.
+set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/fake-term-lib.sh"
+# The harness pins its own server; anything else (the user's default server) is refused here.
+[ "${1:-}" = -L ] && [ "${2:-}" = ho-harness ] || exit 2
+shift 2
+# ft_fmt <pane> <format>: expand the few pane formats the backend uses; a missing pane
+# expands to empty values (as real tmux does for if-shell -F).
+ft_fmt() {
+  local h=$1 out=$2 f ses="" pid="" tag="" sid=""
+  f=$(ft_file "$h")
+  if ft_known "$h"; then
+    ses=$(cat "$f.session")
+    pid=$(cat "$f.pid")
+    tag=$(cat "$f.tag" 2>/dev/null || true)
+    sid=$(cat "$f.sid" 2>/dev/null || true)
+  else
+    h=""
+  fi
+  out=${out//'#{pane_id}'/$h}
+  out=${out//'#{session_name}'/$ses}
+  out=${out//'#{pane_pid}'/$pid}
+  out=${out//'#{@ho_tag}'/$tag}
+  out=${out//'#{@ho_session_id}'/$sid}
+  printf '%s\n' "$out"
+}
+op=${1:-}
+[ $# -gt 0 ] && shift
+case $op in
+  -V) echo "tmux 0.0-fake" ;;
+  has-session)
+    [ "${1:-}" = -t ] || exit 2
+    grep -qxF -- "$2" "$ft_dir/sessions" 2>/dev/null
+    ;;
+  new-session | new-window)
+    ses="" fmt="" cmd=""
+    while [ $# -gt 0 ]; do
+      case $1 in
+        -d) shift ;;
+        -s | -t) ses=$2; shift 2 ;;
+        -n) shift 2 ;;
+        -P) shift ;;
+        -F) fmt=$2; shift 2 ;;
+        -*) exit 2 ;;
+        *) cmd=$1; shift ;;
+      esac
+    done
+    case $fmt in '#{pane_id}' | '#{pane_id} #{pane_pid}') ;; *) exit 2 ;; esac
+    [ -n "$cmd" ] && [ -n "$ses" ] || exit 2
+    if [ "$op" = new-session ]; then
+      printf '%s\n' "$ses" >> "$ft_dir/sessions"
+    else
+      grep -qxF -- "$ses" "$ft_dir/sessions" 2>/dev/null || { echo "can't find session: $ses" >&2; exit 1; }
+    fi
+    h="%$(ft_next)"
+    printf '%s\n' "$ses" > "$(ft_file "$h").session"
+    ft_log "tmux $op $h"
+    ft_start "$h" "$cmd"
+    ft_fmt "$h" "$fmt"
+    ;;
+  send-keys)
+    [ "${1:-}" = -t ] || exit 2
+    h=$2; shift 2
+    ft_known "$h" || { echo "can't find pane: $h" >&2; exit 1; }
+    f=$(ft_file "$h")
+    if [ "${1:-}" = -H ]; then
+      # One hex byte per call, as the backend sends it; kept in <h>.in as <0xNN>.
+      case ${2:-} in [0-9a-f][0-9a-f]) ;; *) exit 2 ;; esac
+      ft_log "tmux byte $h 0x$2"
+      printf '<0x%s>' "$2" >> "$f.in"
+    elif [ "${1:-}" = -l ]; then
+      ft_log "tmux send-text $h $2"
+      printf '%s' "$2" >> "$f.in"
+    else
+      case ${1:-} in
+        Enter) ft_log "tmux key $h Enter"; printf '\n' >> "$f.in" ;;
+        Escape) ft_log "tmux key $h Escape"; printf '<ESC>' >> "$f.in" ;;
+        *) exit 2 ;;
+      esac
+    fi
+    ;;
+  display-message)
+    [ "${1:-}" = -p ] || exit 2
+    if [ $# -eq 2 ]; then printf '%s\n' "$2"; exit 0; fi
+    [ "${2:-}" = -t ] && [ $# -eq 4 ] || exit 2
+    ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
+    ft_fmt "$3" "$4"
+    ;;
+  set-option)
+    # set-option -p -t <pane> @ho_tag|@ho_session_id <value>: kept in <h>.tag and <h>.sid.
+    [ "${1:-}" = -p ] && [ "${2:-}" = -t ] && [ $# -eq 5 ] || exit 2
+    case ${4:-} in @ho_tag) ext=tag ;; @ho_session_id) ext=sid ;; *) exit 2 ;; esac
+    ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
+    # HO_FAKE_TMUX_NO_TAG_DELAY=<seconds>: wait that long before refusing the tag, so the
+    # command in the pane is already running when the open fails.
+    if [ -n "${HO_FAKE_TMUX_NO_TAG:-}" ]; then sleep "${HO_FAKE_TMUX_NO_TAG_DELAY:-0}"; echo "invalid option: -p" >&2; exit 1; fi
+    ft_log "tmux tag $3 $4 $5"
+    printf '%s\n' "$5" > "$(ft_file "$3").$ext"
+    ;;
+  if-shell)
+    # if-shell -F -t <pane> '#{==:<format>,<expected>}' <command> <else-command>
+    [ "${1:-}" = -F ] && [ "${2:-}" = -t ] && [ $# -eq 6 ] || exit 2
+    h=$3 cond=$4
+    case $cond in '#{==:'*'}') ;; *) exit 2 ;; esac
+    cond=${cond#'#{==:'}
+    cond=${cond%'}'}
+    want=${cond##*,}
+    have=$(ft_fmt "$h" "${cond%,*}")
+    if [ "$have" = "$want" ]; then pick=$5; else pick=$6; fi
+    # The commands come from the backend with checked values; split them like tmux does,
+    # and run a list separated by " ; " one command after the other, stopping at a failure.
+    rest=$pick
+    while :; do
+      one=${rest%%' ; '*}
+      eval "set -- $one"
+      "$0" -L ho-harness "$@" || exit $?
+      [ "$one" != "$rest" ] || break
+      rest=${rest#*' ; '}
+    done
+    ;;
+  capture-pane)
+    # -e keeps the colour codes: <h>.out is shown as it is. Without -e they are removed, as
+    # real tmux does.
+    styled=""
+    [ "${1:-}" != -e ] || { styled=1; shift; }
+    [ "${1:-}" = -p ] && [ "${2:-}" = -t ] || exit 2
+    ft_known "$3" || { echo "can't find pane: $3" >&2; exit 1; }
+    ft_log "tmux capture $3${styled:+ styled}"
+    if [ -n "$styled" ]; then
+      ft_screen "$3"
+    else
+      ft_screen "$3" | sed "s/$(printf '\033')\[[0-9;]*m//g"
+    fi
+    ;;
+  kill-pane)
+    [ "${1:-}" = -t ] || exit 2
+    ft_known "$2" || { echo "can't find pane: $2" >&2; exit 1; }
+    ft_log "tmux close $2"
+    : > "$(ft_file "$2").closed"
+    ;;
+  *) exit 2 ;;
+esac

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 2,
+  "_comment": "The default heavy operation types (design D26, H-107). One heavy job runs at a time across the run. The orchestrator may add a type for one run with 'harness slot <run> heavy-add'; it can never raise a limit. Browser and UI checks are a stage with their own limit (stage:browser), not a heavy type.",
+  "ops": [
+    {"id": "image-build", "covers": "container image builds: docker build, docker buildx build, docker compose build, compose up --build"},
+    {"id": "stack-up", "covers": "starting or restarting a multi-container stack (app and database) without a build"},
+    {"id": "dependency-install", "covers": "npm, pnpm or yarn install, pip install, poetry install, bundle install, cargo fetch"},
+    {"id": "app-build", "covers": "production compiles and bundles: npm run build, next build, vite build, full tsc, cargo build --release"},
+    {"id": "full-test-suite", "covers": "a whole unfiltered test suite, such as npm test, pytest or tests/run-all.sh"},
+    {"id": "db-reset", "covers": "database migrations from zero, seeding, dump and restore"}
+  ]
+}

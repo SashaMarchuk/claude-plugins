@@ -1,0 +1,208 @@
+{
+  "schemaVersion": 2,
+  "_comment": "Runtime profile (D31, D37-RUNTIME-2): all the data the engine needs about one tool; engine code holds no runtime name (D37-RUNTIME-1). A user may add or replace a profile in <user dir>/runtimes/; a project never can (D37-FLOW-8). In argv lists, {session_id}, {model} and {title} are filled in by the engine; {prompt} becomes the prompt file's text when the session starts. In path patterns, {home}, {config_dir}, {skill}, {plugin} and {name} are filled in. Checked against claude --help: -p, --session-id, --resume, --permission-mode (plan is read-only) and auth status. Not yet exercised by a real run: skill_call, session_log, limits and plugin_skill_paths. agent_paths is the agents folder of the config folder.",
+  "title": "Claude Code",
+  "command": "claude",
+  "modes": [
+    "interactive",
+    "noninteractive"
+  ],
+  "argv": {
+    "new": [
+      "--session-id",
+      "{session_id}"
+    ],
+    "resume": [
+      "--resume",
+      "{session_id}"
+    ],
+    "model": [
+      "--model",
+      "{model}"
+    ],
+    "title": [
+      "-n",
+      "{title}"
+    ],
+    "prompt": [
+      "{prompt}"
+    ]
+  },
+  "noninteractive": {
+    "argv": [
+      "-p",
+      "--session-id",
+      "{session_id}"
+    ],
+    "resume": [
+      "-p",
+      "--resume",
+      "{session_id}"
+    ],
+    "prompt": [
+      "{prompt}"
+    ]
+  },
+  "permissions": {
+    "bypass": [
+      "--dangerously-skip-permissions"
+    ],
+    "auto": [
+      "--permission-mode",
+      "auto"
+    ],
+    "acceptEdits": [
+      "--permission-mode",
+      "acceptEdits"
+    ],
+    "dontAsk": [
+      "--permission-mode",
+      "dontAsk"
+    ]
+  },
+  "_comment_sandbox": "read-only: a review step without a terminal. no-tools: the readiness judge, which reads untrusted ticket text and so gets nothing to act with: no built-in tool (--tools with an empty list), no MCP server (--strict-mcp-config with no --mcp-config), no skill or command, no user or project settings and no CLAUDE.md (--setting-sources with an empty list), and plan mode on top. Checked against claude --help 2.1.332.",
+  "sandbox": {
+    "read-only": [
+      "--permission-mode",
+      "plan"
+    ],
+    "no-tools": [
+      "--tools",
+      "",
+      "--strict-mcp-config",
+      "--disable-slash-commands",
+      "--setting-sources",
+      "",
+      "--permission-mode",
+      "plan"
+    ]
+  },
+  "skill_call": "/{skill}",
+  "config_dir": {
+    "env": "CLAUDE_CONFIG_DIR",
+    "default": "{home}/.claude"
+  },
+  "_comment_credential_env": "Issue #119: the variables that hold a login credential. A launcher always removes them, and only the role's account command may set them again (its output is read at launch and never written to a file), so a stale key in a terminal never chooses the account and no secret is written to disk. The start check removes them too.",
+  "credential_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+  "_comment_account_env": "Issue #119: the variables that choose the account folder. A launch sets each one to the caller's value, or removes it when the caller has none, so the terminal's inherited environment never picks the account; with an account command they are removed and the command sets them. Folder paths only, never secrets: the value is written into the launcher.",
+  "account_env": [
+    "CLAUDE_CONFIG_DIR"
+  ],
+  "session_log": "{config_dir}/projects/<project folder>/<session id>.jsonl",
+  "limits": "The subscription usage endpoint gives five_hour and seven_day utilization with their reset times.",
+  "_comment_status_line": "Limits per account (D28, H-109): each session's status line command records its account's limits. argv adds the settings file the engine writes from settings ({status_settings}; {record_command} becomes the harness record command). windows is the path to the object that holds one entry per limit window in the status line JSON; used and resets name each entry's used percent and reset time (epoch seconds or ISO time). user_settings and user_command say where the user's own status line command is; the record command runs it with the same input and prints its output unchanged, so a session keeps the user's line. Every window present is read under its own name. Not yet exercised by a real run.",
+  "status_line": {
+    "argv": [
+      "--settings",
+      "{status_settings}"
+    ],
+    "settings": {
+      "statusLine": {
+        "type": "command",
+        "command": "{record_command}"
+      }
+    },
+    "windows": ".rate_limits",
+    "used": "used_percentage",
+    "resets": "resets_at",
+    "user_settings": "{config_dir}/settings.json",
+    "user_command": ".statusLine.command"
+  },
+  "_comment_outage": "Outage monitor (D22, H-096): the two plain HTTP checks of the watch script. The service is up when it answers below 500; the internet is up when it answers at all. The user or project config may set watch.service_url and watch.internet_url instead.",
+  "outage": {
+    "service_url": "https://api.anthropic.com/",
+    "internet_url": "https://www.gstatic.com/generate_204"
+  },
+  "capabilities": {
+    "hooks": true,
+    "session_messages": true
+  },
+  "check": {
+    "argv": [
+      "auth",
+      "status"
+    ],
+    "expect": "\"loggedIn\": *true",
+    "timeout_seconds": 20
+  },
+  "skill_paths": [
+    "{config_dir}/skills/{skill}/SKILL.md",
+    "{config_dir}/commands/{skill}.md"
+  ],
+  "plugin_skill_paths": [
+    "{config_dir}/plugins/cache/*/{plugin}/*/skills/{name}/SKILL.md",
+    "{config_dir}/plugins/cache/*/{plugin}/*/commands/{name}.md"
+  ],
+  "agent_paths": [
+    "{config_dir}/agents/{agent}.md"
+  ],
+  "install": "install Claude Code (https://docs.claude.com/en/docs/claude-code/setup), then log in with: claude auth login",
+  "exit_command": "/exit",
+  "_comment_delivery": "Instruction delivery (H-101, H-099, H-137; design S8-24, D42f, D42g, D37-LIFECYCLE-4). message.argv: a command that posts one instruction to the session as a message between sessions; null means no script route is known, so the engine goes straight to the typed fallback (the orchestrator session sends its own messages with the runtime's message tool and asks the engine only for the proof). Placeholders: {session_id}, {instruction_id}, {text_file}. transcript: where the session transcript is and which records prove delivery; the format is internal to the runtime and changes between versions. screen: what an idle session with an empty input line looks like; any other screen gets nothing typed. force_send: the queued-message send-now chord as control bytes, and the lowest runtime version that knows it.",
+  "message": {
+    "argv": null
+  },
+  "screen": {
+    "rule_char": "─",
+    "prompt_prefixes": [
+      "> ",
+      "❯ ",
+      "❯ "
+    ],
+    "busy_marks": [
+      "esc to interrupt"
+    ],
+    "suggestion_sgr": "2",
+    "busy_prompt_sgr": "38;5;246",
+    "idle_prompt_sgr": "39",
+    "status_separator": " · ",
+    "cut_mark": "…"
+  },
+  "_comment_permission_prompt": "H-052, D37-AUTONOMY-1: with session.permission_prompts analyse, a permission prompt the model judges acceptable is accepted once with this key (enter or escape: the terminal adapter's key names). Assumed, not yet checked against a real prompt: the preselected first choice is the accept-once choice. The engine never picks an always-allow choice. The pattern that recognises the prompt (screen class permission) belongs in the screen pattern file.",
+  "permission_prompt": {
+    "accept_once": "enter"
+  },
+  "force_send": {
+    "bytes": [
+      24,
+      19
+    ],
+    "min_version": "2.1.275"
+  },
+  "transcript": {
+    "_comment": "Where a session's transcript is found by its session ID (H-090). root_env names the variable that moves the folder (account environment first, then the launch environment); root_default is used otherwise, with {home} for HOME. glob is relative to the root.",
+    "root_env": "CLAUDE_CONFIG_DIR",
+    "root_default": "{home}/.claude",
+    "glob": "projects/*/{session_id}.jsonl",
+    "user_types": [
+      "user"
+    ],
+    "reply_types": [
+      "assistant"
+    ],
+    "delivered_attachments": [
+      "queued_command"
+    ],
+    "queue_type": "queue-operation",
+    "queue_enqueue": "enqueue",
+    "queue_remove": "remove"
+  },
+  "screen_file": "claude-code.screen.json",
+  "trust": {
+    "_comment": "Pre-trust data (reuse list: pre-trust inside the project only). The engine writes these fields under a folder key only when the person has already trusted the project folder, which consent_field records under the project key. It never writes the project folder itself, and it never answers the dialog on the screen.",
+    "config_dir_env": "CLAUDE_CONFIG_DIR",
+    "config_file": ".claude.json",
+    "projects_key": "projects",
+    "consent_field": "hasTrustDialogAccepted",
+    "fields": {
+      "hasTrustDialogAccepted": true,
+      "hasCompletedProjectOnboarding": true
+    }
+  },
+  "_comment_hooks_settings": "The settings files a session loads, read (never written) by the start check of D42l to name hooks with no time limit. {config_dir} as in config_dir; {project} is the project folder.",
+  "hooks_settings": [
+    "{config_dir}/settings.json",
+    "{project}/.claude/settings.json",
+    "{project}/.claude/settings.local.json"
+  ]
+}

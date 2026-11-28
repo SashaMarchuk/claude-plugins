@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+# Fake gh for tests: a small stateful GitHub. Never calls the network.
+# State: one JSON file per issue in $HO_FAKE_GH_DIR/issues/ (default $HOME/fake-gh).
+# Every call is logged as one tab-separated line to $HO_FAKE_GH_DIR/calls.log.
+# The signed-in account is $HO_FAKE_GH_USER (default harness-bot).
+# Supported: label create; issue create|view|list (at most --limit, default 30, as gh does)|
+# edit (labels, assignees, --body-file)|comment|close; api user, api repos/<r>/issues (open issues, per_page, --paginate),
+# api repos/<r>/collaborators/<login>/permission, api repos/<r>/issues/<n>/events.
+# Label events: every label that issue create or issue edit adds or removes is recorded in
+# $HO_FAKE_GH_DIR/events/<n>.json as a "labeled" or "unlabeled" event whose actor is the
+# signed-in account, in the shape the real events endpoint returns (oldest first).
+# Permissions: $HO_FAKE_GH_DIR/perms.json maps a login to admin|maintain|write|triage|read;
+# the endpoint answers {permission, role_name} as GitHub does (maintain reads "write",
+# triage reads "read"). A login not in the map gets HTTP 404 and exit 1.
+# HO_FAKE_GH_FAIL_API=<text> makes every api call whose path holds <text> fail with exit 1.
+# Pull requests: pr create (--draft, --head, --base, --title, --body-file, --repo; prints the
+# URL https://github.com/<repo>/pull/<n>), pr view <n> --json <fields> (number, state, isDraft,
+# headRefName, baseRefName, body, mergeCommit, reviews, comments), pr edit <n> --body-file F,
+# pr merge <n> (see below) and pr ready <n>. A test adds reviews
+# as [{author: {login}, body}] to the PR file. State lives in
+# $HO_FAKE_GH_DIR/prs/<n>.json; a test merges a PR by writing state MERGED and mergeCommit.
+# "issue comment --edit-last" rewrites the account's last comment, as real gh does,
+# so a regression to it is visible in the stored comments. Any other call exits 2.
+# HO_FAKE_GH_FAIL="<group> <command>" (for example "issue comment") makes that one call
+# fail with exit 1 and change nothing, as a GitHub outage would.
+set -euo pipefail
+
+dir=${HO_FAKE_GH_DIR:-$HOME/fake-gh}
+user=${HO_FAKE_GH_USER:-harness-bot}
+mkdir -p "$dir/issues"
+line=""
+for a in "$@"; do
+  if [ -z "$line" ]; then line=$a; else line="$line	$a"; fi
+done
+printf '%s\n' "$line" >> "$dir/calls.log"
+
+fail() { printf 'fake gh: %s\n' "$*" >&2; exit 2; }
+if [ -n "${HO_FAKE_GH_FAIL:-}" ] && [ "${1:-} ${2:-}" = "$HO_FAKE_GH_FAIL" ]; then
+  printf 'fake gh: HTTP 503: service unavailable (simulated for %s)\n' "$HO_FAKE_GH_FAIL" >&2
+  exit 1
+fi
+issue_file() {
+  case ${1:-} in ''|*[!0-9]*) fail "bad issue number: ${1:-}" ;; esac
+  # The text real gh prints for a missing issue.
+  [ -f "$dir/issues/$1.json" ] || { printf 'GraphQL: Could not resolve to an issue or pull request with the number of %s. (repository.issue)\n' "$1" >&2; exit 1; }
+  printf '%s\n' "$dir/issues/$1.json"
+}
+label_event() { # label_event <issue number> <labeled|unlabeled> <label>
+  local ef="$dir/events/$1.json" tmp
+  mkdir -p "$dir/events"
+  [ -f "$ef" ] || echo '[]' > "$ef"
+  tmp=$(mktemp "$dir/.tmp.XXXXXX")
+  jq --arg e "$2" --arg l "$3" --arg u "$user" \
+    '. + [{id: (1000 + length), event: $e, actor: {login: $u, type: (if ($u | endswith("[bot]")) then "Bot" else "User" end)},
+           label: {name: $l}, created_at: "2026-01-01T00:00:00Z", performed_via_github_app: null}]' "$ef" > "$tmp"
+  mv "$tmp" "$ef"
+}
+save() { # save <file> <jq filter> [jq args...]; edits the issue JSON in place
+  local f=$1 filter=$2 tmp
+  shift 2
+  tmp=$(mktemp "$dir/.tmp.XXXXXX")
+  jq "$@" "$filter" "$f" > "$tmp"
+  mv "$tmp" "$f"
+}
+# Shape of an issue as gh --json prints it, cut to the asked fields.
+shape='{number, title, body, state, updatedAt,
+        labels: [.labels[] | {name: .}],
+        assignees: [.assignees[] | {login: .}],
+        comments: [.comments[] | {author: {login: .author}, body}]}'
+pick() { # pick <comma-separated fields>
+  jq -c --arg f "$1" "$shape"' | with_entries(select(.key as $k | ($f | split(",") | index($k))))'
+}
+
+if [ "${1:-}" = api ]; then
+  shift
+  path="" paginate=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --paginate) paginate=1; shift ;;
+      -*) fail "api: unsupported flag $1" ;;
+      *) [ -z "$path" ] || fail "api: one path only"; path=$1; shift ;;
+    esac
+  done
+  query=""; case $path in *\?*) query=${path#*\?} ;; esac
+  path=${path%%\?*}
+  if [ -n "${HO_FAKE_GH_FAIL_API:-}" ]; then
+    case $path in *"$HO_FAKE_GH_FAIL_API"*)
+      printf 'fake gh: HTTP 502: bad gateway (simulated for api %s)\n' "$path" >&2; exit 1 ;;
+    esac
+  fi
+  case $path in
+    user) jq -n --arg u "$user" '{login: $u}' ;;
+    repos/*/*/collaborators/*/permission)
+      who=${path#repos/*/*/collaborators/}; who=${who%/permission}
+      perm=$(jq -r --arg w "$who" '.[$w] // empty' "$dir/perms.json" 2>/dev/null || true)
+      [ -n "$perm" ] || { printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1; }
+      case $perm in maintain) p=write ;; triage) p=read ;; *) p=$perm ;; esac
+      jq -n --arg p "$p" --arg r "$perm" --arg w "$who" '{permission: $p, role_name: $r, user: {login: $w}}' ;;
+    repos/*/*/issues/*/events)
+      n=${path#repos/*/*/issues/}; n=${n%/events}
+      issue_file "$n" >/dev/null
+      if [ -f "$dir/events/$n.json" ]; then cat "$dir/events/$n.json"; else echo '[]'; fi ;;
+    repos/*/*/issues)
+      # Open issues in the REST shape, per_page (default 30) at a time, oldest first. Without
+      # --paginate only the first page is printed; with it every page, one array per page, as
+      # gh prints them.
+      per=30
+      case "&$query&" in *"&per_page="*) per=${query#*per_page=}; per=${per%%&*} ;; esac
+      case "&$query&" in *"&state=open&"* | *"&state=all&"*) ;; *"&state="*) fail "issues: only state=open is faked" ;; esac
+      find "$dir/issues" -name '*.json' -exec cat {} + | jq -s -c --argjson per "$per" --argjson all "$paginate" '
+        [.[] | select((.state | ascii_downcase) == "open")] | sort_by(.number)
+        | map({number, title, state: (.state | ascii_downcase), labels: [.labels[] | {name: .}]})
+        | [range(0; ([length, 1] | max); $per) as $i | .[$i:($i + $per)]] | if $all == 1 then .[] else .[0] end' ;;
+    *) fail "unsupported api path: $path" ;;
+  esac
+  exit 0
+fi
+[ $# -ge 2 ] || fail "unsupported call: $line"
+group=$1 cmd=$2
+shift 2
+case "$group $cmd" in
+  "label create")
+    [ $# -ge 1 ] || fail "label name missing"
+    printf '%s\n' "$1" >> "$dir/labels.txt"
+    ;;
+  "issue create")
+    title="" bodyf="" labels="[]"
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --title) title=$2; shift 2 ;;
+        --body-file) bodyf=$2; shift 2 ;;
+        --label) labels=$(jq -c --arg l "$2" '. + ($l | split(","))' <<<"$labels"); shift 2 ;;
+        *) fail "issue create: unsupported flag $1" ;;
+      esac
+    done
+    [ -f "$bodyf" ] || fail "issue create: body file missing"
+    n=$(( $(find "$dir/issues" -name '*.json' | wc -l) + 1 ))
+    jq -n --argjson n "$n" --arg t "$title" --rawfile b "$bodyf" --argjson l "$labels" \
+      '{number: $n, title: $t, body: $b, state: "OPEN", updatedAt: "2026-01-01T00:00:00Z",
+        labels: $l, assignees: [], comments: []}' > "$dir/issues/$n.json"
+    jq -r '.[]' <<<"$labels" | while IFS= read -r one; do label_event "$n" labeled "$one"; done
+    printf 'https://github.com/fake/repo/issues/%s\n' "$n"
+    ;;
+  "issue view")
+    f=$(issue_file "${1:-}"); shift
+    fields=""
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --json) fields=$2; shift 2 ;;
+        *) fail "issue view: unsupported flag $1" ;;
+      esac
+    done
+    [ -n "$fields" ] || fail "issue view: only --json output is faked"
+    pick "$fields" < "$f"
+    ;;
+  "issue list")
+    label="" state=open fields="" limit=30
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --limit) limit=$2; shift 2 ;;
+        --label) label=$2; shift 2 ;;
+        --state) state=$2; shift 2 ;;
+        --json) fields=$2; shift 2 ;;
+        *) fail "issue list: unsupported flag $1" ;;
+      esac
+    done
+    [ -n "$fields" ] || fail "issue list: only --json output is faked"
+    find "$dir/issues" -name '*.json' -exec cat {} + | jq -s -c --arg l "$label" --arg s "$state" \
+      '[.[] | select(($l == "") or (.labels | index($l))) | select(($s == "all") or (.state | ascii_downcase) == $s)]
+       | sort_by(.number) | .[0:'"$limit"']' |
+      jq -c '.[]' | while IFS= read -r one; do printf '%s\n' "$one" | pick "$fields"; done | jq -s -c '.'
+    ;;
+  "issue edit")
+    f=$(issue_file "${1:-}"); shift
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --add-label)
+          n=$(jq -r .number "$f")
+          printf '%s\n' "$2" | tr ',' '\n' | while IFS= read -r one; do
+            jq -e --arg l "$one" '.labels | index($l)' "$f" >/dev/null || label_event "$n" labeled "$one"
+          done
+          save "$f" '.labels = (.labels + ($l | split(",")) | unique)' --arg l "$2"; shift 2 ;;
+        --remove-label)
+          n=$(jq -r .number "$f")
+          printf '%s\n' "$2" | tr ',' '\n' | while IFS= read -r one; do
+            ! jq -e --arg l "$one" '.labels | index($l)' "$f" >/dev/null || label_event "$n" unlabeled "$one"
+          done
+          save "$f" '.labels = (.labels - ($l | split(",")))' --arg l "$2"; shift 2 ;;
+        --body-file) save "$f" '.body = $b' --rawfile b "$2"; shift 2 ;;
+        --add-assignee) save "$f" '.assignees = (.assignees + [$u] | unique)' --arg u "${2/#@me/$user}"; shift 2 ;;
+        --remove-assignee) save "$f" '.assignees = (.assignees - [$u])' --arg u "${2/#@me/$user}"; shift 2 ;;
+        *) fail "issue edit: unsupported flag $1" ;;
+      esac
+    done
+    ;;
+  "issue comment")
+    f=$(issue_file "${1:-}"); shift
+    bodyf="" edit_last=0
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --body-file) bodyf=$2; shift 2 ;;
+        --edit-last) edit_last=1; shift ;;
+        --create-if-none) shift ;;
+        *) fail "issue comment: unsupported flag $1" ;;
+      esac
+    done
+    [ -f "$bodyf" ] || fail "issue comment: body file missing"
+    if [ "$edit_last" -eq 1 ] && jq -e --arg u "$user" '[.comments[] | select(.author == $u)] | length > 0' "$f" >/dev/null; then
+      save "$f" '(.comments | map(.author == $u) | rindex(true)) as $i | .comments[$i].body = $b' \
+        --arg u "$user" --rawfile b "$bodyf"
+    else
+      save "$f" '.comments += [{author: $u, body: $b}]' --arg u "$user" --rawfile b "$bodyf"
+    fi
+    ;;
+  "issue close")
+    f=$(issue_file "${1:-}"); shift
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --repo) shift 2 ;;
+        --comment) save "$f" '.comments += [{author: $u, body: $b}]' --arg u "$user" --arg b "$2"; shift 2 ;;
+        *) fail "issue close: unsupported flag $1" ;;
+      esac
+    done
+    save "$f" '.state = "CLOSED"'
+    ;;
+  "pr create")
+    mkdir -p "$dir/prs"
+    draft=false head="" base="" title="" body="" repo="owner/repo"
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --draft) draft=true; shift ;;
+        --head) head=$2; shift 2 ;;
+        --base) base=$2; shift 2 ;;
+        --title) title=$2; shift 2 ;;
+        --body-file) body=$(cat "$2"); shift 2 ;;
+        --repo) repo=$2; shift 2 ;;
+        *) fail "pr create: unsupported flag $1" ;;
+      esac
+    done
+    [ -n "$head" ] && [ -n "$base" ] || fail "pr create needs --head and --base"
+    n=$(( $(find "$dir/prs" -name '*.json' | wc -l) + 1 ))
+    jq -n --argjson n "$n" --argjson d "$draft" --arg h "$head" --arg b "$base" --arg t "$title" --arg body "$body" --arg r "$repo" \
+      '{number: $n, state: "OPEN", isDraft: $d, headRefName: $h, baseRefName: $b, title: $t, body: $body, repo: $r, mergeCommit: null, reviews: [], comments: []}' > "$dir/prs/$n.json"
+    printf 'https://github.com/%s/pull/%s\n' "$repo" "$n"
+    ;;
+  "pr view")
+    n=${1:-}; shift
+    [ -f "$dir/prs/$n.json" ] || fail "no pull request $n"
+    fields=""
+    while [ $# -gt 0 ]; do
+      case $1 in --json) fields=$2; shift 2 ;; --repo) shift 2 ;; *) fail "pr view: unsupported flag $1" ;; esac
+    done
+    jq -c --arg f "$fields" '. as $p | reduce ($f | split(",")[]) as $k ({}; .[$k] = $p[$k])' "$dir/prs/$n.json"
+    ;;
+  "pr edit")
+    n=${1:-}; shift
+    [ -f "$dir/prs/$n.json" ] || fail "no pull request $n"
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --body-file) tmp=$(mktemp "$dir/.tmp.XXXXXX"); jq --arg b "$(cat "$2")" '.body = $b' "$dir/prs/$n.json" > "$tmp" && mv "$tmp" "$dir/prs/$n.json"; shift 2 ;;
+        --repo) shift 2 ;;
+        *) fail "pr edit: unsupported flag $1" ;;
+      esac
+    done
+    ;;
+  "pr merge")
+    # With HO_FAKE_GH_REMOTE (a bare repository) the merge is real: a no-ff merge of the head
+    # branch into the base, pushed there. Without it, the PR only reads MERGED (a merge that
+    # "reports success" but changed nothing).
+    n=${1:-}
+    [ -f "$dir/prs/$n.json" ] || fail "no pull request $n"
+    oid=""
+    if [ -n "${HO_FAKE_GH_REMOTE:-}" ]; then
+      w=$(mktemp -d "$dir/.merge.XXXXXX")
+      hb=$(jq -r .headRefName "$dir/prs/$n.json") bb=$(jq -r .baseRefName "$dir/prs/$n.json")
+      git clone -q "$HO_FAKE_GH_REMOTE" "$w/c" 2>/dev/null && git -C "$w/c" checkout -q "$bb" \
+        && git -C "$w/c" fetch -q origin "$hb" && git -C "$w/c" merge -q --no-ff -m "Merge pull request #$n" FETCH_HEAD \
+        && git -C "$w/c" push -q origin "$bb" || fail "pr merge: the merge failed"
+      oid=$(git -C "$w/c" rev-parse HEAD)
+      rm -rf "$w"
+    fi
+    tmp=$(mktemp "$dir/.tmp.XXXXXX"); jq --arg o "$oid" '.state = "MERGED" | .mergeCommit = (if $o == "" then null else {oid: $o} end)' "$dir/prs/$n.json" > "$tmp" && mv "$tmp" "$dir/prs/$n.json"
+    ;;
+  "pr ready")
+    n=${1:-}
+    [ -f "$dir/prs/$n.json" ] || fail "no pull request $n"
+    tmp=$(mktemp "$dir/.tmp.XXXXXX"); jq '.isDraft = false' "$dir/prs/$n.json" > "$tmp" && mv "$tmp" "$dir/prs/$n.json"
+    ;;
+  *) fail "unsupported call: $line" ;;
+esac

@@ -207,6 +207,7 @@ Decided: design.md D37-COMMENTS-2, D37-COMMENTS-3
 Before a session starts work on a ticket, it SHALL read the ticket's current comments and labels from the tracker, so it works from the current state and not from an older copy. Reading SHALL NOT change who may change a ticket: what a comment may change stays as H-019 to H-023 and H-033 set it, and comment text reaches the session only as untrusted data (H-018).
 
 Source: owner answer to interview question X4
+Decided: design.md D9a
 
 #### Scenario: A session starts work on a ticket
 - **WHEN** a session is about to start work on a ticket

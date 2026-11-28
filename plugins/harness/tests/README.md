@@ -1,39 +1,15 @@
-# harness tests — coverage map
+# Harness Orchestrator tests
 
-Static regression assertions (`run.sh`): no mutation, no network, no terminals spawned.
-Each test pins an invariant from `docs/DESIGN.md`; the L-numbers reference its lessons ledger.
+`tests/run.sh` first re-runs itself once under `env -i`. The scrubbed run keeps only `HOME` (a fresh temp folder), `TMPDIR`, `LANG=C` and a short `PATH`: `tests/fake-bin`, the folders that hold `jq`, `git` and `bash`, and the system folders. `HO_TEST_JQ=<absolute path>` runs the tests against that jq instead: a one-entry folder that holds only a `jq` link comes right after `tests/fake-bin`. A path that is not absolute, not executable or does not answer `--version` stops the runner before any test runs. The runner prints the jq version it uses before the tests. `t_requirements.sh` sets its own `PATH=/usr/bin:/bin` for one git check and does not call jq there. So the tests stay green even when a 0.6.0 launcher has set its own variables or put its `bin/` on `PATH`. Each `t_*.sh` file then runs in its own process and its own temp folder, which is removed afterwards. A file that crashes or checks nothing counts as a failure. The last line is `harness tests: PASS=<n>  FAIL=<m>`.
 
-| Invariant | Origin | Test ID |
-|---|---|---|
-| Engine scripts parse / lint clean | quality bar | H-1, H-2 |
-| Version discipline (plugin.json ↔ CHANGELOG) | house convention | H-3 |
-| No banned legacy run-name user-visible | naming requirement | H-4 |
-| haiku never used; sonnet/opus-only agents | model policy | H-5, H-17 |
-| Config templates valid JSON | onboarding | H-6 |
-| PATH-collision-proof `harness-` script names | multi-plugin machines | H-7 |
-| Prompt text never flows through AppleScript | L1 | H-8 |
-| Close sessions, never windows | L11 | H-9 |
-| cwd guards: absolute, exists, not $HOME//, cd-or-die | L2, L3 | H-10 |
-| Pause-not-stop: spawn→75, wait-on-API, stop_at:null | L8, L13 | H-11 |
-| Keychain-first token read | L6 | H-12 |
-| STOP honored in spawn + watch | lifecycle | H-13 |
-| Sonnet spawn-validation gate (reject ≠ infra-error) | user requirement | H-14 |
-| Thin commands route to `harness:harness` | house convention | H-15, H-16 |
-| `\|` OR-chains parsed and defaulted | model requirement | H-18 |
-| Pre-generated session ids; exact resume | L17 | H-19 |
-| AskUserQuestion / interactive-GSD bans in prompts | L23 | H-20 |
-| Placeholder guard narrowed+role-gated; orchestrator renders clean | C1, M1 | H-24 |
-| Completed run self-teardown (caffeinate stops) | H1 | H-25 |
-| Structural floor under the grill gate | H2 | H-26 |
-| sonnet rejected for build roles | M4 | H-27 |
-| Per-role account override | M3 | H-28 |
-| Project-guidance discovery (standard+config, CLAUDE.md flagged, empty=none) | feature | H-29 |
-| Tiered autonomous decisions (council + /ultra escalation) | feature | H-30 |
-| Ticket-status setter space-tolerant | F2 | H-31 |
-| Empty-CURRENT self-heal | F3 | H-32 |
-| Preflight validates project config JSON | F4 | H-33 |
-| Caffeinate bound to watch pid | F5 | H-34 |
-| cwd metachar guard narrowed | F7 | H-35 |
-| Worktree spoof-hardened (shared helper) | F8 | H-36 |
-| Limits fail-closed on bad percent | F10 | H-37 |
-| Guidance containment + project-scoped ids + grill synonyms | F11/F12/F13 | H-38 |
+The engine's own variables use the prefix `HO_`. Tests never call the real `claude`: `tests/fake-bin/claude` comes first on `PATH`. It appends its arguments as one tab-separated line to `$HO_FAKE_CLAUDE_LOG` (default `$HOME/fake-claude.log`), prints `$HO_FAKE_CLAUDE_STDOUT`, and exits with `$HO_FAKE_CLAUDE_EXIT` (default 0). `claude --version` prints `0.0.0 (fake claude)`. `claude auth status` answers like the real CLI: JSON with `"loggedIn": true` and exit 0, or with `HO_FAKE_CLAUDE_LOGGED_OUT=1` `false` and exit 1 (`=lie` prints `false` with exit 0). `tests/fake-bin/codex` logs its arguments to `$HO_FAKE_CODEX_LOG` (default `$HOME/fake-codex.log`); `codex login status` exits 0, or 1 with `HO_FAKE_CODEX_LOGGED_OUT=1`, and `HO_FAKE_CODEX_SLEEP` makes it slow.
+
+Every test name starts with the requirement ID (for example `H-125`) or the design rule (for example `Rebuild isolation`) that it proves. Helpers are in `tests/lib.sh`: `ok <name>`, `bad <name> <why>`, `assert_eq <name> <expected> <actual>`, `assert_contains <name> <text> <part>` and `assert_exit <name> <code> <cmd...>`. A test that must wait for a poll loop to really wait uses `sleep_marks <dir>` and `wait_mark <file> <arg> [count]`: a stand-in `sleep`, first on that command's `PATH` with `T_SLEEP_MARK` set, records each sleep, so the test waits for the event and never for a fixed time (issue #109).
+
+`tests/fake-bin/gh` is a small stateful GitHub for the ticket queue tests. It keeps each issue as JSON in `$HO_FAKE_GH_DIR/issues/` (default `$HOME/fake-gh`) and logs every call to `$HO_FAKE_GH_DIR/calls.log`. It implements `issue comment --edit-last`, so a regression to editing comments changes the stored comments. Any call it does not know exits 2.
+
+`tests/fake-bin/tmux` and `tests/fake-bin/osascript` are fake terminals for the session and terminal adapter tests. They share one state folder, `$HO_FAKE_TERM_DIR` (default `$HOME/fake-term`), described in `fake-bin/fake-term-lib.sh`. Each opened tab or pane runs its command in the background, so a whole launch and close runs for real. Typed text goes to `<handle>.in`, and every call is logged to `calls.log`. Any call they do not know exits 2, and the fake tmux also refuses any server other than `-L ho-harness`. The fake `claude` stays alive when `HO_FAKE_CLAUDE_HOLD` is `exit` (until it reads `/exit`) or `ignore`, for at most `HO_FAKE_CLAUDE_HOLD_MAX` seconds. While it holds, it acts only when its typed input or the busy mark changed; `HO_FAKE_CLAUDE_STEP_LOG` makes it log each pass (`tick`) and each transcript step (`step`), which `t_fake_claude.sh` counts. `HO_FAKE_CLAUDE_FAIL_MODEL` makes one model fail at start, and `HO_FAKE_CLAUDE_SHOW_ENV` logs one variable. `tests/sessions-setup.sh` is the shared setup for the session tests; every process a test starts is stopped by its exact process ID at the end. `t_deliver.sh` also closes the sessions of each block by their exact PIDs when the next block starts one. `t_run_all.sh` checks `tests/run-all.sh` itself on a copy with fake runners and its own lock path. `HO_FAKE_TERM_ENV` gives the fake terminal its own environment (one `NAME=VALUE` or `-NAME` per line), as a stale tmux server or a fresh iTerm2 login shell has.
+
+For delivery tests, `HO_FAKE_CLAUDE_TRANSCRIPT=1` makes the fake `claude` keep a transcript JSONL under `$HOME/.claude/projects/`. Each whole typed line becomes a user record. While `<handle>.busy` exists in the fake terminal folder, a line is queued instead, and the queue is released when the bytes 0x18 0x13 arrive or the busy file goes. `HO_FAKE_CLAUDE_NOISE=1` adds unrelated records, and `HO_FAKE_CLAUDE_VERSION` sets what `--version` prints. `tests/fake-bin/fake-msg` stands in for a message command between sessions (`HO_FAKE_MSG_MODE`: `deliver`, `noise`, `other`, `silent` or `fail`). The fake terminals keep control bytes as `<0xNN>` in `<handle>.in`. The screens the delivery tests show are fixture files in `tests/fixtures/screens/`.
+
+`tests/fixtures/screen/` holds one saved screen capture per file for the screen-text tests. `tests/fixtures/screen/README.md` says what each file must produce and where the files come from. A test compares only the class word a file produces, never the file's text.

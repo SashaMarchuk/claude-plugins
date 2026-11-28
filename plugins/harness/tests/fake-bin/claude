@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Fake claude for tests: records argv, prints canned output, exits with a set code.
+# Opt-in hold (for session tests): with HO_FAKE_CLAUDE_HOLD=exit it stays alive until a whole
+# line "/exit" (with its newline) reaches its fake terminal input; with
+# HO_FAKE_CLAUDE_HOLD=ignore it ignores input.
+# Either way it ends after HO_FAKE_CLAUDE_HOLD_MAX seconds (default 20).
+# HO_FAKE_CLAUDE_FAIL_MODEL=<m>: exit 1 when started with "--model <m>", at once or after
+# HO_FAKE_CLAUDE_FAIL_AFTER seconds.
+# HO_FAKE_CLAUDE_SHOW_ENV="<NAME> ...": also log "env NAME=<value>" for each name, in that order.
+# HO_FAKE_CLAUDE_ON_EXIT=<shell command>: run just before it leaves on "/exit".
+# HO_FAKE_CLAUDE_TRANSCRIPT=1: also write a transcript line (see below).
+# HO_FAKE_CLAUDE_VERSION=<v>: what --version prints first (default 0.0.0).
+# With HO_FAKE_CLAUDE_HOLD=exit as well, HO_FAKE_CLAUDE_TRANSCRIPT=1 keeps that transcript going at
+# ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<cwd with non-alphanumerics as ->/<session>.jsonl.
+# Each whole typed line becomes a "user" record. While <h>.busy exists in the fake terminal
+# folder, a line is queued instead ("queue-operation" enqueue); the queue is released as
+# "queued_command" attachments when the bytes 0x18 0x13 arrive (the send-now chord) or when
+# <h>.busy is removed. HO_FAKE_CLAUDE_NOISE=1 adds unrelated "assistant" records all the time.
+# HO_FAKE_CLAUDE_DEAF=1 keeps the transcript but records nothing that is typed.
+set -euo pipefail
+if [ "${1:-}" = "--version" ]; then
+  # HO_FAKE_CLAUDE_VERSION_SLEEP=<s>: answer --version only after that many seconds.
+  # HO_FAKE_CLAUDE_VERSION_LATE=<file>: a helper in the same process group writes the file 15 s
+  # after the start if this process still runs then. A stop of the group before that kills the
+  # helper too, so the file shows that the check outlived 15 s.
+  if [ -n "${HO_FAKE_CLAUDE_VERSION_LATE:-}" ]; then
+    me=$$
+    ( sleep 15; ! kill -0 "$me" 2>/dev/null || : > "$HO_FAKE_CLAUDE_VERSION_LATE" ) > /dev/null 2>&1 < /dev/null &
+  fi
+  [ -z "${HO_FAKE_CLAUDE_VERSION_SLEEP:-}" ] || sleep "$HO_FAKE_CLAUDE_VERSION_SLEEP"
+  echo "${HO_FAKE_CLAUDE_VERSION:-0.0.0} (fake claude)"
+  exit 0
+fi
+log=${HO_FAKE_CLAUDE_LOG:-$HOME/fake-claude.log}
+line=""
+for a in "$@"; do
+  if [ -z "$line" ]; then line=$a; else line="$line	$a"; fi
+done
+printf '%s\n' "$line" >> "$log"
+for ho_fc_v in ${HO_FAKE_CLAUDE_SHOW_ENV:-}; do
+  printf 'env %s=%s\n' "$ho_fc_v" "$(printenv "$ho_fc_v" || true)" >> "$log"
+done
+# HO_FAKE_CLAUDE_TRANSCRIPT=1: write one line to the transcript Claude Code would keep for this
+# session: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<working folder, each other byte as ->/<id>.jsonl
+if [ "${HO_FAKE_CLAUDE_TRANSCRIPT:-}" = 1 ]; then
+  prev="" fsid=""
+  for a in "$@"; do
+    case $prev in --session-id | --resume) fsid=$a ;; esac
+    prev=$a
+  done
+  if [ -n "$fsid" ]; then
+    tdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+    mkdir -p "$tdir"
+    printf '{"type":"user","sessionId":"%s","message":"fake turn"}\n' "$fsid" >> "$tdir/$fsid.jsonl"
+  fi
+fi
+if [ -n "${HO_FAKE_CLAUDE_FAIL_MODEL:-}" ]; then
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = --model ] && [ "$a" = "$HO_FAKE_CLAUDE_FAIL_MODEL" ]; then
+      sleep "${HO_FAKE_CLAUDE_FAIL_AFTER:-0}"
+      exit 1
+    fi
+    prev=$a
+  done
+fi
+# "auth status" answers like the real CLI: JSON with "loggedIn", exit 0 when logged in and
+# exit 1 when not. HO_FAKE_CLAUDE_LOGGED_OUT=1 logs out; =lie prints false but exits 0.
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+  [ -z "${HO_FAKE_CLAUDE_SLEEP:-}" ] || sleep "$HO_FAKE_CLAUDE_SLEEP"
+  case ${HO_FAKE_CLAUDE_LOGGED_OUT:-} in
+    1) printf '{\n  "loggedIn": false\n}\n'; exit 1 ;;
+    lie) printf '{\n  "loggedIn": false\n}\n'; exit 0 ;;
+    *) printf '{\n  "loggedIn": true\n}\n'; exit 0 ;;
+  esac
+fi
+if [ -n "${HO_FAKE_CLAUDE_STDOUT:-}" ]; then
+  printf '%s\n' "$HO_FAKE_CLAUDE_STDOUT"
+fi
+# exit_line <file>: 0 when the file holds a whole "/exit" line. read fails on a last line with
+# no newline, so text typed before its Enter does not count (the engine sends them apart).
+exit_line() {
+  local l
+  while IFS= read -r l; do
+    [ "$l" = /exit ] && return 0
+  done < "$1"
+  return 1
+}
+# ---- transcript (HO_FAKE_CLAUDE_TRANSCRIPT=1) ----
+tr_file=""
+tr_lines=0 tr_chords=0 tr_tick=0
+tr_pending=""
+if [ "${HO_FAKE_CLAUDE_TRANSCRIPT:-}" = 1 ]; then
+  sid="" prev=""
+  for a in "$@"; do
+    case $prev in --session-id | --resume) sid=$a ;; esac
+    prev=$a
+  done
+  tr_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$(pwd -P)" | tr -c 'A-Za-z0-9' '-')/$sid.jsonl"
+  mkdir -p "$(dirname "$tr_file")"
+  : >> "$tr_file"
+fi
+tr_add() { jq -cn "$@" >> "$tr_file"; }
+tr_release() {
+  local l
+  [ -n "$tr_pending" ] || return 0
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    tr_add --arg c "$l" '{type: "attachment", attachment: {type: "queued_command", prompt: $c, humanTurn: true} }'
+    tr_add --arg c "$l" '{type: "queue-operation", operation: "remove", content: $c}'
+  done <<EOF_Q
+$tr_pending
+EOF_Q
+  tr_pending=""
+}
+# tr_step <in-file>: act on what arrived since the last step.
+tr_step() {
+  local raw n i l busy
+  busy="${1%.in}.busy"
+  raw=$(cat "$1" 2>/dev/null || true)
+  n=$(printf '%s' "$raw" | { grep -o '<0x18><0x13>' || true; } | wc -l | tr -d ' ')
+  if [ "$n" -gt "$tr_chords" ]; then tr_chords=$n; tr_release; fi
+  [ -e "$busy" ] || tr_release
+  n=0
+  while IFS= read -r l; do
+    n=$((n + 1))
+    [ "$n" -gt "$tr_lines" ] || continue
+    tr_lines=$n
+    l=$(printf '%s' "$l" | sed 's/<0x[0-9a-f][0-9a-f]>//g; s/<ESC>//g')
+    [ -n "$l" ] && [ "$l" != /exit ] || continue
+    [ "${HO_FAKE_CLAUDE_DEAF:-}" != 1 ] || continue
+    if [ -e "$busy" ]; then
+      tr_add --arg c "$l" '{type: "queue-operation", operation: "enqueue", content: $c}'
+      tr_pending="$tr_pending$l
+"
+    else
+      tr_add --arg c "$l" '{type: "user", message: {role: "user", content: $c} }'
+    fi
+  done < "$1"
+  if [ "${HO_FAKE_CLAUDE_NOISE:-}" = 1 ]; then
+    tr_tick=$((tr_tick + 1))
+    [ $((tr_tick % 3)) -ne 0 ] || tr_add --arg t "still working, step $tr_tick" '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: $t}]} }'
+  fi
+}
+# The hold loop acts only when something it reads changed: the input file's text, or whether
+# <h>.busy exists (its removal releases the queue). With HO_FAKE_CLAUDE_NOISE=1 every tick acts.
+# HO_FAKE_CLAUDE_STEP_LOG=<file>: log "tick" for each pass and "step" for each tr_step (tests).
+case ${HO_FAKE_CLAUDE_HOLD:-} in
+  exit | ignore)
+    in="${HO_FAKE_TERM_DIR:-$HOME/fake-term}/$(printf '%s' "${HO_FAKE_TERM_HANDLE:-none}" | tr -c 'A-Za-z0-9-' '_').in"
+    end=$((SECONDS + ${HO_FAKE_CLAUDE_HOLD_MAX:-20}))
+    seen="" cur="" busy_was="" busy_now=""
+    first=1
+    while [ "$SECONDS" -lt "$end" ]; do
+      [ -z "${HO_FAKE_CLAUDE_STEP_LOG:-}" ] || echo tick >> "$HO_FAKE_CLAUDE_STEP_LOG"
+      cur="" busy_now=0
+      # read -d '' keeps trailing newlines, so a line and the same line with its Enter differ.
+      if [ -f "$in" ]; then IFS= read -r -d '' cur < "$in" || true; cur="x$cur"; fi
+      [ ! -e "${in%.in}.busy" ] || busy_now=1
+      if [ "$first" = 1 ] || [ "$cur" != "$seen" ] || [ "$busy_now" != "$busy_was" ] || [ "${HO_FAKE_CLAUDE_NOISE:-}" = 1 ]; then
+        first=0 seen=$cur busy_was=$busy_now
+        if [ -n "$tr_file" ] && [ -f "$in" ]; then
+          [ -z "${HO_FAKE_CLAUDE_STEP_LOG:-}" ] || echo step >> "$HO_FAKE_CLAUDE_STEP_LOG"
+          tr_step "$in"
+        fi
+        if [ "$HO_FAKE_CLAUDE_HOLD" = exit ] && [ -f "$in" ] && exit_line "$in"; then
+          [ -z "${HO_FAKE_CLAUDE_ON_EXIT:-}" ] || sh -c "$HO_FAKE_CLAUDE_ON_EXIT"
+          exit 0
+        fi
+      fi
+      sleep 0.1
+    done
+    ;;
+esac
+exit "${HO_FAKE_CLAUDE_EXIT:-0}"

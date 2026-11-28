@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "_comment": "The shipped default config (H-001, design D37-FLOW-4, D37-FLOW-7). It names the default flow and requirements format. It applies only after a confirmation: a local selection (.harness/local.json) or a confirmed default in the user config. It is the last lookup layer, after the project and the user config.",
+  "flow": {
+    "use": "gsd"
+  },
+  "requirements": {
+    "format": "openspec",
+    "use_in_grilling": true
+  },
+  "agent": {
+    "language": "English"
+  }
+}

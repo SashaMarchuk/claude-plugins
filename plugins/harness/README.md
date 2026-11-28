@@ -16,6 +16,8 @@ The five states are `ready`, `in-progress`, `blocked`, `needs-review` and `done`
 Every state change leaves exactly one state label.
 Ticket titles, bodies and comments are printed only inside the untrusted fence.
 On GitHub, `show` keeps a comment only when its author has write access (the harness's own comments, and recorded answers by a writer, count); any other comment becomes one line `--- comment <n> by <login>: left out (no confirmed write access) ---` (H-018, D9).
+`add … ready` and `release` print a note when the Outcome, Scope or Acceptance criteria heading is missing, and go on (D8); only an empty body is refused.
+`intake <run> text <id>` is the ticket text for a session: the description as picked up when the work started, and the writers' comments (D37-INTAKE-7).
 A local ticket file has a `body-lines` header field; comment records are read only after the body, so body text never passes for a record (H-028, D13).
 A report is always a new comment; no comment is edited or deleted.
 Settings: `HO_TICKETS_SOURCE` (`local` or `github`), `HO_TICKETS_REPO`, `HO_TICKETS_DIR`, `HO_STATE_PREFIX` (default `harness`), `HO_TICKET_LOCK_WAIT` and `HO_TICKET_LOCK_STALE`.

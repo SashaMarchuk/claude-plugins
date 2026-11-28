@@ -465,6 +465,7 @@ ho_in_brief() {
 # The tick reads new comments on every in-progress ticket this run picked up (GitHub only: local
 # tickets have no other authors). State per ticket, set when the work starts:
 #   <run>/intake/watch/<id>.json   {seen: <comments read>, body: <digest>, edit_noted: bool}
+#   <run>/intake/watch/<id>.body   the description as picked up; "intake text" serves it
 #   <run>/notes/<id>/<n>.md        an accepted change, fenced, waiting for the next step boundary
 # A harness report (own account, ending in a machine line) is never a change. For every other comment:
 #   - an author without confirmed write access: a new linked ticket in needs-review
@@ -496,6 +497,7 @@ ho_in_watch_init() {
   ho_tk_gh || return 0
   json=$(gh issue view "$id" --repo "$HO_TK_REPO" --json body,comments 2>/dev/null) || return 1
   mkdir -p "$HO_RUN_DIR/intake/watch" || return 1
+  printf '%s' "$json" | jq -j '.body // ""' | ho_atomic_write "$HO_RUN_DIR/intake/watch/$id.body" || return 1
   jq -cn --argjson n "$(printf '%s' "$json" | jq '.comments | length')" \
     --arg b "$(printf '%s' "$json" | jq -r '.body // ""' | ho_in_digest)" \
     '{seen: $n, body: $b, edit_noted: false}' | ho_atomic_write "$(ho_in_watch_file "$id")"
@@ -736,6 +738,8 @@ usage: harness intake <run-dir> <verb>
                       change-ticket <id> <new-id>, closed|close-failed <session>,
                       not-due <seconds>, tracker-error, stopped, ended
   poll [--max N]      tick until the run is stopped or has ended
+  text <id>           the ticket text for a session: the description as picked up and the
+                      comments of writers, inside the untrusted fence
 USAGE
 }
 
@@ -757,6 +761,14 @@ ho_intake_main() {
         *) ho_in_usage; exit 64 ;;
       esac ;;
     tick) ho_in_tick "$@" || rc=$? ;;
+    text)
+      # The ticket text a session gets: the description as picked up (D37-INTAKE-7) and the
+      # comments of writers (H-018, D9), inside the untrusted fence.
+      local tid bf
+      tid=$(ho_stop_ticket_arg "${1-}") || exit 64
+      bf="$HO_RUN_DIR/intake/watch/$tid.body"
+      if [ -f "$bf" ] && [ ! -L "$bf" ]; then HO_TK_SHOW_BODY_FILE=$bf ho_tickets show "$tid" || rc=$?
+      else ho_tickets show "$tid" || rc=$?; fi ;;
     poll) ho_in_interval >/dev/null || exit $?; ho_in_poll "$@" || rc=$? ;;
     *) ho_in_usage; rc=64 ;;
   esac

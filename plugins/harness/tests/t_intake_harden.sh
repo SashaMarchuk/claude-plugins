@@ -54,6 +54,10 @@ printf 'Use semicolons.\n' > "$base/a2.md"
 shown=$("$h" tickets show "$t1")
 assert_eq "D9 an answer recorded for a read-only author is left out" "" "$(printf '%s' "$shown" | grep -F 'Ship it to everyone' || true)"
 assert_contains "H-018 an answer recorded for a writer stays" "$shown" "Use semicolons."
+# The own account cannot be read: nothing is taken on trust, so the recorded answer for rita
+# (posted by the harness account) stays out.
+shown=$(HO_FAKE_GH_FAIL_API=user HO_FAKE_GH_USER=nobody "$h" tickets show "$t1" 2>/dev/null)
+assert_eq "D9 with the own account unreadable a recorded non-writer answer stays out" "" "$(printf '%s' "$shown" | grep -F 'Ship it to everyone' || true)"
 # The readiness judge reads the same filtered text.
 : > "$HO_FAKE_CLAUDE_LOG"
 tick >/dev/null

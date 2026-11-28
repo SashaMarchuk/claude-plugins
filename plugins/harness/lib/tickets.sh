@@ -55,7 +55,7 @@ verbs:
                                      never from inside a harness session (H-031; exit 77)
   template                           the ticket body headings the plugin writes (D6)
   review <id>                        -> needs-review
-  release <id>                       in-progress -> ready (body must pass the ready floor)
+  release <id>                       in-progress -> ready (an empty body is refused)
   done <id>                          -> done (github: also closes the issue)
 USAGE
 }
@@ -116,8 +116,9 @@ ho_tk_check_state() {
   esac
 }
 
-# Readiness floor (reuse list): a ready ticket must carry Outcome, Scope and
-# Acceptance criteria headings. A structural check only; the grilling gate judges quality.
+# Readiness floor (reuse list), softened by D8: structure is not required, and the readiness
+# check at pickup judges the meaning. An empty body is still refused for a ready ticket (there is
+# nothing to judge); missing Outcome, Scope or Acceptance criteria headings only print a note.
 ho_tk_ready_floor() { # <body-file>
   local f=$1 miss=""
   [ -s "$f" ] || { ho_tk_err "empty ticket body: it cannot be ready"; return 65; }
@@ -125,9 +126,9 @@ ho_tk_ready_floor() { # <body-file>
   grep -qiE '^#+ *(acceptance( criteria)?|accept|definition of done|dod)' "$f" || miss="$miss acceptance-criteria"
   grep -qiE '^#+ *(scope|in scope)' "$f" || miss="$miss scope"
   if [ -n "$miss" ]; then
-    ho_tk_err "ticket body is missing section(s):$miss. A ready ticket needs ## Outcome, ## Scope and ## Acceptance criteria; add it as blocked with open questions instead."
-    return 65
+    ho_tk_err "note: the ticket body has no heading for:$miss. That does not block (D8); the readiness check at pickup judges whether the text says enough."
   fi
+  return 0
 }
 
 # ---------------------------------------------------------------- untrusted fence
@@ -210,12 +211,18 @@ ho_tk_gh_show() {
   state=$(printf '%s' "$json" | jq -r --arg p "$HO_TK_PREFIX:" --arg s "$HO_STATES" \
     '[.labels[].name | select(startswith($p)) | ltrimstr($p) | select(. as $x | $s | split(" ") | index($x))] | join(" ")')
   # Only comments by a person with write access reach the text a session reads (H-018, D9):
-  # a non-writer's change never enters the work on its own. The harness's own comments count
-  # as the harness's, except a recorded answer (H-034), which counts as its author's.
+  # a non-writer's change never enters the work on its own. A comment speaks for its platform
+  # author and for the author field of its machine line, if any (a recorded answer, H-034), and
+  # every one of them needs write access. The harness's own comment speaks only for that field;
+  # when the own account cannot be read, nothing is taken on trust.
+  # HO_TK_SHOW_BODY_FILE replaces the live description (the version picked up, D37-INTAKE-7).
   local own whos who ok='{}'
   own=$(ho_tk_own_login)
+  if [ -n "${HO_TK_SHOW_BODY_FILE:-}" ]; then
+    json=$(printf '%s' "$json" | jq -c --rawfile b "$HO_TK_SHOW_BODY_FILE" '.body = $b') || return 1
+  fi
   whos=$(printf '%s' "$json" | jq -r --arg own "$own" --arg re "$HO_TK_MACHINE_RE" "$HO_TK_JQ_MLINE$HO_TK_JQ_WHO"'
-    [.comments[] | who($own; $re)] | unique | .[] | select(. != $own)') || return 1
+    [.comments[] | who($own; $re)[]] | unique | .[]') || return 1
   while IFS= read -r who; do
     [ -n "$who" ] && [ "$(ho_tk_access "$who")" = writer ] || continue
     ok=$(printf '%s' "$ok" | jq -c --arg w "$who" '.[$w] = true') || return 1
@@ -226,21 +233,20 @@ EOF_WHO
   printf '%s' "$json" | jq -r --arg own "$own" --arg re "$HO_TK_MACHINE_RE" --argjson ok "$ok" "$HO_TK_JQ_MLINE$HO_TK_JQ_WHO"'
     "Title: \(.title)", "", (.body // ""),
     (.comments | to_entries[] | (.value | who($own; $re)) as $w
-      | if ($own != "" and $w == $own) or $ok[$w] then
+      | if all($w[]; $ok[.] == true) then
           "", "--- comment \(.key + 1) by \(.value.author.login) ---", .value.body
         else
-          "", "--- comment \(.key + 1) by \($w): left out (no confirmed write access) ---"
+          "", "--- comment \(.key + 1) by \($w | map(select(. != "")) | join(", ")): left out (no confirmed write access) ---"
         end)' |
     ho_tk_fence "$id"
 }
-# jq who($own; $re): the person a comment speaks for. The platform author, or on the harness's own
-# comment the machine author field when it has one (a recorded answer, H-034). Needs HO_TK_JQ_MLINE.
+# jq who($own; $re): the people a comment speaks for, all of whom must be writers. The harness's
+# own comment speaks only for the author field of its machine line (H-034); any other comment
+# for its platform author and that field. Needs HO_TK_JQ_MLINE.
 HO_TK_JQ_WHO='def who($own; $re): (.author.login // "") as $login
-  | if $own != "" and $login == $own then
-      ((.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "" | mline($re)) as $m
-      | if $m != null and ($m.author | type) == "string" then $m.author else $login end
-    else $login end;'
-
+  | ((.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "" | mline($re)) as $m
+  | (if $m != null and ($m.author | type) == "string" then [$m.author] else [] end) as $a
+  | if $own != "" and $login == $own then $a else [$login] + $a end;'
 ho_tk_gh_add() { # <title> <body-file> <state>
   local url
   url=$(gh issue create --repo "$HO_TK_REPO" --title "$1" --body-file "$2" --label "$HO_TK_PREFIX:$3") || return 1
@@ -390,7 +396,7 @@ ho_tk_l_set_state_locked() { # <id> <state> [required-state] [floor]
   if [ "${4:-}" = floor ]; then
     body=$(mktemp "$HO_TK_DIR/.floor.XXXXXX") || return 1
     sed '1,/^$/d' "$f" > "$body" || { rm -f "$body"; return 74; }
-    ho_tk_ready_floor "$body" || { rm -f "$body"; ho_tk_err "ticket $1 no longer passes the ready floor: block it instead"; return 65; }
+    ho_tk_ready_floor "$body" || { rm -f "$body"; ho_tk_err "ticket $1 has an empty body: block it instead"; return 65; }
     rm -f "$body"
   fi
   ho_tk_l_write "$f" ho_tk_l_state_text "$f" "$2"
@@ -841,7 +847,7 @@ ho_tickets() {
         bodyf=$(mktemp) || return 1
         rc=0
         gh issue view "$1" --repo "$HO_TK_REPO" --json body | jq -r '.body // ""' > "$bodyf" || rc=1
-        [ "$rc" -eq 0 ] && { ho_tk_ready_floor "$bodyf" || { rc=65; ho_tk_err "#$1 no longer passes the ready floor: block it instead"; }; }
+        [ "$rc" -eq 0 ] && { ho_tk_ready_floor "$bodyf" || { rc=65; ho_tk_err "#$1 has an empty body: block it instead"; }; }
         rm -f "$bodyf"
         [ "$rc" -eq 0 ] || return "$rc"
         ho_tk_gh_set_state "$1" ready --remove-assignee "@me" || return

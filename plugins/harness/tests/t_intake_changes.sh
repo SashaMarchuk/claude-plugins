@@ -102,3 +102,5 @@ as alice issue edit "$t7" --repo fake/repo --body-file "$base/nd.md"
 tick >/dev/null
 assert_eq "D37-INTAKE-7 a later edit gets no further comment" "$((n0 + 1))" "$(ncomments "$t7")"
 assert_eq "D37-INTAKE-7 an edit is no note for the worker" "" "$(begin "$t7" execute | grep '^change ' || true)"
+assert_contains "D37-INTAKE-7 the session text keeps the description as picked up" "$("$h" intake "$run" text "$t7")" "Export reports as CSV."
+assert_eq "D37-INTAKE-7 the edited description never reaches the session text" "" "$("$h" intake "$run" text "$t7" | grep -F 'Another description' || true)"
